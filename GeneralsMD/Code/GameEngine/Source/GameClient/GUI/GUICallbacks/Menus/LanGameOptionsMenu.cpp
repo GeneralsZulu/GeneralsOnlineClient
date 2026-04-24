@@ -417,9 +417,13 @@ Bool TryArmResumeFromReplay(UnicodeString replayUFilename, UnicodeString &status
 		return FALSE;
 	}
 
-	// Align the lobby slots with the replay's recorded slot order, then
-	// broadcast the updated options so all peers apply the reorder.
+	// Align the lobby slots with the replay's recorded slot order, stash
+	// the resume state + replay seed on the GameInfo so it's part of the
+	// options broadcast to peers, then send it.
 	reorderLobbyForResume(info, TheLAN->GetMyGame());
+	TheLAN->GetMyGame()->setResumeReplayFile(replayName);
+	TheLAN->GetMyGame()->setResumeHandoffFrame(header.frameCount - HANDOFF_FRAMES_BEFORE_END);
+	TheLAN->GetMyGame()->setSeed(info.getSeed());
 	TheLAN->RequestGameOptions(GenerateGameOptionsString(), true);
 	lanUpdateSlotList();
 
@@ -455,18 +459,6 @@ void ClearResumeFromReplayArm()
 void StartPressed()
 {
 	LANGameInfo *myGame = TheLAN->GetMyGame();
-
-	// If the host has armed a resume, intercept Start. Engine-side catch-up
-	// and handoff are still TODO; surface a clear message rather than
-	// starting a normal game and silently losing the armed state.
-	if (s_resumeArmed)
-	{
-		UnicodeString msg;
-		msg.format(TheGameText->fetch("GUI:ResumeStartTODO"),
-			s_resumeArmedFilename, s_resumeArmedHandoffFrame);
-		TheLAN->OnChat(L"SYSTEM", TheLAN->GetLocalIP(), msg, LANAPI::LANCHAT_SYSTEM);
-		return;
-	}
 
 	Bool isReady = true;
 	Bool allHaveMap = true;

@@ -357,7 +357,9 @@ void RecorderClass::reset() {
  * Do the update for this frame.
  */
 void RecorderClass::update() {
-	if (m_mode == RECORDERMODETYPE_RECORD || m_mode == RECORDERMODETYPE_NONE) {
+	if (m_mode == RECORDERMODETYPE_RESUME_CATCHUP) {
+		updateResumeCatchup();
+	} else if (m_mode == RECORDERMODETYPE_RECORD || m_mode == RECORDERMODETYPE_NONE) {
 		updateRecord();
 	} else if (isPlaybackMode()) {
 		updatePlayback();
@@ -440,7 +442,29 @@ void RecorderClass::updateRecord()
 			if (msg->getArgumentCount() >= 4)
 				maxFPS = msg->getArgument(3)->integer;
 
-			startRecording(diff, m_originalGameMode, rankPoints, maxFPS);
+			// If the LAN lobby has a resume-replay armed, switch into catchup
+			// mode instead of starting a fresh recording. Catchup opens the
+			// replay file for READ; startRecording would open it for WRITE
+			// and truncate the very file we need to read from.
+			Bool armedResume = (TheLAN && TheLAN->GetMyGame()
+				&& !TheLAN->GetMyGame()->getResumeReplayFile().isEmpty());
+			if (armedResume)
+			{
+				AsciiString resumeFile = TheLAN->GetMyGame()->getResumeReplayFile();
+				UnsignedInt handoff    = TheLAN->GetMyGame()->getResumeHandoffFrame();
+				if (!startResumeCatchup(resumeFile, handoff))
+				{
+					// Fallback to a normal recording if catchup setup failed
+					// so the game at least runs instead of getting stuck with
+					// no replay source.
+					DEBUG_LOG(("RecorderClass::updateRecord - resume catchup setup failed, falling back to normal record"));
+					startRecording(diff, m_originalGameMode, rankPoints, maxFPS);
+				}
+			}
+			else
+			{
+				startRecording(diff, m_originalGameMode, rankPoints, maxFPS);
+			}
 		} else if (msg->getType() == GameMessage::MSG_CLEAR_GAME_DATA) {
 			if (m_file != nullptr) {
 				lastFrame = -1;
@@ -1728,6 +1752,137 @@ Bool RecorderClass::isMultiplayer()
 		return true;
 
 	return false;
+}
+
+/**
+ * Resume-from-replay catchup: open the given replay file, skip past the
+ * header, prime the first frame of commands, and switch the recorder into
+ * RECORDERMODETYPE_RESUME_CATCHUP. While in catchup, update() calls
+ * updateResumeCatchup() instead of updateRecord()/updatePlayback(), so the
+ * replay's commands are injected into TheCommandList each frame while
+ * network traffic continues to flow through the usual LAN path.
+ */
+Bool RecorderClass::startResumeCatchup(AsciiString filename, UnsignedInt handoffFrame)
+{
+	// Clean up any existing file handle from a prior mode.
+	if (m_file != nullptr)
+	{
+		m_file->close();
+		m_file = nullptr;
+	}
+	m_mode = RECORDERMODETYPE_NONE;
+
+	ReplayHeader header;
+	header.forPlayback = TRUE;
+	header.filename = filename;
+	if (!readReplayHeader(header))
+	{
+		DEBUG_LOG(("RecorderClass::startResumeCatchup - readReplayHeader failed for %s", filename.str()));
+		return FALSE;
+	}
+
+	// playbackFile writes difficulty, originalGameMode, rankPoints, maxFPS
+	// to the file AFTER the header and BEFORE the command stream. We must
+	// consume those same bytes here or readNextFrame will interpret the
+	// difficulty as a frame number and never match curFrame.
+	GameDifficulty difficulty = DIFFICULTY_NORMAL;
+	m_file->read(&difficulty, sizeof(difficulty));
+	m_file->read(&m_originalGameMode, sizeof(m_originalGameMode));
+	Int rankPoints = 0;
+	m_file->read(&rankPoints, sizeof(rankPoints));
+	Int maxFPS = 0;
+	m_file->read(&maxFPS, sizeof(maxFPS));
+
+	m_mode = RECORDERMODETYPE_RESUME_CATCHUP;
+	m_resumeHandoffFrame = handoffFrame;
+	m_currentReplayFilename = filename;
+
+	// Prime m_nextFrame with the frame number of the first recorded command.
+	readNextFrame();
+
+	// Disable local input so clicks during catchup don't produce stray
+	// commands that would diverge from the replay.
+	if (TheInGameUI)
+		TheInGameUI->setInputEnabled(FALSE);
+
+	// Kick on TiVO fast-forward so the catchup races to the handoff frame
+	// instead of playing back in real time. GameEngine.cpp / FramePacer.cpp
+	// are widened to honor m_TiVOFastMode when isResumeCatchupMode() is true.
+	TheWritableGlobalData->m_TiVOFastMode = TRUE;
+
+	DEBUG_LOG(("RecorderClass::startResumeCatchup - catching up %s to frame %u",
+		filename.str(), handoffFrame));
+	return TRUE;
+}
+
+/**
+ * Per-frame update for RESUME_CATCHUP mode. Strips any local user input
+ * that slipped into TheCommandList, injects the replay's recorded commands
+ * for the current logic frame, then exits catchup cleanly when the handoff
+ * frame is reached (or the replay ends sooner). Unlike stopPlayback this
+ * does NOT call exitGame — the LAN session continues uninterrupted.
+ */
+void RecorderClass::updateResumeCatchup()
+{
+	UnsignedInt curFrame = TheGameLogic ? TheGameLogic->getFrame() : 0;
+
+	// Step logic FPS back to realtime 10 seconds (300 logic frames at 30fps)
+	// before handoff so players can orient themselves before control returns.
+	const UnsignedInt FF_OFF_LEAD_FRAMES = 300;
+	if (TheGlobalData->m_TiVOFastMode
+		&& m_resumeHandoffFrame >= FF_OFF_LEAD_FRAMES
+		&& curFrame >= m_resumeHandoffFrame - FF_OFF_LEAD_FRAMES)
+	{
+		TheWritableGlobalData->m_TiVOFastMode = FALSE;
+	}
+
+	// Handoff condition: we've reached the handoff frame OR the replay file
+	// ran out of commands before we got there.
+	if (curFrame >= m_resumeHandoffFrame || m_nextFrame == (UnsignedInt)-1)
+	{
+		if (m_file != nullptr)
+		{
+			m_file->close();
+			m_file = nullptr;
+		}
+		m_mode = RECORDERMODETYPE_NONE;
+		m_currentReplayFilename.clear();
+
+		// Hand input back to the players and make sure fast-forward is off.
+		TheWritableGlobalData->m_TiVOFastMode = FALSE;
+		if (TheInGameUI)
+			TheInGameUI->setInputEnabled(TRUE);
+
+		// Broadcast a system chat line so all players see that control has
+		// been handed over. TheLAN->OnChat is local-only; every peer runs
+		// updateResumeCatchup and hits this point at the same frame (lockstep).
+		if (TheLAN)
+		{
+			TheLAN->OnChat(L"SYSTEM", TheLAN->GetLocalIP(),
+				TheGameText->fetch("GUI:ResumeHandoffComplete"),
+				LANAPI::LANCHAT_SYSTEM);
+		}
+
+		DEBUG_LOG(("RecorderClass::updateResumeCatchup - handoff at frame %u", curFrame));
+		return;
+	}
+
+	// NOTE: cullBadCommands() intentionally skipped during catchup.
+	// cullBadCommands strips any command in the MSG_BEGIN_NETWORK_MESSAGES
+	// range from TheCommandList, which includes exactly the commands we
+	// just appended via appendNextCommand. During pure single-player
+	// playback the cull runs before injection so the sequence is fine, but
+	// here the live LAN network layer is also writing into TheCommandList
+	// each frame — culling in the middle is not safe. Local UI input is
+	// already suppressed via InGameUI::setGUICommand, which is the right
+	// gate for this mode.
+
+	// Inject every command recorded for this frame.
+	while (m_nextFrame == curFrame)
+	{
+		appendNextCommand();
+		readNextFrame();
+	}
 }
 
 /**
