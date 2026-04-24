@@ -112,6 +112,7 @@ static NameKeyType buttonBackID = NAMEKEY_INVALID;
 static NameKeyType buttonStartID = NAMEKEY_INVALID;
 static NameKeyType buttonEmoteID = NAMEKEY_INVALID;
 static NameKeyType buttonSelectMapID = NAMEKEY_INVALID;
+static NameKeyType buttonResumeFromReplayID = NAMEKEY_INVALID;
 static NameKeyType checkboxLimitSuperweaponsID = NAMEKEY_INVALID;
 static NameKeyType comboBoxStartingCashID = NAMEKEY_INVALID;
 static NameKeyType windowMapID = NAMEKEY_INVALID;
@@ -120,6 +121,7 @@ static GameWindow *parentLanGameOptions = nullptr;
 static GameWindow *buttonBack = nullptr;
 static GameWindow *buttonStart = nullptr;
 static GameWindow *buttonSelectMap = nullptr;
+static GameWindow *buttonResumeFromReplay = nullptr;
 static GameWindow *buttonEmote = nullptr;
 static GameWindow *textEntryChat = nullptr;
 static GameWindow *textEntryMapDisplay = nullptr;
@@ -679,6 +681,7 @@ void InitLanGameGadgets()
 	listboxChatWindowLanGameID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:ListboxChatWindowLanGame" );
 	buttonEmoteID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:ButtonEmote" );
 	buttonSelectMapID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:ButtonSelectMap" );
+	buttonResumeFromReplayID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:ButtonResumeFromReplay" );
   checkboxLimitSuperweaponsID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:CheckboxLimitSuperweapons" );
   comboBoxStartingCashID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:ComboBoxStartingCash" );
 	windowMapID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:MapWindow" );
@@ -690,6 +693,10 @@ void InitLanGameGadgets()
 	DEBUG_ASSERTCRASH(buttonEmote, ("Could not find the buttonEmote"));
 	buttonSelectMap = TheWindowManager->winGetWindowFromId( parentLanGameOptions,buttonSelectMapID  );
 	DEBUG_ASSERTCRASH(buttonSelectMap, ("Could not find the buttonSelectMap"));
+	buttonResumeFromReplay = TheWindowManager->winGetWindowFromId( parentLanGameOptions, buttonResumeFromReplayID );
+	// Button is optional: only present in builds of the .wnd that include the new entry. Guard access with nullptr checks.
+	if (buttonResumeFromReplay)
+		buttonResumeFromReplay->winEnable( TheLAN && TheLAN->AmIHost() );
 	buttonStart = TheWindowManager->winGetWindowFromId( parentLanGameOptions,buttonStartID  );
 	DEBUG_ASSERTCRASH(buttonStart, ("Could not find the buttonStart"));
 	buttonBack = TheWindowManager->winGetWindowFromId( parentLanGameOptions,  buttonBackID);
@@ -793,6 +800,7 @@ void DeinitLanGameGadgets()
 	parentLanGameOptions = nullptr;
 	buttonEmote = nullptr;
 	buttonSelectMap = nullptr;
+	buttonResumeFromReplay = nullptr;
 	buttonStart = nullptr;
 	buttonBack = nullptr;
 	listboxChatWindowLanGame = nullptr;
@@ -1256,6 +1264,22 @@ WindowMsgHandledType LanGameOptionsMenuSystem( GameWindow *window, UnsignedInt m
 					mapSelectLayout->hide( FALSE );
 					mapSelectLayout->bringForward();
 
+				}
+				else if ( controlID == buttonResumeFromReplayID )
+				{
+					// Host-only: open the resume-from-replay picker. The picker validates
+					// the lobby roster against the replay and (once engine plumbing lands)
+					// stashes the resume state on TheLAN->GetMyGame().
+					if (TheLAN && TheLAN->AmIHost())
+					{
+						WindowLayout *picker = TheWindowManager->winCreateLayout( "Menus/PopupPickReplay.wnd" );
+						if (picker)
+						{
+							picker->runInit();
+							picker->hide( FALSE );
+							picker->bringForward();
+						}
+					}
 				}
 				else if ( controlID == buttonStartID )
 				{

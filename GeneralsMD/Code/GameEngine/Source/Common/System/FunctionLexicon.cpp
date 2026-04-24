@@ -57,6 +57,12 @@ extern void PopupReplayShutdown( WindowLayout *layout, void *userData );
 extern WindowMsgHandledType PopupReplaySystem( GameWindow *window, UnsignedInt msg, WindowMsgData mData1, WindowMsgData mData2 );
 extern WindowMsgHandledType PopupReplayInput( GameWindow *window, UnsignedInt msg, WindowMsgData mData1, WindowMsgData mData2 );
 
+// Popup Pick Replay (resume-from-replay picker) -----------------------------------------------------------
+extern void PopupPickReplayInit( WindowLayout *layout, void *userData );
+extern void PopupPickReplayUpdate( WindowLayout *layout, void *userData );
+extern void PopupPickReplayShutdown( WindowLayout *layout, void *userData );
+extern WindowMsgHandledType PopupPickReplaySystem( GameWindow *window, UnsignedInt msg, WindowMsgData mData1, WindowMsgData mData2 );
+
 // Extended MessageBox ----------------------------------------------------------------------------------
 extern WindowMsgHandledType ExtendedMessageBoxSystem( GameWindow *window, UnsignedInt msg, WindowMsgData mData1, WindowMsgData mData2 );
 
@@ -111,6 +117,7 @@ static FunctionLexicon::TableEntry gameWinSystemTable[] =
 	{ NAMEKEY_INVALID, "PopupCommunicatorSystem",            (void*)PopupCommunicatorSystem },
 	{ NAMEKEY_INVALID, "PopupBuddyNotificationSystem",       (void*)PopupBuddyNotificationSystem },
 	{ NAMEKEY_INVALID, "PopupReplaySystem",                  (void*)PopupReplaySystem },
+	{ NAMEKEY_INVALID, "PopupPickReplaySystem",              (void*)PopupPickReplaySystem },
 	{ NAMEKEY_INVALID, "KeyboardOptionsMenuSystem",          (void*)KeyboardOptionsMenuSystem },
 	{ NAMEKEY_INVALID, "WOLLadderScreenSystem",              (void*)WOLLadderScreenSystem },
 	{ NAMEKEY_INVALID, "WOLLoginMenuSystem",                 (void*)WOLLoginMenuSystem },
@@ -283,6 +290,7 @@ static FunctionLexicon::TableEntry winLayoutInitTable[] =
 	{ NAMEKEY_INVALID, "DownloadMenuInit",              (void*)DownloadMenuInit },
 	{ NAMEKEY_INVALID, "DifficultySelectInit",          (void*)DifficultySelectInit },
 	{ NAMEKEY_INVALID, "PopupReplayInit",               (void*)PopupReplayInit },
+	{ NAMEKEY_INVALID, "PopupPickReplayInit",           (void*)PopupPickReplayInit },
 
 	{ NAMEKEY_INVALID, nullptr,                         nullptr }
 
@@ -325,6 +333,7 @@ static FunctionLexicon::TableEntry winLayoutUpdateTable[] =
 	{ NAMEKEY_INVALID, "ScoreScreenUpdate",               (void*)ScoreScreenUpdate },
 	{ NAMEKEY_INVALID, "DownloadMenuUpdate",              (void*)DownloadMenuUpdate },
 	{ NAMEKEY_INVALID, "PopupReplayUpdate",               (void*)PopupReplayUpdate },
+	{ NAMEKEY_INVALID, "PopupPickReplayUpdate",           (void*)PopupPickReplayUpdate },
 	{ NAMEKEY_INVALID, nullptr,                           nullptr }
 
 };
@@ -366,6 +375,7 @@ static FunctionLexicon::TableEntry winLayoutShutdownTable[] =
 	{ NAMEKEY_INVALID, "ScoreScreenShutdown",               (void*)ScoreScreenShutdown },
 	{ NAMEKEY_INVALID, "DownloadMenuShutdown",              (void*)DownloadMenuShutdown },
 	{ NAMEKEY_INVALID, "PopupReplayShutdown",               (void*)PopupReplayShutdown },
+	{ NAMEKEY_INVALID, "PopupPickReplayShutdown",           (void*)PopupPickReplayShutdown },
 	{ NAMEKEY_INVALID, nullptr,                             nullptr }
 
 };
