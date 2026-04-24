@@ -19,6 +19,7 @@
 
 #include "Common/AsciiString.h"
 #include "Common/UnicodeString.h"
+#include "Common/FileSystem.h"
 #include "Common/Recorder.h"
 #include "Common/NameKeyGenerator.h"
 #include "GameClient/Gadget.h"
@@ -68,6 +69,61 @@ static AsciiString currentSelectedFilename()
 	UnicodeString fnameU = GetReplayFilenameFromListbox(listboxWin, sel);
 	out.translate(fnameU);
 	return out;
+}
+
+// Single-column filename-only populate for the picker's listbox. The full
+// PopulateReplayFileListbox in ReplayMenu.cpp hard-asserts on column counts
+// other than 4 or 5, so we can't reuse it directly for a compact popup.
+static void populatePickerListbox(GameWindow* listbox)
+{
+	if (!listbox)
+		return;
+
+	GadgetListBoxReset(listbox);
+
+	if (!TheRecorder)
+		return;
+
+	AsciiString searchPattern = "*";
+	searchPattern.concat(TheRecorder->getReplayExtention());
+
+	FilenameList filenames;
+	TheFileSystem->getFileListInDirectory(TheRecorder->getReplayDir(), searchPattern, filenames, FALSE);
+
+	AsciiString lastReplay = TheRecorder->getLastReplayFileName();
+	lastReplay.concat(TheRecorder->getReplayExtention());
+
+	Color normalColor = GameMakeColor(255, 255, 255, 255);
+	Color highlightColor = GameMakeColor(255, 255, 0, 255);
+
+	const Int extLen = TheRecorder->getReplayExtention().getLength();
+
+	for (FilenameListIter it = filenames.begin(); it != filenames.end(); ++it)
+	{
+		AsciiString shortName = (*it).reverseFind('\\') + 1;
+		if (shortName.isEmpty())
+			shortName = *it;
+
+		// GetReplayFilenameFromListbox reappends the .rep extension, so the
+		// listbox row needs to store the stem without the extension
+		// (or the "GUI:LastReplay" marker string for the default slot).
+		UnicodeString displayName;
+		Bool isLast = (lastReplay.compareNoCase(shortName) == 0);
+		if (isLast)
+		{
+			displayName = TheGameText->fetch("GUI:LastReplay");
+		}
+		else
+		{
+			displayName.translate(shortName);
+			displayName.truncateBy(extLen);
+		}
+
+		Color color = isLast ? highlightColor : normalColor;
+		GadgetListBoxAddEntryText(listbox, displayName, color, -1, 0);
+	}
+
+	GadgetListBoxSetSelected(listbox, 0);
 }
 
 static void closePopup()
@@ -231,12 +287,22 @@ void PopupPickReplayInit(WindowLayout* layout, void* /*userData*/)
 	buttonCancelID      = TheNameKeyGenerator->nameToKey("PopupPickReplay.wnd:ButtonCancel");
 
 	parentWin           = TheWindowManager->winGetWindowFromId(nullptr, parentID);
+	if (!parentWin)
+	{
+		// Layout failed to load or parse. Most commonly this means
+		// PopupPickReplay.wnd is missing from the retail install's
+		// Data/<locale>/Art/Windows/Menus/ directory. Bail silently so the
+		// game does not crash on a missing resource.
+		DEBUG_LOG(("PopupPickReplayInit: parent window not found; PopupPickReplay.wnd may be missing."));
+		return;
+	}
 	listboxWin          = TheWindowManager->winGetWindowFromId(parentWin, listboxID);
 	staticTextStatusWin = TheWindowManager->winGetWindowFromId(parentWin, staticTextStatusID);
 	buttonArmWin        = TheWindowManager->winGetWindowFromId(parentWin, buttonArmID);
 	buttonCancelWin     = TheWindowManager->winGetWindowFromId(parentWin, buttonCancelID);
 
-	PopulateReplayFileListbox(listboxWin);
+	if (listboxWin)
+		populatePickerListbox(listboxWin);
 	if (buttonArmWin)
 		buttonArmWin->winEnable(FALSE);
 	if (staticTextStatusWin)
@@ -255,7 +321,7 @@ void PopupPickReplayShutdown(WindowLayout* /*layout*/, void* /*userData*/)
 }
 
 WindowMsgHandledType PopupPickReplaySystem(GameWindow* /*window*/, UnsignedInt msg,
-	WindowMsgData mData1, WindowMsgData /*mData2*/)
+	WindowMsgData mData1, WindowMsgData mData2)
 {
 	switch (msg)
 	{
@@ -264,7 +330,11 @@ WindowMsgHandledType PopupPickReplaySystem(GameWindow* /*window*/, UnsignedInt m
 			return MSG_HANDLED;
 
 		case GWM_INPUT_FOCUS:
-			*(Bool*)mData1 = TRUE;
+			// mData1 = TRUE when focus is being offered. mData2 points to a Bool
+			// we must set TRUE to accept. Dereferencing mData1 (a literal 0/1)
+			// as a pointer was the original crash source.
+			if (mData1 == TRUE)
+				*(Bool*)mData2 = TRUE;
 			return MSG_HANDLED;
 
 		case GLM_SELECTED:

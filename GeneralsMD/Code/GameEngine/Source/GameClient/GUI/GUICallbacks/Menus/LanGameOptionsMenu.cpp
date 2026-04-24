@@ -1267,18 +1267,16 @@ WindowMsgHandledType LanGameOptionsMenuSystem( GameWindow *window, UnsignedInt m
 				}
 				else if ( controlID == buttonResumeFromReplayID )
 				{
-					// Host-only: open the resume-from-replay picker. The picker validates
-					// the lobby roster against the replay and (once engine plumbing lands)
-					// stashes the resume state on TheLAN->GetMyGame().
+					// Host-only: push the known-working ReplayMenu onto the shell as
+					// the resume picker. ReplayMenu.cpp's Load handler will branch on a
+					// resume-mode flag (set here, cleared on menu exit) to arm the LAN
+					// lobby instead of starting replay playback. Reuses the stock
+					// layout to avoid a hand-authored popup .wnd.
 					if (TheLAN && TheLAN->AmIHost())
 					{
-						WindowLayout *picker = TheWindowManager->winCreateLayout( "Menus/PopupPickReplay.wnd" );
-						if (picker)
-						{
-							picker->runInit();
-							picker->hide( FALSE );
-							picker->bringForward();
-						}
+						extern void BeginResumeFromReplayMode();
+						BeginResumeFromReplayMode();
+						TheShell->push( "Menus/ReplayMenu.wnd" );
 					}
 				}
 				else if ( controlID == buttonStartID )

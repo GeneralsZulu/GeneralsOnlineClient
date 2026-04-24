@@ -80,6 +80,15 @@ static Bool justEntered = FALSE;
 static GameWindow *buttonAnalyzeReplay = nullptr;
 #endif
 
+// Resume-from-replay mode: set by the LAN lobby before pushing ReplayMenu
+// onto the shell. While true, the Load handler is repurposed to arm the
+// LAN lobby's resume flow instead of starting replay playback. Always
+// cleared on menu shutdown so a subsequent push of ReplayMenu defaults
+// back to normal playback behavior.
+static Bool s_resumeFromReplayMode = FALSE;
+void BeginResumeFromReplayMode() { s_resumeFromReplayMode = TRUE; }
+Bool IsResumeFromReplayMode()    { return s_resumeFromReplayMode; }
+
 void deleteReplay();
 void copyReplay();
 static Bool callCopy = FALSE;
@@ -455,6 +464,10 @@ void ReplayMenuInit( WindowLayout *layout, void *userData )
 void ReplayMenuShutdown( WindowLayout *layout, void *userData )
 {
 
+	// Always clear the resume-from-replay mode flag so the next push of
+	// ReplayMenu defaults to normal playback.
+	s_resumeFromReplayMode = FALSE;
+
 	Bool popImmediate = *(Bool *)userData;
 	if( popImmediate )
 	{
@@ -719,6 +732,16 @@ WindowMsgHandledType ReplayMenuSystem( GameWindow *window, UnsignedInt msg,
 					}
 
 					filename = GetReplayFilenameFromListbox(listboxReplayFiles, selected);
+					if (s_resumeFromReplayMode)
+					{
+						// Resume-from-replay path: engine plumbing (roster match,
+						// seed override, host streamer, handoff) is a TODO.
+						// For now, surface a message so it's obvious the button
+						// flow works end-to-end.
+						MessageBoxOk(TheGameText->fetch("GUI:ResumeEngineTODO"),
+						             filename, nullptr);
+						break;
+					}
 					loadReplay(filename);
 				}
 			}
