@@ -755,7 +755,6 @@ set(GAMEENGINE_SRC
     Source/GameClient/GUI/GUICallbacks/Menus/PopupHostGame.cpp
     Source/GameClient/GUI/GUICallbacks/Menus/PopupJoinGame.cpp
     Source/GameClient/GUI/GUICallbacks/Menus/PopupLadderSelect.cpp
-    Source/GameClient/GUI/GUICallbacks/Menus/PopupPickReplay.cpp
     Source/GameClient/GUI/GUICallbacks/Menus/PopupPlayerInfo.cpp
     Source/GameClient/GUI/GUICallbacks/Menus/PopupReplay.cpp
     Source/GameClient/GUI/GUICallbacks/Menus/PopupSaveLoad.cpp
