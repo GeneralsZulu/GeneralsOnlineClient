@@ -190,6 +190,8 @@ protected:
 
 	UnsignedInt m_nextFrame;												///< The Frame that the next message is to be executed on.  This can be -1.
 	UnsignedInt m_resumeHandoffFrame;								///< During RESUME_CATCHUP, the frame at which to stop injecting replay commands and return to NONE.
+	Int m_resumeSavedFpsLimit;											///< During RESUME_CATCHUP, the FPS limit at start so we can restore at handoff.
+	Int m_resumeSavedNetFrameRate;									///< During RESUME_CATCHUP, the network's logic frame rate at start so we can restore at handoff.
 };
 
 extern RecorderClass *TheRecorder;

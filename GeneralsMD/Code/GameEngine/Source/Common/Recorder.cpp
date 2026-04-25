@@ -27,6 +27,7 @@
 #include "Common/Recorder.h"
 #include "Common/file.h"
 #include "Common/FileSystem.h"
+#include "Common/FramePacer.h"
 #include "Common/PlayerList.h"
 #include "Common/Player.h"
 #include "Common/GlobalData.h"
@@ -1805,10 +1806,22 @@ Bool RecorderClass::startResumeCatchup(AsciiString filename, UnsignedInt handoff
 	if (TheInGameUI)
 		TheInGameUI->setInputEnabled(FALSE);
 
-	// Kick on TiVO fast-forward so the catchup races to the handoff frame
-	// instead of playing back in real time. GameEngine.cpp / FramePacer.cpp
-	// are widened to honor m_TiVOFastMode when isResumeCatchupMode() is true.
-	TheWritableGlobalData->m_TiVOFastMode = TRUE;
+	// Raise both the FramePacer's FPS limit AND the network's per-frame
+	// timing rate so logic can advance faster. Two gates were limiting us:
+	// (1) renderer FPS cap, (2) Network::timeForNewFrame() which uses
+	// m_frameRate as its own rate gate independent of the renderer.
+	// Lockstep is unchanged — each frame still goes through full network
+	// ack, just faster. On LAN this gives a real speedup; on slower
+	// networks it tops out at whatever round-trip allows.
+	if (TheFramePacer)
+	{
+		m_resumeSavedFpsLimit = TheFramePacer->getFramesPerSecondLimit();
+		TheFramePacer->setFramesPerSecondLimit(1000);
+	}
+	if (TheNetwork)
+	{
+		m_resumeSavedNetFrameRate = TheNetwork->setLogicFrameRate(1000);
+	}
 
 	DEBUG_LOG(("RecorderClass::startResumeCatchup - catching up %s to frame %u",
 		filename.str(), handoffFrame));
@@ -1826,14 +1839,25 @@ void RecorderClass::updateResumeCatchup()
 {
 	UnsignedInt curFrame = TheGameLogic ? TheGameLogic->getFrame() : 0;
 
-	// Step logic FPS back to realtime 10 seconds (300 logic frames at 30fps)
-	// before handoff so players can orient themselves before control returns.
+	// Drop both rate caps back to normal once we're within 10 seconds (300
+	// logic frames at 30fps) of the handoff so players see a realtime preview
+	// before control is handed back. If the handoff is closer than that to
+	// the start of catchup, just stay at the elevated rate.
 	const UnsignedInt FF_OFF_LEAD_FRAMES = 300;
-	if (TheGlobalData->m_TiVOFastMode
-		&& m_resumeHandoffFrame >= FF_OFF_LEAD_FRAMES
-		&& curFrame >= m_resumeHandoffFrame - FF_OFF_LEAD_FRAMES)
+	const Bool inLeadIn =
+		(m_resumeHandoffFrame >= FF_OFF_LEAD_FRAMES
+			&& curFrame >= m_resumeHandoffFrame - FF_OFF_LEAD_FRAMES);
+	if (inLeadIn)
 	{
-		TheWritableGlobalData->m_TiVOFastMode = FALSE;
+		if (TheFramePacer
+			&& TheFramePacer->getFramesPerSecondLimit() != m_resumeSavedFpsLimit)
+		{
+			TheFramePacer->setFramesPerSecondLimit(m_resumeSavedFpsLimit);
+		}
+		if (TheNetwork)
+		{
+			TheNetwork->setLogicFrameRate(m_resumeSavedNetFrameRate);
+		}
 	}
 
 	// Handoff condition: we've reached the handoff frame OR the replay file
@@ -1848,19 +1872,26 @@ void RecorderClass::updateResumeCatchup()
 		m_mode = RECORDERMODETYPE_NONE;
 		m_currentReplayFilename.clear();
 
-		// Hand input back to the players and make sure fast-forward is off.
-		TheWritableGlobalData->m_TiVOFastMode = FALSE;
+		// Hand input back to the players. (Network resync was needed when
+		// FF was bypassing the lockstep gate; with realtime catchup the
+		// network has been keeping pace and no resync is required.)
 		if (TheInGameUI)
 			TheInGameUI->setInputEnabled(TRUE);
 
-		// Broadcast a system chat line so all players see that control has
-		// been handed over. TheLAN->OnChat is local-only; every peer runs
-		// updateResumeCatchup and hits this point at the same frame (lockstep).
-		if (TheLAN)
+		// Restore both rate caps to their pre-catchup values.
+		if (TheFramePacer)
+			TheFramePacer->setFramesPerSecondLimit(m_resumeSavedFpsLimit);
+		if (TheNetwork)
+			TheNetwork->setLogicFrameRate(m_resumeSavedNetFrameRate);
+
+		// Show an in-game notification so every player can see that control
+		// has been handed over. TheLAN->OnChat only writes to the lobby's
+		// chat listboxes, which don't exist during live gameplay. Each peer
+		// hits this code path in lockstep so the message renders on every
+		// client.
+		if (TheInGameUI)
 		{
-			TheLAN->OnChat(L"SYSTEM", TheLAN->GetLocalIP(),
-				TheGameText->fetch("GUI:ResumeHandoffComplete"),
-				LANAPI::LANCHAT_SYSTEM);
+			TheInGameUI->message("GUI:ResumeHandoffComplete");
 		}
 
 		DEBUG_LOG(("RecorderClass::updateResumeCatchup - handoff at frame %u", curFrame));
