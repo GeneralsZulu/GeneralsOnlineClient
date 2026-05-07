@@ -1014,7 +1014,7 @@ void W3DTreeBuffer::updateVertexBuffer()
 			Real theSin = m_trees[curTree].sin;
 			Real theCos = m_trees[curTree].cos;
 			if (type<0 || m_treeTypes[type].m_mesh == nullptr) {
-				type = 0;
+				continue; // No valid mesh for this tree type, skip to avoid null pointer dereference.
 			}
 
 			Int startVertex = m_trees[curTree].firstIndex;
@@ -2034,6 +2034,10 @@ void W3DTreeBuffer::loadPostProcess()
 {
 	// empty. jba [8/11/2003]
 }
+
+
+
+
 
 
 
