@@ -195,9 +195,6 @@ void HTTPManager::Initialize()
 {
 	CHECK_MAIN_THREAD;
 
-    // Initialize libcurl global state
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-
 	m_pCurl = curl_multi_init();
 	m_bProxyEnabled = DeterminePlatformProxySettings();
 }
