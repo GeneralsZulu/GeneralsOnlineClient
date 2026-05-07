@@ -1525,7 +1525,9 @@ GameSpyLoadScreen::~GameSpyLoadScreen()
 	}
 }
 
+#if !defined(GENERALS_ONLINE)
 extern Int GetAdditionalDisconnectsFromUserFile(Int playerID);
+#endif
 
 void GameSpyLoadScreen::init( GameInfo *game )
 {
@@ -1774,7 +1776,9 @@ GameSlot *lSlot = game->getSlot(game->getLocalSlotNum());
 		{
 			numGames += it->second;
 		}
+#if !defined(GENERALS_ONLINE)
 		numGames += GetAdditionalDisconnectsFromUserFile(stats.id);
+#endif
 
 		formatString.format(L"%d", numGames);
 		GadgetStaticTextSetText(m_playerTotalDisconnects[netSlot], formatString);
