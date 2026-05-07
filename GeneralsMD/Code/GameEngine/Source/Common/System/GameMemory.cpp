@@ -283,11 +283,11 @@ static void memset32(void* ptr, Int value, Int bytesToFill)
 	bytesToFill -= (wordsToFill<<2);
 
 	Int *p = (Int*)ptr;
-	for (++wordsToFill; --wordsToFill; )
+	while (wordsToFill-- > 0)
 		*p++ = value;
 
 	Byte *b = (Byte *)p;
-	for (++bytesToFill; --bytesToFill; )
+	while (bytesToFill-- > 0)
 		*b++ = (Byte)value;
 }
 
