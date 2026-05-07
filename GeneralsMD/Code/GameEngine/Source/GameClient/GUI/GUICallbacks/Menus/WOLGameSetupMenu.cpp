@@ -1773,7 +1773,6 @@ void WOLGameSetupMenuInit( WindowLayout *layout, void *userData )
 				std::string strState = "Unknown";
 
 				EConnectionState connState = connection->GetState();
-				std::string strConnectionType = connection->GetConnectionType();
 
 				switch (connState)
 				{
@@ -2341,6 +2340,15 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 	{
 		shutdownComplete(layout);
 		return;
+	}
+
+	if (AnticheatPlugInterface::g_bPendingExitLobby)
+	{
+		AnticheatPlugInterface::g_bPendingExitLobby = false;
+
+        GSMessageBoxOk(TheGameText->fetchOrSubstitute("GUI:ACErrorHeader", L"AntiCheat Error"), TheGameText->fetchOrSubstitute("GUI:ACLobbyIntegrityError", L"Lobby integrity could not be validated. Leaving Lobby."));
+
+        PopBackToLobby();
 	}
 
 	if (NGMP_OnlineServicesManager::GetInstance() != nullptr)
@@ -3542,7 +3550,7 @@ Bool handleGameSetupSlashCommands(UnicodeString uText)
 						for (int i = 0; i < asciiVal.getLength(); ++i)
 						{
 							char thisChar = asciiVal.getCharAt(i);
-							if (!std::isdigit(thisChar))
+							if (!std::isdigit((unsigned char)thisChar))
 							{
 								bIsNumber = false;
 								break;

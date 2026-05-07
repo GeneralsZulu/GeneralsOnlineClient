@@ -2,7 +2,8 @@
 
 #include "NGMP_include.h"
 #include <ws2ipdef.h>
-#include "ValveNetworkingSockets/steam/steamnetworkingsockets.h"
+#include <mutex>
+#include "ValveNetworkingSockets/steam/steamnetworkingcustomsignaling.h"
 
 class NetRoom_ChatMessagePacket;
 
@@ -42,6 +43,8 @@ public:
 	EConnectionState GetState() const { return m_State; }
 
 	int SendGamePacket(void* pBuffer, uint32_t totalDataSize);
+
+	void SendACPacket(const void* pData, uint32_t dataLen);
 
 	void UpdateLatencyHistogram();
 
@@ -91,6 +94,8 @@ public:
 	int ComputeConnectionScore();
 
 	HSteamNetConnection m_hSteamConnection = k_HSteamNetConnection_Invalid;
+
+	void LiteUpdateForAC();
 };
 
 struct LobbyMemberEntry;
@@ -166,11 +171,9 @@ public:
 	}
 
 
-	std::queue<QueuedGamePacket> m_queueQueuedGamePackets;
-
-	bool HasGamePacket();
-	QueuedGamePacket RecvGamePacket();
 	int SendGamePacket(void* pBuffer, uint32_t totalDataSize, int64_t userID);
+
+	void SendACPacket(uint32_t userID, const void* pData, uint32_t dataLen);
 
 	void StartConnectionSignalling(int64_t remoteUserID, uint16_t preferredPort);
 	void DisconnectUser(int64_t remoteUserID);
@@ -198,6 +201,7 @@ public:
 
 private:
 	std::map<int64_t, PlayerConnection> m_mapConnections;
+	mutable std::recursive_mutex m_mapConnectionsMutex;  // Synchronizes access to m_mapConnections
 
 	ISignalingClient* m_pSignaling = nullptr;
 
