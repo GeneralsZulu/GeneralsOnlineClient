@@ -1011,7 +1011,7 @@ void NGMP_OnlineServicesManager::InitSentry()
 
 	sentry_options_set_dsn(options, "https://61750bebd112d279bcc286d617819269@o4509316925554688.ingest.us.sentry.io/4509316927586304");
 	sentry_options_set_database_path(options, strDumpPath.c_str());
-	sentry_options_set_release(options, "generalsonline-client@042826_QFE3_EAC");
+	sentry_options_set_release(options, "generalsonline-client@042826_QFE4_EAC");
 
 #if defined(USE_TEST_ENV)
 	sentry_options_set_environment(options, "test");
@@ -1189,6 +1189,16 @@ void WebSocket::SendData_StartGame()
 	Send(strBody.c_str());
 }
 
+
+void WebSocket::SendData_ACMessage(int64_t targetUserID, std::vector<uint8_t> vecPayload)
+{
+    nlohmann::json j;
+    j["msg_id"] = EWebSocketMessageID::ANTICHEAT_MESSAGE;
+    j["target_user_id"] = targetUserID;
+    j["payload"] = vecPayload;
+    std::string strBody = j.dump();
+    Send(strBody.c_str());
+}
 
 void WebSocket::SendData_SubscribeRealtimeUpdates()
 {

@@ -101,6 +101,7 @@
 #include "GameNetwork/NetworkInterface.h"
 extern NetworkInterface * TheNetwork;
 #endif
+#include "ValveNetworkingSockets/steam/isteamnetworkingsockets.h"
 
 
 // ------------------------------------------------------------------------------------------------
