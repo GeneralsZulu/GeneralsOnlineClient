@@ -566,6 +566,15 @@ NetworkMesh::NetworkMesh()
 {
 	SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_LogLevel_P2PRendezvous, k_ESteamNetworkingSocketsDebugOutputType_Error);
 
+	// Block the status-changed callback from firing while the library is
+	// torn down and re-initialized.  Without this guard the callback can
+	// be dispatched (e.g. from a previous Tick's RunCallbacks queue) after
+	// GameNetworkingSockets_Kill() has freed its internal mutexes but
+	// before GameNetworkingSockets_Init() has rebuilt them, resulting in
+	// an EXCEPTION_ACCESS_VIOLATION_READ on a null mutex pointer inside
+	// mtx_do_lock.
+	g_bNetworkMeshDestroying.store(true);
+
 	// try a shutdown
 	GameNetworkingSockets_Kill();
 
@@ -657,6 +666,10 @@ NetworkMesh::NetworkMesh()
 	}
 
 	SteamNetworkingUtils()->SetGlobalCallback_SteamNetConnectionStatusChanged(OnSteamNetConnectionStatusChanged);
+
+	// Library is fully re-initialized and the callback is registered;
+	// it is now safe to allow OnSteamNetConnectionStatusChanged to run.
+	g_bNetworkMeshDestroying.store(false);
 
 	ESteamNetworkingSocketsDebugOutputType logType =
 #if defined(_DEBUG)
