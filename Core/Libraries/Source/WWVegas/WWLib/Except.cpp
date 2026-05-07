@@ -407,7 +407,7 @@ void Dump_Exception_Info(EXCEPTION_POINTERS *e_info)
 	/*
 	** Scrap buffer for constructing dump strings
 	*/
-	char scrap [256];
+	char scrap [256] = {};
 
 	/*
 	** Clear out the dump buffer
@@ -712,7 +712,7 @@ void Dump_Exception_Info(EXCEPTION_POINTERS *e_info)
 	** Dump the bytes at EIP. This will make it easier to match the crash address with later versions of the game.
 	*/
 	DebugString("EIP bytes dump...\n");
-	sprintf(scrap, "\r\nBytes at CS:EIP (%08X)  : ", context->Eip);
+	snprintf(scrap, ARRAY_SIZE(scrap), "\r\nBytes at CS:EIP (%08X)  : ", context->Eip);
 
 	unsigned char *eip_ptr = (unsigned char *) (context->Eip);
 	char bytestr[32];
