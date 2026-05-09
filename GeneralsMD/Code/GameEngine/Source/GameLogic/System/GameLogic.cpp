@@ -216,6 +216,9 @@ void setFPMode()
 	newVal = (newVal & ~_MCW_PC) | (_PC_24 & _MCW_PC);
 
 	_controlfp(newVal, _MCW_PC | _MCW_RC);
+
+	unsigned int cw;
+	_controlfp_s(&cw, _MCW_EM, _MCW_EM);
 }
 
 // ------------------------------------------------------------------------------------------------
