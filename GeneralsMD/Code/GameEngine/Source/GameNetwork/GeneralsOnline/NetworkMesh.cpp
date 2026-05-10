@@ -1065,14 +1065,10 @@ void PlayerConnection::LiteUpdateForAC()
 		memcpy(vecData.data(), msg->GetData(), numBytes);
 
 		// Check minimum packet size for AC header
-		if (numBytes >= 3)
+		if (numBytes >= sizeof(ENetworkChannel))
 		{
-			BYTE b1 = (BYTE)vecData[0];
-			BYTE b2 = (BYTE)vecData[1];
-			BYTE b3 = (BYTE)vecData[2];
-			if (b1 == 9
-				&& b2 == 1
-				&& b3 == 2)
+			ENetworkChannel netChannel = (ENetworkChannel)vecData[0];
+			if (netChannel == ENetworkChannel::NETWORK_CHANNEL_AC)
 			{
 				NetworkLog(ELogVerbosity::LOG_RELEASE, "[AC PACKET] Received AC message of size %u from user %lld", numBytes, static_cast<long long>(m_userID));
 
@@ -1080,15 +1076,15 @@ void PlayerConnection::LiteUpdateForAC()
 				// remove header
 				// TODO_AC: Optimize this
 				std::vector<byte> vecDataAC;
-				vecDataAC.resize(numBytes - 3);
-				memcpy(vecDataAC.data(), (char*)msg->GetData() + 3, numBytes - 3);
+				vecDataAC.resize(numBytes - sizeof(ENetworkChannel));
+				memcpy(vecDataAC.data(), (char*)msg->GetData() + sizeof(ENetworkChannel), numBytes - sizeof(ENetworkChannel));
 
-				AnticheatPlugInterface::AC_NetworkMessageArrived(m_userID, vecDataAC.data(), numBytes - 3);
+				AnticheatPlugInterface::AC_NetworkMessageArrived(m_userID, vecDataAC.data(), numBytes - sizeof(ENetworkChannel));
 				msg->Release();
 				continue;
 			}
 		}
-		else if (numBytes > 0 && numBytes < 3)
+		else if (numBytes != -1 && numBytes < sizeof(ENetworkChannel))
 		{
 			// Malformed AC packet - too small for header
 			NetworkLog(ELogVerbosity::LOG_RELEASE, "[AC PACKET] Dropping malformed AC packet - size %u is less than header size 3 from user %lld", numBytes, static_cast<long long>(m_userID));
@@ -1168,9 +1164,15 @@ int PlayerConnection::SendGamePacket(void* pBuffer, uint32_t totalDataSize)
 		}
 	}
 
+    ENetworkChannel netChannel = ENetworkChannel::NETWORK_CHANNEL_GAME;
+    std::vector<BYTE> vecData;
+    vecData.resize(totalDataSize + sizeof(ENetworkChannel));
+    memcpy(vecData.data() + sizeof(ENetworkChannel), pBuffer, totalDataSize);
+    vecData[0] = (BYTE)netChannel;
+
 	NetworkLog(ELogVerbosity::LOG_DEBUG, "[GAME PACKET] Sending msg of size %ld to user %lld\n", totalDataSize, m_userID);
 	EResult r = SteamNetworkingSockets()->SendMessageToConnection(
-		m_hSteamConnection, pBuffer, (int)totalDataSize, sendFlags, nullptr);
+		m_hSteamConnection, vecData.data(), vecData.size(), sendFlags, nullptr);
 
 	if (r != k_EResultOK)
 	{
@@ -1195,13 +1197,11 @@ void PlayerConnection::SendACPacket(const void* pData, uint32_t dataLen)
 		return;
 	}
 
+	ENetworkChannel netChannel = ENetworkChannel::NETWORK_CHANNEL_AC;
 	std::vector<BYTE> vecData;
-	vecData.resize(dataLen + 3);
-	memcpy(vecData.data() + 3, pData, dataLen);
-
-	vecData[0] = 9;
-	vecData[1] = 1;
-	vecData[2] = 2;
+	vecData.resize(dataLen + sizeof(ENetworkChannel));
+	memcpy(vecData.data() + sizeof(ENetworkChannel), pData, dataLen);
+	vecData[0] = (BYTE)netChannel;
 
     NetworkLog(ELogVerbosity::LOG_RELEASE, "[AC PACKET] Sending AC msg of size %ld to user %ld\n", dataLen, m_userID);
     EResult r = SteamNetworkingSockets()->SendMessageToConnection(m_hSteamConnection, vecData.data(), vecData.size(), k_nSteamNetworkingSend_Reliable, nullptr);
