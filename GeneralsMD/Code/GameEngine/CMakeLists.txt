@@ -112,6 +112,7 @@ set(GAMEENGINE_SRC
     Include/Common/StatsCollector.h
     Include/Common/StatsExporter.h
     Include/Common/StatsUploader.h
+    Include/Common/LobbyDiscord.h
 #    Include/Common/STLTypedefs.h
 #    Include/Common/StreamingArchiveFile.h
 #    Include/Common/SubsystemInterface.h
@@ -632,6 +633,7 @@ set(GAMEENGINE_SRC
     Source/Common/StatsCollector.cpp
     Source/Common/StatsExporter.cpp
     Source/Common/StatsUploader.cpp
+    Source/Common/LobbyDiscord.cpp
 #    Source/Common/System/ArchiveFile.cpp
 #    Source/Common/System/ArchiveFileSystem.cpp
 #    Source/Common/System/AsciiString.cpp
@@ -1116,6 +1118,7 @@ set(GAMEENGINE_SRC
 #    Source/GameNetwork/GameSpy/Thread/ThreadUtils.cpp
 #    Source/GameNetwork/GameSpyOverlay.cpp
     Source/GameNetwork/GUIUtil.cpp
+    Source/GameNetwork/RandomAssign.cpp
 #    Source/GameNetwork/IPEnumeration.cpp
 #    Source/GameNetwork/LANAPI.cpp
 #    Source/GameNetwork/LANAPICallbacks.cpp
@@ -1219,6 +1222,17 @@ add_library(z_gameengine STATIC)
 
 target_sources(z_gameengine PRIVATE ${GAMEENGINE_SRC})
 
+# LobbyDiscord.cpp #include's the cmake-generated DiscordWebhook.h, but the
+# top-level CMakeLists.txt disables CMAKE_NINJA_CMCLDEPS_RC because VC6's
+# cl.exe rejects /showIncludes — without that, the ninja CXX rule has no
+# automatic dep tracking for transitive headers. Wire the dependency
+# explicitly here so re-running cmake with a new ZULU_DISCORD_WEBHOOK_URL
+# (which configure_file rewrites into the generated header) actually
+# triggers a recompile of LobbyDiscord.cpp.obj. Same pattern Main's
+# CMakeLists.txt uses for BuildVersion.h on RTS.RC.
+set_source_files_properties(Source/Common/LobbyDiscord.cpp PROPERTIES
+    OBJECT_DEPENDS "${ZULU_DISCORD_WEBHOOK_GENERATED_DIR}/DiscordWebhook.h")
+
 target_include_directories(z_gameengine PUBLIC
     Include
 
@@ -1231,6 +1245,8 @@ target_link_directories(z_gameengine PUBLIC
 
 target_include_directories(z_gameengine PRIVATE
     Include/Precompiled
+    ${ZULU_CLIENT_KEY_GENERATED_DIR}
+    ${ZULU_DISCORD_WEBHOOK_GENERATED_DIR}
 )
 
 target_link_libraries(z_gameengine PRIVATE

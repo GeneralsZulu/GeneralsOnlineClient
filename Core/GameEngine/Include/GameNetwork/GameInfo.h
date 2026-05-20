@@ -40,8 +40,28 @@ enum SlotState CPP_11(: Int)
 	SLOT_EASY_AI,
 	SLOT_MED_AI,
 	SLOT_BRUTAL_AI,
-	SLOT_PLAYER
+	SLOT_PLAYER,
+	// Zulu addition: combat strength matches Brutal but the AI also runs the
+	// idle-army-commit sweep (and any future smart-AI features). Added at the
+	// end so existing serialized SlotState values continue to deserialize.
+	SLOT_TACTICAL_AI
 };
+
+// Lobby player-combo translation. The LAN/WOL/Skirmish combo boxes lay out
+// Open/Closed/Easy/Medium/Brutal/Tactical at positions 0..5 (matching the
+// SlotState enum values for 0..4, with Tactical mapped to position 5 since
+// SLOT_PLAYER=5 is reserved for an actual joining human).
+inline SlotState slotStateFromLobbyComboPos(Int pos)
+{
+	if (pos == 5) return SLOT_TACTICAL_AI;
+	return (SlotState)pos;
+}
+
+inline Int lobbyComboPosFromSlotState(SlotState s)
+{
+	if (s == SLOT_TACTICAL_AI) return 5;
+	return (Int)s;
+}
 
 enum
 {
@@ -113,6 +133,7 @@ public:
 	Bool isHuman() const;															///< Is this slot occupied by a human player?
 	Bool isOccupied() const;													///< Is this slot occupied (by a human or an AI)?
 	Bool isAI() const;																///< Is this slot occupied by an AI?
+	Bool isTacticalAI() const { return m_state == SLOT_TACTICAL_AI; }	///< Is this slot a Tactical (smart) AI?
 	Bool isPlayer( AsciiString userName ) const;						///< Does this slot contain the given user?
 	Bool isPlayer( UnicodeString userName ) const;					///< Does this slot contain the given user?
 	Bool isPlayer( UnsignedInt ip ) const;									///< Is this slot at this IP?
@@ -217,6 +238,13 @@ public:
 	void setCRCInterval( Int val ) { m_crcInterval = (val > 0 && val < 100) ? val : 100; }
 	Int getCRCInterval() const { return m_crcInterval; }
 
+	// Resume-from-replay arming. When non-empty, clients use the replay's
+	// recorded seed for InitRandom and enter local replay catchup on start.
+	void setResumeReplayFile( AsciiString f ) { m_resumeReplayFile = f; }
+	AsciiString getResumeReplayFile() const   { return m_resumeReplayFile; }
+	void setResumeHandoffFrame( UnsignedInt f ) { m_resumeHandoffFrame = f; }
+	UnsignedInt getResumeHandoffFrame() const   { return m_resumeHandoffFrame; }
+
 	Bool haveWeSurrendered() { return m_surrendered; }
 	void markAsSurrendered() { m_surrendered = TRUE; }
 
@@ -251,6 +279,11 @@ protected:
   Money         m_startingCash;
   UnsignedShort m_superweaponRestriction;
   Bool m_oldFactionsOnly; // Only USA, China, GLA -- not USA Air Force General, GLA Toxic General, et al
+	// Appended at the END so introducing them doesn't shift the offsets of
+	// any pre-existing member (protects against partial-recompile / ABI drift
+	// when this header is edited).
+	AsciiString m_resumeReplayFile;
+	UnsignedInt m_resumeHandoffFrame;
 };
 
 extern GameInfo *TheGameInfo;

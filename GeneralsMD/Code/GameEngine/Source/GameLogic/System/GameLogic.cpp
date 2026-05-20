@@ -52,6 +52,7 @@
 #include "Common/RandomValue.h"
 #include "Common/Recorder.h"
 #include "Common/StatsCollector.h"
+#include "Common/StatsExporter.h"
 #include "Common/ThingFactory.h"
 #include "Common/Team.h"
 #include "Common/ThingTemplate.h"
@@ -1201,6 +1202,9 @@ void GameLogic::setGameMode(GameMode mode)
 	// ------------------------------------------------------------------------------------------------
 void GameLogic::startNewGame(Bool loadingSaveGame)
 {
+	LANObsLog("startNewGame entry: gameMode=%d m_startNewGame=%d savedGame=%d recorderMode=%d",
+		(int)m_gameMode, (int)m_startNewGame, (int)loadingSaveGame,
+		TheRecorder ? (int)TheRecorder->getMode() : -1);
 
 #ifdef DUMP_PERF_STATS
 	__int64 startTime64;
@@ -1402,6 +1406,9 @@ void GameLogic::startNewGame(Bool loadingSaveGame)
 		TheCampaignManager->SetVictorious(FALSE);
 	m_startNewGame = FALSE;
 
+	LANObsLog("startNewGame: past early-return; doing actual loading. mapName='%s'",
+		TheGlobalData ? TheGlobalData->m_mapName.str() : "(null)");
+
 	// update the loadscreen
 	if (m_loadScreen)
 		updateLoadProgress(LOAD_PROGRESS_POST_PARTICLE_INI_LOAD);
@@ -1412,11 +1419,16 @@ void GameLogic::startNewGame(Bool loadingSaveGame)
 	DEBUG_ASSERTCRASH(m_frameLegacy == 0, ("framecounter expected to be 0 here\n"));
 	DEBUG_ASSERTCRASH(m_frameLegacyLast == 0, ("framecounter expected to be 0 here\n"));
 #endif
+
+	LANObsLog("startNewGame: about to loadMapINI mapName='%s'",
+		TheGlobalData ? TheGlobalData->m_mapName.str() : "(null TheGlobalData)");
 	// before loading the map, load the map.ini file in the same directory.
 	loadMapINI(TheGlobalData->m_mapName);
 
+	LANObsLog("startNewGame: loadMapINI done; about to TheTerrainLogic->loadMap");
 	// load a map
 	TheTerrainLogic->loadMap(TheGlobalData->m_mapName, false);
+	LANObsLog("startNewGame: TheTerrainLogic->loadMap done");
 	// anytime the world's size changes, must reset the partition mgr
 	//ThePartitionManager->init();
 
@@ -1558,6 +1570,10 @@ void GameLogic::startNewGame(Bool loadingSaveGame)
 				case SLOT_EASY_AI: d.setInt(TheKey_skirmishDifficulty, DIFFICULTY_EASY); break;
 				case SLOT_MED_AI: d.setInt(TheKey_skirmishDifficulty, DIFFICULTY_NORMAL); break;
 				case SLOT_BRUTAL_AI: d.setInt(TheKey_skirmishDifficulty, DIFFICULTY_HARD); break;
+				case SLOT_TACTICAL_AI:
+					d.setInt(TheKey_skirmishDifficulty, DIFFICULTY_HARD);
+					d.setBool(TheKey_playerIsTacticalAI, true);
+					break;
 				default: break;	 // no setting.
 				}
 			}
@@ -1864,6 +1880,11 @@ void GameLogic::startNewGame(Bool loadingSaveGame)
 	updateLoadProgress(LOAD_PROGRESS_POST_PATHFINDER_NEW_MAP);
 
 	// reveal the map for the permanent observer
+	LANObsLog("startNewGame: observerPlayer=%p", observerPlayer);
+	if (!observerPlayer)
+	{
+		LANObsLog("startNewGame: NO ReplayObserver player found! crash incoming");
+	}
 	ThePartitionManager->revealMapForPlayerPermanently(observerPlayer->getPlayerIndex());
 	DEBUG_LOG(("Reveal shroud for %ls whose index is %d", observerPlayer->getPlayerDisplayName().str(), observerPlayer->getPlayerIndex()));
 
@@ -2371,12 +2392,34 @@ void GameLogic::startNewGame(Bool loadingSaveGame)
 			TheStatsCollector->reset();
 		}
 
+		// Stats export: kick off live-game collection for every client
+		// in a LAN or Internet multiplayer game (host and non-host alike).
+		// Because the engine is deterministic lockstep, every client
+		// computes identical game state and produces equivalent stats /
+		// replays; uploading from all of them gives the server N copies
+		// per match rather than a single host-sourced upload, which is
+		// the intent. Skirmish (vs. AI), replay viewing, single-player
+		// campaign, and the shell are still skipped: replays would
+		// duplicate the original game's stats, and skirmish/single-player
+		// aren't competitive matches. The headless-replay path is driven
+		// separately by ReplaySimulation, which calls Begin/Collect/Export
+		// itself; that path runs in GAME_REPLAY mode so this hook stays
+		// inactive.
+		if (TheGlobalData->m_exportStats
+			&& (m_gameMode == GAME_LAN || m_gameMode == GAME_INTERNET)
+			&& TheGameInfo != nullptr)
+		{
+			StatsExporterBeginRecording();
+		}
+
 		///		ShowControlBar(FALSE);
 
 				// explicitly set the Control bar to Observer Mode
 		if (m_gameMode == GAME_REPLAY)
 		{
+			LANObsLog("startNewGame: GAME_REPLAY changeLocalPlayer(observerPlayer=%p)", observerPlayer);
 			rts::changeLocalPlayer(observerPlayer);
+			LANObsLog("startNewGame: changeLocalPlayer done");
 
 			DEBUG_LOG(("Start of a replay game %ls, %d", localPlayer->getPlayerDisplayName().str(), localPlayer->getPlayerIndex()));
 		}
@@ -2708,7 +2751,15 @@ void GameLogic::processCommandList(CommandList* list)
 		logicMessageDispatcher(msg, NULL);
 	}
 
-	if (m_shouldValidateCRCs && !TheNetwork->sawCRCMismatch())
+	// Skip CRC validation while in resume-from-replay catchup. Each client
+	// races through its own deterministic .rep at its own pace (FF mode
+	// bypasses the network frame-data gate), so CRCs from different clients
+	// at the same wall-clock moment correspond to different logic frames
+	// and would always mismatch. Validation resumes naturally at handoff
+	// when the recorder mode returns to NONE.
+	const Bool inCatchup = (TheRecorder && TheRecorder->isResumeCatchupMode());
+
+	if (m_shouldValidateCRCs && !TheNetwork->sawCRCMismatch() && !inCatchup)
 	{
 		Bool sawCRCMismatch = FALSE;
 		Int numPlayers = 0;
@@ -3937,6 +3988,12 @@ void GameLogic::update()
 	{
 		TheStatsCollector->update();
 	}
+
+	// Stats export snapshot. Self-gates on exportingActive, so this is a
+	// cheap no-op unless StatsExporterBeginRecording was called in
+	// startNewGame (host of a live multiplayer/skirmish game) or by
+	// ReplaySimulation (headless replay).
+	StatsExporterCollectSnapshot();
 
 	// Update the Recorder
 	{

@@ -408,6 +408,17 @@ Int parseMapName(char *args[], int num)
 	return 1;
 }
 
+// Generic Zulu-side debug toggle. The launcher (ZuluLauncher) forwards its
+// own argv to the game exe verbatim, so passing -zulu_debug on either entry
+// point sets the same TheGlobalData->m_zuluDebug flag. See GlobalData.h
+// for the rationale; right now the only consumer is the lobby Discord
+// post helper, which uses it to drop the "2+ humans" gate to "1+ human".
+Int parseZuluDebug(char *args[], int num)
+{
+	TheWritableGlobalData->m_zuluDebug = TRUE;
+	return 1;
+}
+
 Int parseHeadless(char *args[], int num)
 {
 	TheWritableGlobalData->m_headless = TRUE;
@@ -426,7 +437,15 @@ Int parseHeadless(char *args[], int num)
 
 Int parseExportStats(char *args[], int num)
 {
+	// Stats export is on by default; this flag is kept for backward
+	// compatibility with the headless-replay invocation pattern.
 	TheWritableGlobalData->m_exportStats = TRUE;
+	return 1;
+}
+
+Int parseNoStats(char *args[], int num)
+{
+	TheWritableGlobalData->m_exportStats = FALSE;
 	return 1;
 }
 
@@ -435,6 +454,56 @@ Int parseStatsUrl(char *args[], int num)
 	if (num > 1)
 	{
 		TheWritableGlobalData->m_statsUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+Int parseReplayUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_replayUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+Int parseMapCheckUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_mapCheckUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+Int parseMapUploadUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_mapUploadUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+Int parseBalanceTeamsUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_balanceTeamsUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+Int parseMapSummaryUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_mapSummaryUrl = args[1];
 		return 2;
 	}
 	return 1;
@@ -666,14 +735,6 @@ Int parseParticleEdit(char *args[], int)
 	TheWritableGlobalData->m_particleEdit = TRUE;
 	TheWritableGlobalData->m_winCursors = TRUE;
 	TheWritableGlobalData->m_windowed = TRUE;
-
-	return 1;
-}
-
-
-Int parseBuildMapCache(char *args[], int)
-{
-	TheWritableGlobalData->m_buildMapCache = true;
 
 	return 1;
 }
@@ -1199,11 +1260,43 @@ static CommandLineParam paramsForStartup[] =
 	// If you do not call this, all replays will be simulated in sequence in the same process.
 	{ "-jobs", parseJobs },
 
-	// Export game stats as JSON alongside replay file.
+	// Export game stats as gzipped JSON alongside replay file. On by default
+	// for hosts of multiplayer/skirmish games and for headless replays.
 	{ "-exportStats", parseExportStats },
 
-	// URL to POST compressed stats JSON after export.
+	// Disable stats export entirely (no file, no upload).
+	{ "-noStats", parseNoStats },
+
+	// URL to POST gzipped stats JSON after export. Defaults to the project
+	// stats endpoint; pass an empty string ("") to skip upload.
 	{ "-statsUrl", parseStatsUrl },
+
+	// URL to POST the replay file after stats are uploaded. Defaults to
+	// the project replay endpoint; pass an empty string ("") to skip.
+	{ "-replayUrl", parseReplayUrl },
+
+	// URL to GET ?crc=<hex> to ask the server whether it already has the
+	// played map. Body "false" triggers a map upload to -mapUploadUrl.
+	// Pass an empty string ("") to skip the check (and the upload).
+	{ "-mapCheckUrl", parseMapCheckUrl },
+
+	// URL to POST the .map file when the check URL reports the server
+	// doesn't already have it. Pass an empty string ("") to skip the
+	// upload even if the check reports false.
+	{ "-mapUploadUrl", parseMapUploadUrl },
+
+	// URL the LAN-lobby Randomize button GETs to fetch a balanced team
+	// split (?players=<name>&players=<name>...). Pass an empty string ("")
+	// to disable the API call.
+	{ "-balanceTeamsUrl", parseBalanceTeamsUrl },
+
+	// URL the LAN-lobby Randomize button POSTs to fetch a map-history
+	// blurb (printed to lobby chat). Pass an empty string ("") to disable.
+	{ "-mapSummaryUrl", parseMapSummaryUrl },
+
+	// Generic Zulu debug flag. Forwarded by the launcher to the game exe
+	// as-is. See parseZuluDebug for the current consumers.
+	{ "-zulu_debug", parseZuluDebug },
 };
 
 // These Params are parsed during Engine Init before INI data is loaded
@@ -1335,7 +1428,6 @@ static CommandLineParam paramsForEngineInit[] =
 	{ "-noshroud", parseNoShroud },
 #endif
 	{ "-forceBenchmark", parseForceBenchmark },
-	{ "-buildmapcache", parseBuildMapCache },
 	{ "-noshadowvolumes", parseNoShadows },
 	{ "-nofx", parseNoFX },
 	{ "-ignoresync", parseSync },

@@ -50,6 +50,17 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
+# Pull ZULU_CLIENT_KEY from GCP Secret Manager when it isn't already set,
+# so cmake/zuluclientkey.cmake stops failing on machines that have gcloud
+# configured. Stays silent if gcloud is unavailable or the fetch fails;
+# the cmake step will then surface its existing error.
+if [[ -z "${ZULU_CLIENT_KEY:-}" ]] && command -v gcloud &>/dev/null; then
+	if fetched_key=$(gcloud secrets versions access latest --secret=zuluclientkey 2>/dev/null); then
+		export ZULU_CLIENT_KEY="$fetched_key"
+		echo "[zuluclientkey] fetched from GCP Secret Manager"
+	fi
+fi
+
 # Build Docker image (this takes a while the first time - downloads MSVC)
 echo "Building Docker image (first run downloads ~3GB of MSVC tools)..."
 docker build \
@@ -64,6 +75,11 @@ DOCKER_ARGS=(
 	-e "PRESET=$PRESET"
 	-e "FORCE_CMAKE=$FORCE_CMAKE"
 	-e "MAKE_TARGET=${MAKE_TARGET}"
+	-e "ZULU_CLIENT_KEY=${ZULU_CLIENT_KEY:-}"
+	-e "ZULU_DISCORD_WEBHOOK_URL=${ZULU_DISCORD_WEBHOOK_URL:-}"
+	-e "ZULU_VERSION_MAJOR=${ZULU_VERSION_MAJOR:-}"
+	-e "ZULU_VERSION_MINOR=${ZULU_VERSION_MINOR:-}"
+	-e "ZULU_VERSION_BUILDNUM=${ZULU_VERSION_BUILDNUM:-}"
 )
 
 if [ "$INTERACTIVE" = "true" ]; then

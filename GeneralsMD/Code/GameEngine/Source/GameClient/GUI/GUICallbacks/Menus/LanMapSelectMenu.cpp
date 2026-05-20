@@ -38,8 +38,11 @@
 #include "GameClient/Gadget.h"
 #include "GameClient/Shell.h"
 #include "GameClient/GameWindowManager.h"
+#include "GameClient/GadgetComboBox.h"
 #include "GameClient/GadgetListBox.h"
 #include "GameClient/GadgetRadioButton.h"
+#include "GameClient/GadgetTextEntry.h"
+#include "GameClient/GameText.h"
 #include "GameNetwork/LANAPICallbacks.h"
 #include "GameClient/MapUtil.h"
 #include "GameNetwork/GUIUtil.h"
@@ -50,11 +53,48 @@ static NameKeyType buttonBack = NAMEKEY_INVALID;
 static NameKeyType buttonOK = NAMEKEY_INVALID;
 static NameKeyType listboxMap = NAMEKEY_INVALID;
 static NameKeyType winMapPreviewID = NAMEKEY_INVALID;
+static NameKeyType textEntrySearchID = NAMEKEY_INVALID;
+static NameKeyType comboBoxFilterPlayersID = NAMEKEY_INVALID;
 static GameWindow *parent = nullptr;
 static GameWindow *mapList = nullptr;
 static GameWindow *winMapPreview = nullptr;
-static NameKeyType radioButtonSystemMapsID = NAMEKEY_INVALID;
-static NameKeyType radioButtonUserMapsID = NAMEKEY_INVALID;
+static GameWindow *textEntrySearch = nullptr;
+static GameWindow *comboBoxFilterPlayers = nullptr;
+
+// Player-count dropdown: index 0 is "Any" (filter value 0), entries 1..7 are
+// 2..8 players. Stored on each combo entry via SetItemData so the selection
+// callback reads the filter value back without parsing display text.
+static const Int FILTER_PLAYER_COUNT_MIN = 2;
+static const Int FILTER_PLAYER_COUNT_MAX = 8;
+
+static Int getCurrentPlayerCountFilter()
+{
+	if (!comboBoxFilterPlayers)
+		return 0;
+	Int selIndex = -1;
+	GadgetComboBoxGetSelectedPos(comboBoxFilterPlayers, &selIndex);
+	if (selIndex < 0)
+		return 0;
+	return (Int)GadgetComboBoxGetItemData(comboBoxFilterPlayers, selIndex);
+}
+
+static UnicodeString getCurrentNameFilter()
+{
+	if (!textEntrySearch)
+		return UnicodeString::TheEmptyString;
+	return GadgetTextEntryGetText(textEntrySearch);
+}
+
+static void repopulateMapList()
+{
+	if (!mapList)
+		return;
+	if (TheMapCache)
+		TheMapCache->updateCache();
+	populateMapListboxFiltered( mapList, TRUE, getCurrentNameFilter(),
+	                            getCurrentPlayerCountFilter(),
+	                            TheLAN->GetMyGame()->getMap() );
+}
 
 static GameWindow *buttonMapStartPosition[MAX_SLOTS] = {0};
 static NameKeyType buttonMapStartPositionID[MAX_SLOTS] = { NAMEKEY_INVALID,NAMEKEY_INVALID,
@@ -76,9 +116,22 @@ static const char *gadgetsToHide[] =
 	"StaticTextColor",
 	"TextEntryMapDisplay",
 	"ButtonSelectMap",
-	"ButtonStart",
 	"StaticTextMapPreview",
 
+	nullptr
+};
+
+// Bottom-row action buttons on the underlying LanGameOptions screen. They
+// stay visible while map-select is open (the panel doesn't cover them) but
+// must not be clickable. Greying them out — instead of hiding individually —
+// keeps the bottom row visually intact and gives uniform feedback that the
+// underlying screen is suspended.
+static const char *gadgetsToDisable[] =
+{
+	"ButtonStart",
+	"ButtonBack",
+	"ButtonRandomize",
+	"ButtonResumeFromReplay",
 	nullptr
 };
 static const char *perPlayerGadgetsToHide[] =
@@ -92,16 +145,23 @@ static const char *perPlayerGadgetsToHide[] =
 static void showLANGameOptionsUnderlyingGUIElements( Bool show )
 {
 	ShowUnderlyingGUIElements( show, layoutFilename, parentName, gadgetsToHide, perPlayerGadgetsToHide );
-	GameWindow *win	= TheWindowManager->winGetWindowFromId( nullptr, TheNameKeyGenerator->nameToKey("LanGameOptionsMenu.wnd:ButtonBack") );
-	if(win)
-		win->winEnable( show );
 
+	AsciiString gadgetName;
+	for (const char **name = gadgetsToDisable; *name; ++name)
+	{
+		gadgetName.format("%s:%s", layoutFilename, *name);
+		GameWindow *win = TheWindowManager->winGetWindowFromId( nullptr, TheNameKeyGenerator->nameToKey(gadgetName) );
+		if (win)
+			win->winEnable( show );
+	}
 }
 
 static void NullifyControls()
 {
 	parent = nullptr;
 	mapList = nullptr;
+	textEntrySearch = nullptr;
+	comboBoxFilterPlayers = nullptr;
 	if (winMapPreview)
 	{
 		winMapPreview->winSetUserData(nullptr);
@@ -126,30 +186,40 @@ void LanMapSelectMenuInit( WindowLayout *layout, void *userData )
 
 	TheWindowManager->winSetFocus( parent );
 
-	LANPreferences pref;
-	Bool usesSystemMapDir = pref.usesSystemMapDir();
-
-	const MapMetaData *mmd = TheMapCache->findMap(TheLAN->GetMyGame()->getMap());
-	if (mmd)
-	{
-		usesSystemMapDir = mmd->m_isOfficial;
-	}
-
-
 	buttonBack = TheNameKeyGenerator->nameToKey( "LanMapSelectMenu.wnd:ButtonBack" );
 	buttonOK = TheNameKeyGenerator->nameToKey( "LanMapSelectMenu.wnd:ButtonOK" );
 	listboxMap = TheNameKeyGenerator->nameToKey( "LanMapSelectMenu.wnd:ListboxMap" );
 	winMapPreviewID = TheNameKeyGenerator->nameToKey( "LanMapSelectMenu.wnd:WinMapPreview" );
+	textEntrySearchID = TheNameKeyGenerator->nameToKey( "LanMapSelectMenu.wnd:TextEntrySearch" );
+	comboBoxFilterPlayersID = TheNameKeyGenerator->nameToKey( "LanMapSelectMenu.wnd:ComboBoxFilterPlayers" );
 
-	radioButtonSystemMapsID = TheNameKeyGenerator->nameToKey( "LanMapSelectMenu.wnd:RadioButtonSystemMaps" );
-	radioButtonUserMapsID = TheNameKeyGenerator->nameToKey( "LanMapSelectMenu.wnd:RadioButtonUserMaps" );
-	GameWindow *radioButtonSystemMaps = TheWindowManager->winGetWindowFromId( parent, radioButtonSystemMapsID );
-	GameWindow *radioButtonUserMaps = TheWindowManager->winGetWindowFromId( parent, radioButtonUserMapsID );
 	winMapPreview = TheWindowManager->winGetWindowFromId(parent, winMapPreviewID);
-	if (usesSystemMapDir)
-		GadgetRadioSetSelection( radioButtonSystemMaps, FALSE );
-	else
-		GadgetRadioSetSelection( radioButtonUserMaps, FALSE );
+	textEntrySearch = TheWindowManager->winGetWindowFromId(parent, textEntrySearchID);
+	if (textEntrySearch)
+		GadgetTextEntrySetText(textEntrySearch, UnicodeString::TheEmptyString);
+
+	comboBoxFilterPlayers = TheWindowManager->winGetWindowFromId(parent, comboBoxFilterPlayersID);
+	if (comboBoxFilterPlayers)
+	{
+		GadgetComboBoxReset(comboBoxFilterPlayers);
+		const Color white = GameMakeColor(255, 255, 255, 255);
+
+		// Index 0: "Any" — filter value 0 disables the player-count check.
+		Int idx = GadgetComboBoxAddEntry(comboBoxFilterPlayers,
+			TheGameText->fetch("GUI:FilterPlayersAny"), white);
+		GadgetComboBoxSetItemData(comboBoxFilterPlayers, idx, (void *)0);
+
+		const UnicodeString fmt = TheGameText->fetch("GUI:FilterPlayersFmt");
+		Int n;
+		for (n = FILTER_PLAYER_COUNT_MIN; n <= FILTER_PLAYER_COUNT_MAX; ++n)
+		{
+			UnicodeString label;
+			label.format(fmt.str(), n);
+			idx = GadgetComboBoxAddEntry(comboBoxFilterPlayers, label, white);
+			GadgetComboBoxSetItemData(comboBoxFilterPlayers, idx, (void *)n);
+		}
+		GadgetComboBoxSetSelectedPos(comboBoxFilterPlayers, 0);
+	}
 
 	AsciiString tmpString;
 	for (Int i = 0; i < MAX_SLOTS; i++)
@@ -167,9 +237,7 @@ void LanMapSelectMenuInit( WindowLayout *layout, void *userData )
 	mapList = TheWindowManager->winGetWindowFromId( parent, mapListID );
 	if( mapList )
 	{
-		if (TheMapCache)
-			TheMapCache->updateCache();
-		populateMapListbox( mapList, usesSystemMapDir, TRUE, TheLAN->GetMyGame()->getMap() );
+		repopulateMapList();
 	}
 }
 
@@ -312,31 +380,37 @@ WindowMsgHandledType LanMapSelectMenuSystem( GameWindow *window, UnsignedInt msg
 				}
 				break;
 			}
+		// --------------------------------------------------------------------------------------------
+		case GEM_UPDATE_TEXT:
+		{
+			GameWindow *control = (GameWindow *)mData1;
+			if (control != nullptr && mapList != nullptr &&
+			    control->winGetWindowId() == (Int)textEntrySearchID)
+			{
+				repopulateMapList();
+			}
+			break;
+		}
+
+		// --------------------------------------------------------------------------------------------
+		case GCM_SELECTED:
+		{
+			GameWindow *control = (GameWindow *)mData1;
+			if (control != nullptr && mapList != nullptr &&
+			    control->winGetWindowId() == (Int)comboBoxFilterPlayersID)
+			{
+				repopulateMapList();
+			}
+			break;
+		}
+
 		//---------------------------------------------------------------------------------------------
 		case GBM_SELECTED:
 		{
 			GameWindow *control = (GameWindow *)mData1;
 			Int controlID = control->winGetWindowId();
 
-			if ( controlID == radioButtonSystemMapsID )
-			{
-				if (TheMapCache)
-					TheMapCache->updateCache();
-				populateMapListbox( mapList, TRUE, TRUE, TheLAN->GetMyGame()->getMap() );
-				LANPreferences pref;
-				pref["UseSystemMapDir"] = "yes";
-				pref.write();
-			}
-			else if ( controlID == radioButtonUserMapsID )
-			{
-				if (TheMapCache)
-					TheMapCache->updateCache();
-				populateMapListbox( mapList, FALSE, TRUE, TheLAN->GetMyGame()->getMap() );
-				LANPreferences pref;
-				pref["UseSystemMapDir"] = "no";
-				pref.write();
-			}
-			else if ( controlID == buttonBack )
+			if ( controlID == buttonBack )
 			{
 
 				if (mapSelectLayout)

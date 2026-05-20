@@ -614,6 +614,8 @@ void positionAdditionalImages( MapMetaData *mmd, GameWindow *mapWindow, Bool for
 {
 	TheSupplyAndTechImageLocations.m_supplyPosList.clear();
 	TheSupplyAndTechImageLocations.m_techPosList.clear();
+	TheSupplyAndTechImageLocations.m_cratePosList.clear();
+	TheSupplyAndTechImageLocations.m_derrickPosList.clear();
 
 	if( !mmd || !mapWindow || mapWindow->winIsHidden())
 		return;
@@ -665,6 +667,32 @@ void positionAdditionalImages( MapMetaData *mmd, GameWindow *mapWindow, Bool for
 		position = (it->y - mmd->m_extent.lo.y) / (mmd->m_extent.hi.y - mmd->m_extent.lo.y);
 		markerPos.y = ((1- position) * smallHeight) - SUPPLY_TECH_SIZE /2 + ul.y;// + winMapPos.y;
 		TheSupplyAndTechImageLocations.m_techPosList.push_front(markerPos);
+		it++;
+	}
+
+	it = mmd->m_cratePositions.begin();
+	while (it != mmd->m_cratePositions.end())
+	{
+		ICoord2D markerPos;
+		Real position;
+		position = (it->x - mmd->m_extent.lo.x) / (mmd->m_extent.hi.x - mmd->m_extent.lo.x);
+		markerPos.x = (position * smallWidth) - SUPPLY_TECH_SIZE / 2 + ul.x;
+		position = (it->y - mmd->m_extent.lo.y) / (mmd->m_extent.hi.y - mmd->m_extent.lo.y);
+		markerPos.y = ((1 - position) * smallHeight) - SUPPLY_TECH_SIZE / 2 + ul.y;
+		TheSupplyAndTechImageLocations.m_cratePosList.push_front(markerPos);
+		it++;
+	}
+
+	it = mmd->m_techDerrickPositions.begin();
+	while (it != mmd->m_techDerrickPositions.end())
+	{
+		ICoord2D markerPos;
+		Real position;
+		position = (it->x - mmd->m_extent.lo.x) / (mmd->m_extent.hi.x - mmd->m_extent.lo.x);
+		markerPos.x = (position * smallWidth) - SUPPLY_TECH_SIZE / 2 + ul.x;
+		position = (it->y - mmd->m_extent.lo.y) / (mmd->m_extent.hi.y - mmd->m_extent.lo.y);
+		markerPos.y = ((1 - position) * smallHeight) - SUPPLY_TECH_SIZE / 2 + ul.y;
+		TheSupplyAndTechImageLocations.m_derrickPosList.push_front(markerPos);
 		it++;
 	}
 
@@ -1125,6 +1153,8 @@ void InitSkirmishGameGadgets()
       GadgetComboBoxSetItemData(comboBoxPlayer[i], 3, (void *)SLOT_MED_AI);
 			GadgetComboBoxAddEntry(comboBoxPlayer[i],TheGameText->fetch("GUI:HardAI"),white);
       GadgetComboBoxSetItemData(comboBoxPlayer[i], 4, (void *)SLOT_BRUTAL_AI);
+			GadgetComboBoxAddEntry(comboBoxPlayer[i],TheGameText->fetch("GUI:TacticalAI"),white);
+			GadgetComboBoxSetItemData(comboBoxPlayer[i], 5, (void *)SLOT_TACTICAL_AI);
 			GadgetComboBoxSetSelectedPos(comboBoxPlayer[i],0);
 
 		}

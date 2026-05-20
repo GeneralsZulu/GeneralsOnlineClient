@@ -15,7 +15,6 @@ doxygen/
 *.o
 CMakeCache.txt
 CMakeFiles
-Makefile
 cmake_install.cmake
 install_manifest.txt
 compile_commands.json
@@ -66,3 +65,6 @@ build.ninja
 ## Python
 __pycache__/
 *.pyc
+
+compile_commands.json
+installer/Zulu_Setup.exe

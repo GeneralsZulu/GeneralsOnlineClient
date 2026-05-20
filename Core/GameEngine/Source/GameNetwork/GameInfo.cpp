@@ -194,7 +194,7 @@ void GameSlot::setMapAvailability( Bool hasMap )
 
 void GameSlot::setState( SlotState state, UnicodeString name, UnsignedInt IP )
 {
-	if (!(isAI() &&  (state == SLOT_EASY_AI || state == SLOT_MED_AI || state == SLOT_BRUTAL_AI)))
+	if (!(isAI() &&  (state == SLOT_EASY_AI || state == SLOT_MED_AI || state == SLOT_BRUTAL_AI || state == SLOT_TACTICAL_AI)))
 	{
 		m_color = -1;
 		m_startPos = -1;
@@ -231,6 +231,9 @@ void GameSlot::setState( SlotState state, UnicodeString name, UnsignedInt IP )
 		case SLOT_BRUTAL_AI:
 			m_name = TheGameText->fetch("GUI:HardAI");
 			break;
+		case SLOT_TACTICAL_AI:
+			m_name = TheGameText->fetch("GUI:TacticalAI");
+			break;
 		case SLOT_CLOSED:
 		default:
 			m_name = TheGameText->fetch("GUI:Closed");
@@ -249,12 +252,12 @@ Bool GameSlot::isHuman() const
 
 Bool GameSlot::isOccupied() const
 {
-	return m_state == SLOT_PLAYER || m_state == SLOT_EASY_AI || m_state == SLOT_MED_AI || m_state == SLOT_BRUTAL_AI;
+	return m_state == SLOT_PLAYER || m_state == SLOT_EASY_AI || m_state == SLOT_MED_AI || m_state == SLOT_BRUTAL_AI || m_state == SLOT_TACTICAL_AI;
 }
 
 Bool GameSlot::isAI() const
 {
-	return m_state == SLOT_EASY_AI || m_state == SLOT_MED_AI || m_state == SLOT_BRUTAL_AI;
+	return m_state == SLOT_EASY_AI || m_state == SLOT_MED_AI || m_state == SLOT_BRUTAL_AI || m_state == SLOT_TACTICAL_AI;
 }
 
 Bool GameSlot::isPlayer( AsciiString userName ) const
@@ -313,6 +316,8 @@ void GameInfo::reset()
 	m_mapSize = 0;
   m_superweaponRestriction = 0;
   m_startingCash = TheGlobalData->m_defaultStartingCash;
+	m_resumeReplayFile.clear();
+	m_resumeHandoffFrame = 0;
 
 	for (Int i=0; i<MAX_SLOTS; ++i)
 	{
@@ -927,6 +932,15 @@ AsciiString GameInfoToAsciiString( const GameInfo *game )
 		game->getStartingCash().countMoney(), game->oldFactionsOnly() ? 'Y' : 'N' );
 #endif
 
+	// Resume-from-replay arming. Only emitted when armed so unarmed games
+	// still round-trip bit-identically through the serializer.
+	if (!game->getResumeReplayFile().isEmpty())
+	{
+		AsciiString resume;
+		resume.format("RF=%s;RHF=%u;", game->getResumeReplayFile().str(), game->getResumeHandoffFrame());
+		optionsString.concat(resume);
+	}
+
 	//add player info for each slot
 	optionsString.concat(slotListID);
 	optionsString.concat('=');
@@ -962,6 +976,8 @@ AsciiString GameInfoToAsciiString( const GameInfo *game )
 				c = 'E';
 			else if (slot->getState() == SLOT_MED_AI)
 				c = 'M';
+			else if (slot->getState() == SLOT_TACTICAL_AI)
+				c = 'T';
 			else
 				c = 'H';
 			str.format("C%c,%d,%d,%d,%d:", c,
@@ -1018,6 +1034,8 @@ Bool ParseAsciiStringToGameInfo(GameInfo *game, AsciiString options)
 	Int useStats = TRUE;
   Money startingCash = TheGlobalData->m_defaultStartingCash;
   UnsignedShort restriction = 0; // Always the default
+	AsciiString resumeReplayFile;
+	UnsignedInt resumeHandoffFrame = 0;
 
 	Bool sawMap = FALSE;
 	Bool sawMapCRC = FALSE;
@@ -1114,6 +1132,14 @@ Bool ParseAsciiStringToGameInfo(GameInfo *game, AsciiString options)
 			seed = atoi(val.str());
 			sawSeed = true;
 //			DEBUG_LOG(("ParseAsciiStringToGameInfo - random seed is %d", seed));
+		}
+		else if (key.compare("RF") == 0)
+		{
+			resumeReplayFile = val;
+		}
+		else if (key.compare("RHF") == 0)
+		{
+			resumeHandoffFrame = (UnsignedInt)strtoul(val.str(), nullptr, 10);
 		}
 		else if (key.compare("C") == 0)
 		{
@@ -1349,6 +1375,12 @@ Bool ParseAsciiStringToGameInfo(GameInfo *game, AsciiString options)
 									//DEBUG_LOG(("ParseAsciiStringToGameInfo - Brutal AI"));
 								}
 								break;
+								case 'T':
+								{
+									newSlot[i].setState(SLOT_TACTICAL_AI);
+									//DEBUG_LOG(("ParseAsciiStringToGameInfo - Tactical AI"));
+								}
+								break;
 								default:
 								{
 									optionsOk = false;
@@ -1505,6 +1537,8 @@ Bool ParseAsciiStringToGameInfo(GameInfo *game, AsciiString options)
 		game->setSuperweaponRestriction(restriction);
 		game->setStartingCash(startingCash);
 		game->setOldFactionsOnly(oldFactionsOnly);
+		game->setResumeReplayFile(resumeReplayFile);
+		game->setResumeHandoffFrame(resumeHandoffFrame);
 
 		return true;
 	}

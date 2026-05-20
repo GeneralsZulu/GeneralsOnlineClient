@@ -50,6 +50,8 @@ class TechAndSupplyImages
 public:
 	ICoord2DList m_techPosList;
 	ICoord2DList m_supplyPosList;
+	ICoord2DList m_cratePosList;     ///< KINDOF_CRATE positions, drawn with the Zulu crate icon
+	ICoord2DList m_derrickPosList;   ///< Tech derricks, drawn with the Zulu derrick icon
 };
 
 struct WinTimeStamp
@@ -85,8 +87,10 @@ public:
 	WinTimeStamp m_timestamp;
 
 	WaypointMap m_waypoints;
-	Coord3DList m_supplyPositions;
-	Coord3DList m_techPositions;
+	Coord3DList m_supplyPositions;       ///< Supply docks (KINDOF_SUPPLY_SOURCE_ON_PREVIEW without KINDOF_CRATE)
+	Coord3DList m_techPositions;         ///< Generic tech buildings (not derricks)
+	Coord3DList m_cratePositions;        ///< KINDOF_CRATE objects
+	Coord3DList m_techDerrickPositions;  ///< Tech buildings whose template name contains "Derrick"
 	AsciiString m_fileName;
 };
 
@@ -124,6 +128,7 @@ private:
 	void writeCacheINI(const AsciiString &mapDir);
 
 	static const char *const m_mapCacheName;
+	static const char *const m_zuluMapCacheName;
 
 	MapNameSet m_allowedMaps;
 	Bool m_doCreateStandardMapCacheINI;
@@ -139,6 +144,13 @@ extern TechAndSupplyImages TheSupplyAndTechImageLocations;
 
 Int populateMapListbox( GameWindow *listbox, Bool useSystemMaps, Bool isMultiplayer, AsciiString mapToSelect = AsciiString::TheEmptyString );		/// Read a list of maps from the run directory and fill in the listbox.  Return the selected index
 Int populateMapListboxNoReset( GameWindow *listbox, Bool useSystemMaps, Bool isMultiplayer, AsciiString mapToSelect = AsciiString::TheEmptyString );		/// Read a list of maps from the run directory and fill in the listbox.  Return the selected index
+
+// Fills the listbox with every map (system and user dirs combined) whose
+// display name contains nameFilter as a case-insensitive substring AND whose
+// supported player count equals playerCountFilter. An empty nameFilter
+// matches every name; a playerCountFilter <= 0 matches every player count.
+// Used by the LAN map-select search box and player-count dropdown.
+Int populateMapListboxFiltered( GameWindow *listbox, Bool isMultiplayer, const UnicodeString& nameFilter, Int playerCountFilter = 0, AsciiString mapToSelect = AsciiString::TheEmptyString );
 Bool isValidMap( AsciiString mapName, Bool isMultiplayer );						/// Validate a map
 Image *getMapPreviewImage( AsciiString mapName );
 AsciiString getDefaultMap( Bool isMultiplayer );											/// Find a valid map

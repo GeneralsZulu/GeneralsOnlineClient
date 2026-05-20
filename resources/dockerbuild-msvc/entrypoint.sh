@@ -11,7 +11,7 @@ wineboot --init 2>/dev/null || true
 
 # MSVC paths - replicate what msvcenv.sh sets
 BASE="Z:\\build\\tools\\msvc"
-MSVCVER="14.50.35717"
+MSVCVER="14.51.36231"
 SDKVER="10.0.26100.0"
 ARCH="x86"
 
@@ -47,6 +47,17 @@ RC_COMPILER="Z:/build/tools/msvc/WindowsKits/10/bin/${SDKVER}/x64/rc.exe"
 RC_INCLUDE="Z:/build/tools/msvc/WindowsKits/10/Include/${SDKVER}"
 RC_FLAGS="-I \"${RC_INCLUDE}/um\" -I \"${RC_INCLUDE}/shared\""
 
+ZULU_VERSION_FLAGS=()
+if [ -n "${ZULU_VERSION_MAJOR:-}" ]; then
+	ZULU_VERSION_FLAGS+=("-DZULU_VERSION_MAJOR=${ZULU_VERSION_MAJOR}")
+fi
+if [ -n "${ZULU_VERSION_MINOR:-}" ]; then
+	ZULU_VERSION_FLAGS+=("-DZULU_VERSION_MINOR=${ZULU_VERSION_MINOR}")
+fi
+if [ -n "${ZULU_VERSION_BUILDNUM:-}" ]; then
+	ZULU_VERSION_FLAGS+=("-DZULU_VERSION_BUILDNUM=${ZULU_VERSION_BUILDNUM}")
+fi
+
 # Configure if needed
 if [ "${FORCE_CMAKE:-}" = "true" ] || [ ! -f "${BUILD_DIR}/build.ninja" ]; then
 	rm -f "${BUILD_DIR}/CMakeCache.txt"
@@ -80,6 +91,8 @@ if [ "${FORCE_CMAKE:-}" = "true" ] || [ ! -f "${BUILD_DIR}/build.ninja" ]; then
 		-DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY \
 		-DCMAKE_RC_COMPILER="${RC_COMPILER}" \
 		-DCMAKE_RC_FLAGS="${RC_FLAGS}" \
+		-DZULU_CLIENT_KEY="${ZULU_CLIENT_KEY:-}" \
+		"${ZULU_VERSION_FLAGS[@]}" \
 		-B "${BUILD_DIR}"
 fi
 

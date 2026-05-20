@@ -34,6 +34,19 @@ void StatsExporterCollectSnapshot();
 /// Begin recording stats for a new replay. Activates recording and resets all stored data.
 void StatsExporterBeginRecording();
 
+/// Returns true between StatsExporterBeginRecording() and ExportGameStatsJSON().
+/// Used by Recorder::stopRecording to decide whether to do the replay upload
+/// (we only upload if we were collecting for this game — i.e., host of a
+/// multiplayer/skirmish match).
+bool StatsExporterIsActive();
+
+/// Returns true if the current game has at least two human game-players.
+/// Used by Recorder::stopRecording and ExportGameStatsJSON to gate the
+/// end-of-game telemetry uploads (cncstats stats, radarvan replay, radarvan
+/// map) so we don't ship data for solo skirmishes, campaign missions, or
+/// replay-watch sessions where humans-vs-humans isn't actually happening.
+bool StatsExporterHasMinHumansForUpload();
+
 /// Record a kill event with full context (called from Object::scoreTheKill).
 void StatsExporterRecordKill(const Object *killer, const Object *victim, const DamageInfo *damageInfo);
 

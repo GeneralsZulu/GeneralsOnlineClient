@@ -127,6 +127,27 @@ public:
 	// URL to POST compressed stats JSON after export.
 	AsciiString m_statsUrl;
 
+	// URL to POST the replay file after stats are uploaded.
+	AsciiString m_replayUrl;
+
+	// URL to GET ?crc=<hex> to check whether the server already has the
+	// map that was just played. Body "false" triggers a map upload.
+	AsciiString m_mapCheckUrl;
+
+	// URL to POST the map file when the check URL reports the server
+	// doesn't already have it.
+	AsciiString m_mapUploadUrl;
+
+	// URL to GET ?players=<name>&players=<name>... to fetch a balanced team
+	// split for the LAN lobby (used by the Randomize button when no teams
+	// are pre-set). Empty string disables the API call.
+	AsciiString m_balanceTeamsUrl;
+
+	// URL to POST a JSON map_name + players[{name, general}] body to fetch
+	// a human-readable map-history blurb that's printed to the lobby chat
+	// after the Randomize button runs. Empty string disables the call.
+	AsciiString m_mapSummaryUrl;
+
 	Bool m_windowed;
 	Int m_xResolution;
 	Int m_yResolution;
@@ -571,6 +592,25 @@ public:
 	Bool				m_breakTheMovie;								///< The user has hit escape!
 	AsciiString m_modDir;
 	AsciiString m_modBIG;
+
+	// Zulu-side debug toggle, flipped on by passing -zulu_debug on the
+	// command line (the launcher forwards its own argv to the game exe
+	// verbatim, so this works whether you launch the exe directly or
+	// via ZuluLauncher.exe). Currently only used to relax the lobby
+	// Discord-post gate from "2+ humans" down to "1+ human" so a host
+	// can iterate the rendering with just themselves in the lobby. The
+	// flag is intentionally a generic catch-all so we can hang future
+	// debug-only behavior off the same lever without churning more
+	// command-line surface.
+	//
+	// Placed at the end of the public block so adding it does NOT shift
+	// the offsets of any preceding members. The VC6+ninja PCH dependency
+	// tracking is unreliable when GlobalData.h changes, and inserting a
+	// field mid-struct corrupts m_windowed in any TU that doesn't get
+	// recompiled (manifests as random windowed/fullscreen flips). Keep
+	// future Zulu fields here for the same reason; if you must reorder,
+	// run a clean rebuild.
+	Bool m_zuluDebug;
 
 	//-allAdvice feature
 	//Bool m_allAdvice;

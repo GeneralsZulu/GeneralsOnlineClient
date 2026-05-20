@@ -26,6 +26,7 @@
 #include "Common/Energy.h"
 #include "Common/ThingTemplate.h"
 #include "Common/RandomValue.h"
+#include "Common/AcademyStats.h"
 #include "GameLogic/Damage.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Object.h"
@@ -33,38 +34,73 @@
 #include "GameLogic/Module/BattlePlanUpdate.h"
 
 #include <stdio.h>
+#include <string.h>
+#include <vector>
 #include <zlib.h>
 
-#include "GameNetwork/GeneralsOnline/json.hpp"
-
-using ordered_json = nlohmann::ordered_json;
-
+//-----------------------------------------------------------------------------
+// vc6-friendly JSON helpers: stream JSON directly to a gzFile via the zlib
+// gz* C API (gzopen / gzwrite / gzprintf / gzputs / gzputc / gzclose), all
+// of which are present in the bundled zlib 1.1.4 and compile cleanly with
+// VC6. No memory buffer; no nlohmann::json.
 //-----------------------------------------------------------------------------
 
-static std::string wideToString(const WideChar *s)
+static void gzPrintJsonStr(gzFile f, const char *s)
 {
-	std::string result;
-	if (s == nullptr) return result;
-	for (; *s != L'\0'; ++s)
+	gzputc(f, '"');
+	if (s != nullptr)
 	{
-		unsigned int c = static_cast<unsigned int>(*s);
-		if (c < 0x80)
+		for (; *s != '\0'; ++s)
 		{
-			result += static_cast<char>(c);
-		}
-		else if (c < 0x800)
-		{
-			result += static_cast<char>(0xC0 | (c >> 6));
-			result += static_cast<char>(0x80 | (c & 0x3F));
-		}
-		else
-		{
-			result += static_cast<char>(0xE0 | (c >> 12));
-			result += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
-			result += static_cast<char>(0x80 | (c & 0x3F));
+			switch (*s)
+			{
+				case '"':  gzputs(f, "\\\""); break;
+				case '\\': gzputs(f, "\\\\"); break;
+				case '\n': gzputs(f, "\\n"); break;
+				case '\r': gzputs(f, "\\r"); break;
+				case '\t': gzputs(f, "\\t"); break;
+				default:
+					if (static_cast<unsigned char>(*s) < 0x20)
+						gzprintf(f, "\\u%04x", static_cast<unsigned int>(static_cast<unsigned char>(*s)));
+					else
+						gzputc(f, *s);
+					break;
+			}
 		}
 	}
-	return result;
+	gzputc(f, '"');
+}
+
+// Write a wide string as a JSON string, encoding non-ASCII as UTF-8.
+static void gzPrintJsonWideStr(gzFile f, const WideChar *s)
+{
+	gzputc(f, '"');
+	if (s != nullptr)
+	{
+		for (; *s != L'\0'; ++s)
+		{
+			unsigned int c = static_cast<unsigned int>(*s);
+			if (c == '"')       gzputs(f, "\\\"");
+			else if (c == '\\') gzputs(f, "\\\\");
+			else if (c == '\n') gzputs(f, "\\n");
+			else if (c == '\r') gzputs(f, "\\r");
+			else if (c == '\t') gzputs(f, "\\t");
+			else if (c < 0x20)  gzprintf(f, "\\u%04x", c);
+			else if (c < 0x80)  gzputc(f, static_cast<char>(c));
+			else if (c < 0x800)
+			{
+				gzputc(f, static_cast<char>(0xC0 | (c >> 6)));
+				gzputc(f, static_cast<char>(0x80 | (c & 0x3F)));
+			}
+			else
+			{
+				gzputc(f, static_cast<char>(0xE0 | (c >> 12)));
+				gzputc(f, static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
+				gzputc(f, static_cast<char>(0x80 | (c & 0x3F)));
+			}
+		}
+	}
+	gzputc(f, '"');
 }
 
 //-----------------------------------------------------------------------------
@@ -96,6 +132,25 @@ static Bool isGamePlayer(Player *player)
 	if (strcmp(name, "FactionObserver") == 0) return FALSE;
 	if (strcmp(name, "FactionCivilian") == 0) return FALSE;
 	return TRUE;
+}
+
+bool StatsExporterHasMinHumansForUpload()
+{
+	if (ThePlayerList == nullptr)
+		return false;
+
+	Int humans = 0;
+	const Int totalPlayers = ThePlayerList->getPlayerCount();
+	Int i;
+	for (i = 0; i < totalPlayers; ++i)
+	{
+		Player *player = ThePlayerList->getNthPlayer(i);
+		if (player == nullptr || !isGamePlayer(player))
+			continue;
+		if (player->getPlayerType() == PLAYER_HUMAN)
+			++humans;
+	}
+	return humans >= 2;
 }
 
 //-----------------------------------------------------------------------------
@@ -262,6 +317,8 @@ static void initPlayerMapping()
 
 void StatsExporterCollectSnapshot()
 {
+	if (!s_state.exportingActive)
+		return;
 	if (ThePlayerList == nullptr || TheGameLogic == nullptr)
 		return;
 
@@ -413,6 +470,11 @@ void StatsExporterBeginRecording()
 	s_state.resetData();
 }
 
+bool StatsExporterIsActive()
+{
+	return s_state.exportingActive ? true : false;
+}
+
 //-----------------------------------------------------------------------------
 
 void StatsExporterRecordKill(const Object *killer, const Object *victim, const DamageInfo *damageInfo)
@@ -524,192 +586,237 @@ void StatsExporterRecordCapture(const Object *captured, const Player *oldOwner, 
 }
 
 //-----------------------------------------------------------------------------
-
-static ordered_json buildCaptureEventsJson()
-{
-	ordered_json arr = ordered_json::array();
-	for (size_t i = 0; i < s_state.captureEvents.size(); ++i)
-	{
-		const CaptureEventData &ev = s_state.captureEvents[i];
-		arr.push_back(ordered_json{
-			{"frame", ev.frame},
-			{"newOwner", remapPlayerIndex(ev.newOwnerPlayerIndex)},
-			{"oldOwner", remapPlayerIndex(ev.oldOwnerPlayerIndex)},
-			{"x", ev.x},
-			{"y", ev.y},
-			{"object", ev.templateName}
-		});
-	}
-	return arr;
-}
-
+// JSON emission. Compact (newline-separated) — no pretty indentation, since
+// the consumer is downstream tooling, not humans.
 //-----------------------------------------------------------------------------
 
-static ordered_json buildBuildEventsJson()
+static void writeKillEventsJson(gzFile f)
 {
-	ordered_json arr = ordered_json::array();
-	for (size_t i = 0; i < s_state.buildEvents.size(); ++i)
-	{
-		const BuildEventData &ev = s_state.buildEvents[i];
-		arr.push_back(ordered_json{
-			{"frame", ev.frame},
-			{"player", remapPlayerIndex(ev.playerIndex)},
-			{"x", ev.x},
-			{"y", ev.y},
-			{"cost", ev.cost},
-			{"buildTime", ev.buildTime},
-			{"object", ev.templateName},
-			{"producer", ev.producerTemplateName}
-		});
-	}
-	return arr;
-}
-
-//-----------------------------------------------------------------------------
-
-static ordered_json buildKillEventsJson()
-{
-	ordered_json arr = ordered_json::array();
+	gzputs(f, "[");
 	for (size_t i = 0; i < s_state.killEvents.size(); ++i)
 	{
 		const KillEventData &ev = s_state.killEvents[i];
-		arr.push_back(ordered_json{
-			{"frame", ev.frame},
-			{"killerPlayer", remapPlayerIndex(ev.killerPlayerIndex)},
-			{"victimPlayer", remapPlayerIndex(ev.victimPlayerIndex)},
-			{"x", ev.x},
-			{"y", ev.y},
-			{"killer", ev.killerTemplateName},
-			{"victim", ev.victimTemplateName},
-			{"damageType", ev.damageType}
-		});
+		if (i > 0) gzputc(f, ',');
+		gzprintf(f, "{\"frame\":%u,\"killerPlayer\":%d,\"victimPlayer\":%d,\"x\":%g,\"y\":%g,",
+			ev.frame, remapPlayerIndex(ev.killerPlayerIndex), remapPlayerIndex(ev.victimPlayerIndex),
+			ev.x, ev.y);
+		gzputs(f, "\"killer\":");   gzPrintJsonStr(f, ev.killerTemplateName);
+		gzputs(f, ",\"victim\":");  gzPrintJsonStr(f, ev.victimTemplateName);
+		gzputs(f, ",\"damageType\":"); gzPrintJsonStr(f, ev.damageType);
+		gzputc(f, '}');
 	}
-	return arr;
+	gzputc(f, ']');
 }
 
-//-----------------------------------------------------------------------------
+static void writeBuildEventsJson(gzFile f)
+{
+	gzputs(f, "[");
+	for (size_t i = 0; i < s_state.buildEvents.size(); ++i)
+	{
+		const BuildEventData &ev = s_state.buildEvents[i];
+		if (i > 0) gzputc(f, ',');
+		gzprintf(f, "{\"frame\":%u,\"player\":%d,\"x\":%g,\"y\":%g,\"cost\":%d,\"buildTime\":%d,",
+			ev.frame, remapPlayerIndex(ev.playerIndex), ev.x, ev.y, ev.cost, ev.buildTime);
+		gzputs(f, "\"object\":");     gzPrintJsonStr(f, ev.templateName);
+		gzputs(f, ",\"producer\":");  gzPrintJsonStr(f, ev.producerTemplateName);
+		gzputc(f, '}');
+	}
+	gzputc(f, ']');
+}
 
-static void buildStateChangeEventsJson(ordered_json &root)
+static void writeCaptureEventsJson(gzFile f)
+{
+	gzputs(f, "[");
+	for (size_t i = 0; i < s_state.captureEvents.size(); ++i)
+	{
+		const CaptureEventData &ev = s_state.captureEvents[i];
+		if (i > 0) gzputc(f, ',');
+		gzprintf(f, "{\"frame\":%u,\"newOwner\":%d,\"oldOwner\":%d,\"x\":%g,\"y\":%g,",
+			ev.frame, remapPlayerIndex(ev.newOwnerPlayerIndex), remapPlayerIndex(ev.oldOwnerPlayerIndex),
+			ev.x, ev.y);
+		gzputs(f, "\"object\":"); gzPrintJsonStr(f, ev.templateName);
+		gzputc(f, '}');
+	}
+	gzputc(f, ']');
+}
+
+static void writeStateChangeEventsJson(gzFile f)
 {
 	size_t i;
 
-	ordered_json energyArr = ordered_json::array();
+	gzputs(f, ",\n\"energyEvents\":[");
 	for (i = 0; i < s_state.energyEvents.size(); ++i)
 	{
 		const EnergyEvent &ev = s_state.energyEvents[i];
-		energyArr.push_back(ordered_json{
-			{"frame", ev.frame}, {"player", remapPlayerIndex(ev.playerIndex)},
-			{"production", ev.production}, {"consumption", ev.consumption}
-		});
+		if (i > 0) gzputc(f, ',');
+		gzprintf(f, "{\"frame\":%u,\"player\":%d,\"production\":%d,\"consumption\":%d}",
+			ev.frame, remapPlayerIndex(ev.playerIndex), ev.production, ev.consumption);
 	}
-	root["energyEvents"] = energyArr;
+	gzputc(f, ']');
 
-	ordered_json rankArr = ordered_json::array();
+	gzputs(f, ",\n\"rankEvents\":[");
 	for (i = 0; i < s_state.rankEvents.size(); ++i)
 	{
 		const RankEvent &ev = s_state.rankEvents[i];
-		rankArr.push_back(ordered_json{
-			{"frame", ev.frame}, {"player", remapPlayerIndex(ev.playerIndex)},
-			{"rankLevel", ev.rankLevel}
-		});
+		if (i > 0) gzputc(f, ',');
+		gzprintf(f, "{\"frame\":%u,\"player\":%d,\"rankLevel\":%d}",
+			ev.frame, remapPlayerIndex(ev.playerIndex), ev.rankLevel);
 	}
-	root["rankEvents"] = rankArr;
+	gzputc(f, ']');
 
-	ordered_json skillArr = ordered_json::array();
+	gzputs(f, ",\n\"skillPointsEvents\":[");
 	for (i = 0; i < s_state.skillPointsEvents.size(); ++i)
 	{
 		const SkillPointsEvent &ev = s_state.skillPointsEvents[i];
-		skillArr.push_back(ordered_json{
-			{"frame", ev.frame}, {"player", remapPlayerIndex(ev.playerIndex)},
-			{"skillPoints", ev.skillPoints}
-		});
+		if (i > 0) gzputc(f, ',');
+		gzprintf(f, "{\"frame\":%u,\"player\":%d,\"skillPoints\":%d}",
+			ev.frame, remapPlayerIndex(ev.playerIndex), ev.skillPoints);
 	}
-	root["skillPointsEvents"] = skillArr;
+	gzputc(f, ']');
 
-	ordered_json scienceArr = ordered_json::array();
+	gzputs(f, ",\n\"sciencePointsEvents\":[");
 	for (i = 0; i < s_state.sciencePointsEvents.size(); ++i)
 	{
 		const SciencePointsEvent &ev = s_state.sciencePointsEvents[i];
-		scienceArr.push_back(ordered_json{
-			{"frame", ev.frame}, {"player", remapPlayerIndex(ev.playerIndex)},
-			{"sciencePurchasePoints", ev.sciencePurchasePoints}
-		});
+		if (i > 0) gzputc(f, ',');
+		gzprintf(f, "{\"frame\":%u,\"player\":%d,\"sciencePurchasePoints\":%d}",
+			ev.frame, remapPlayerIndex(ev.playerIndex), ev.sciencePurchasePoints);
 	}
-	root["sciencePointsEvents"] = scienceArr;
+	gzputc(f, ']');
 
-	ordered_json radarArr = ordered_json::array();
+	gzputs(f, ",\n\"radarEvents\":[");
 	for (i = 0; i < s_state.radarEvents.size(); ++i)
 	{
 		const RadarEvent &ev = s_state.radarEvents[i];
-		radarArr.push_back(ordered_json{
-			{"frame", ev.frame}, {"player", remapPlayerIndex(ev.playerIndex)},
-			{"hasRadar", static_cast<bool>(ev.hasRadar)}
-		});
+		if (i > 0) gzputc(f, ',');
+		gzprintf(f, "{\"frame\":%u,\"player\":%d,\"hasRadar\":%s}",
+			ev.frame, remapPlayerIndex(ev.playerIndex), ev.hasRadar ? "true" : "false");
 	}
-	root["radarEvents"] = radarArr;
+	gzputc(f, ']');
 
-	ordered_json deathArr = ordered_json::array();
+	gzputs(f, ",\n\"deathEvents\":[");
 	for (i = 0; i < s_state.deathEvents.size(); ++i)
 	{
 		const DeathEvent &ev = s_state.deathEvents[i];
-		deathArr.push_back(ordered_json{
-			{"frame", ev.frame}, {"player", remapPlayerIndex(ev.playerIndex)}
-		});
+		if (i > 0) gzputc(f, ',');
+		gzprintf(f, "{\"frame\":%u,\"player\":%d}",
+			ev.frame, remapPlayerIndex(ev.playerIndex));
 	}
-	root["deathEvents"] = deathArr;
+	gzputc(f, ']');
 
-	ordered_json bpArr = ordered_json::array();
+	gzputs(f, ",\n\"battlePlanEvents\":[");
 	for (i = 0; i < s_state.battlePlanEvents.size(); ++i)
 	{
 		const BattlePlanEvent &ev = s_state.battlePlanEvents[i];
-		bpArr.push_back(ordered_json{
-			{"frame", ev.frame}, {"player", remapPlayerIndex(ev.playerIndex)},
-			{"bombardment", ev.bombardment}, {"holdTheLine", ev.holdTheLine},
-			{"searchAndDestroy", ev.searchAndDestroy}
-		});
+		if (i > 0) gzputc(f, ',');
+		gzprintf(f, "{\"frame\":%u,\"player\":%d,\"bombardment\":%d,\"holdTheLine\":%d,\"searchAndDestroy\":%d}",
+			ev.frame, remapPlayerIndex(ev.playerIndex), ev.bombardment, ev.holdTheLine, ev.searchAndDestroy);
 	}
-	root["battlePlanEvents"] = bpArr;
+	gzputc(f, ']');
 }
 
-//-----------------------------------------------------------------------------
-
-static ordered_json buildTimeSeriesJson()
+static void writeTimeSeriesJson(gzFile f)
 {
-	ordered_json ts;
-	ordered_json playersArr = ordered_json::array();
-
+	// VC6 leaks for-loop variables into the enclosing scope, so declare
+	// the loop counter once and reuse it across the three snapshot loops.
+	size_t s;
+	gzputs(f, "{\"players\":[");
 	for (Int pi = 0; pi < s_state.gamePlayerCount; ++pi)
 	{
-		ordered_json p;
-		p["index"] = pi + 1;
-
-		ordered_json money = ordered_json::array();
-		ordered_json moneyEarned = ordered_json::array();
-		ordered_json moneySpent = ordered_json::array();
-
-		for (size_t s = 0; s < s_state.snapshots.size(); ++s)
+		if (pi > 0) gzputc(f, ',');
+		gzprintf(f, "{\"index\":%d,\"money\":[", pi + 1);
+		for (s = 0; s < s_state.snapshots.size(); ++s)
 		{
-			money.push_back(s_state.snapshots[s].players[pi].money);
-			moneyEarned.push_back(s_state.snapshots[s].players[pi].moneyEarned);
-			moneySpent.push_back(s_state.snapshots[s].players[pi].moneySpent);
+			if (s > 0) gzputc(f, ',');
+			gzprintf(f, "%u", s_state.snapshots[s].players[pi].money);
 		}
+		gzputs(f, "],\"moneyEarned\":[");
+		for (s = 0; s < s_state.snapshots.size(); ++s)
+		{
+			if (s > 0) gzputc(f, ',');
+			gzprintf(f, "%d", s_state.snapshots[s].players[pi].moneyEarned);
+		}
+		gzputs(f, "],\"moneySpent\":[");
+		for (s = 0; s < s_state.snapshots.size(); ++s)
+		{
+			if (s > 0) gzputc(f, ',');
+			gzprintf(f, "%d", s_state.snapshots[s].players[pi].moneySpent);
+		}
+		gzputs(f, "]}");
+	}
+	gzputs(f, "]}");
+}
 
-		p["money"] = money;
-		p["moneyEarned"] = moneyEarned;
-		p["moneySpent"] = moneySpent;
-		playersArr.push_back(p);
+static void writePlayerJson(gzFile f, Player *player, Int gameIndex)
+{
+	ScoreKeeper *sk = player->getScoreKeeper();
+	const PlayerTemplate *pt = player->getPlayerTemplate();
+	const AcademyStats *academy = player->getAcademyStats();
+
+	gzprintf(f, "{\"index\":%d,\"displayName\":", gameIndex);
+	gzPrintJsonWideStr(f, player->getPlayerDisplayName().str());
+
+	gzputs(f, ",\"faction\":");
+	gzPrintJsonStr(f, pt != nullptr ? pt->getName().str() : "");
+
+	gzputs(f, ",\"side\":");
+	gzPrintJsonStr(f, player->getSide().str());
+
+	gzputs(f, ",\"baseSide\":");
+	gzPrintJsonStr(f, player->getBaseSide().str());
+
+	gzputs(f, ",\"type\":");
+	gzPrintJsonStr(f, player->getPlayerType() == PLAYER_HUMAN ? "Human" : "Computer");
+
+	char colorBuf[8];
+	snprintf(colorBuf, sizeof(colorBuf), "#%06X", static_cast<unsigned int>(player->getPlayerColor()) & 0x00FFFFFFu);
+	colorBuf[sizeof(colorBuf) - 1] = '\0';
+	gzputs(f, ",\"color\":");
+	gzPrintJsonStr(f, colorBuf);
+
+	gzprintf(f, ",\"money\":%u,\"moneyEarned\":%d,\"moneySpent\":%d,\"score\":%d",
+		player->getMoney()->countMoney(),
+		sk->getTotalMoneyEarned(),
+		sk->getTotalMoneySpent(),
+		sk->calculateScore());
+
+	if (academy != nullptr)
+	{
+		gzprintf(f,
+			",\"academy\":{"
+			"\"supplyCentersBuilt\":%u,\"peonsBuilt\":%u,\"structuresCaptured\":%u,"
+			"\"generalsPointsSpent\":%u,\"specialPowersUsed\":%u,\"structuresGarrisoned\":%u,"
+			"\"upgradesPurchased\":%u,\"gatherersBuilt\":%u,\"heroesBuilt\":%u,"
+			"\"controlGroupsUsed\":%u,\"secondaryIncomeUnitsBuilt\":%u,\"clearedGarrisonedBuildings\":%u,"
+			"\"salvageCollected\":%u,\"guardAbilityUsedCount\":%u,\"doubleClickAttackMoveOrdersGiven\":%u,"
+			"\"minesCleared\":%u,\"vehiclesDisguised\":%u,\"firestormsCreated\":%u}",
+			academy->getSupplyCentersBuilt(), academy->getPeonsBuilt(), academy->getStructuresCaptured(),
+			academy->getGeneralsPointsSpent(), academy->getSpecialPowersUsed(), academy->getStructuresGarrisoned(),
+			academy->getUpgradesPurchased(), academy->getGatherersBuilt(), academy->getHeroesBuilt(),
+			academy->getControlGroupsUsed(), academy->getSecondaryIncomeUnitsBuilt(), academy->getClearedGarrisonedBuildings(),
+			academy->getSalvageCollected(), academy->getGuardAbilityUsedCount(), academy->getDoubleClickAttackMoveOrdersGiven(),
+			academy->getMinesCleared(), academy->getVehiclesDisguised(), academy->getFirestormsCreated());
 	}
 
-	ts["players"] = playersArr;
-	return ts;
+	gzputc(f, '}');
 }
 
 //-----------------------------------------------------------------------------
 
 void ExportGameStatsJSON(const AsciiString& replayDir, const AsciiString& replayFileName)
 {
-	if (ThePlayerList == nullptr || TheGameLogic == nullptr || TheGlobalData == nullptr)
+	// No-op if collection wasn't started for this game (e.g. non-host LAN
+	// peers, replay viewing). Lets callers like Recorder::stopRecording
+	// invoke this unconditionally.
+	if (!s_state.exportingActive)
 		return;
+
+	if (ThePlayerList == nullptr || TheGameLogic == nullptr || TheGlobalData == nullptr)
+	{
+		s_state.resetData();
+		s_state.exportingActive = FALSE;
+		return;
+	}
 
 	// Strip any directory components from the replay filename
 	const char *replayBase = replayFileName.str();
@@ -733,124 +840,82 @@ void ExportGameStatsJSON(const AsciiString& replayDir, const AsciiString& replay
 
 	const Int playerCount = ThePlayerList->getPlayerCount();
 
-	// Build JSON document
-	ordered_json root;
-	root["version"] = 1;
-
-	// Game info
-	root["game"] = ordered_json{
-		{"map", TheGlobalData->m_mapName.str()},
-		{"mode", gameModeToString(TheGameLogic->getGameMode())},
-		{"frameCount", TheGameLogic->getFrame()},
-		{"seed", GetGameLogicRandomSeed()},
-		{"replayFile", replayFileName.str()},
-		{"playerCount", s_state.gamePlayerCount},
-		{"snapshotInterval", 30}
-	};
-
-	// Players array
-	ordered_json playersArr = ordered_json::array();
-	Int i;
-	for (i = 0; i < playerCount; ++i)
-	{
-		Player *player = ThePlayerList->getNthPlayer(i);
-		if (player == nullptr || !isGamePlayer(player))
-			continue;
-
-		ScoreKeeper *sk = player->getScoreKeeper();
-		const PlayerTemplate *pt = player->getPlayerTemplate();
-		const AcademyStats *academy = player->getAcademyStats();
-
-		ordered_json p;
-		p["index"] = s_state.originalToNewIndex[i];
-		p["displayName"] = wideToString(player->getPlayerDisplayName().str());
-		if (pt != nullptr)
-			p["faction"] = pt->getName().str();
-		p["side"] = player->getSide().str();
-		p["baseSide"] = player->getBaseSide().str();
-		p["type"] = player->getPlayerType() == PLAYER_HUMAN ? "Human" : "Computer";
-
-		char colorBuf[8];
-		snprintf(colorBuf, sizeof(colorBuf), "#%06X", static_cast<unsigned int>(player->getPlayerColor()) & 0x00FFFFFFu);
-		p["color"] = colorBuf;
-
-		p["money"] = player->getMoney()->countMoney();
-		p["moneyEarned"] = sk->getTotalMoneyEarned();
-		p["moneySpent"] = sk->getTotalMoneySpent();
-		p["score"] = sk->calculateScore();
-
-		p["academy"] = ordered_json{
-			{"supplyCentersBuilt", academy->getSupplyCentersBuilt()},
-			{"peonsBuilt", academy->getPeonsBuilt()},
-			{"structuresCaptured", academy->getStructuresCaptured()},
-			{"generalsPointsSpent", academy->getGeneralsPointsSpent()},
-			{"specialPowersUsed", academy->getSpecialPowersUsed()},
-			{"structuresGarrisoned", academy->getStructuresGarrisoned()},
-			{"upgradesPurchased", academy->getUpgradesPurchased()},
-			{"gatherersBuilt", academy->getGatherersBuilt()},
-			{"heroesBuilt", academy->getHeroesBuilt()},
-			{"controlGroupsUsed", academy->getControlGroupsUsed()},
-			{"secondaryIncomeUnitsBuilt", academy->getSecondaryIncomeUnitsBuilt()},
-			{"clearedGarrisonedBuildings", academy->getClearedGarrisonedBuildings()},
-			{"salvageCollected", academy->getSalvageCollected()},
-			{"guardAbilityUsedCount", academy->getGuardAbilityUsedCount()},
-			{"doubleClickAttackMoveOrdersGiven", academy->getDoubleClickAttackMoveOrdersGiven()},
-			{"minesCleared", academy->getMinesCleared()},
-			{"vehiclesDisguised", academy->getVehiclesDisguised()},
-			{"firestormsCreated", academy->getFirestormsCreated()}
-		};
-
-		playersArr.push_back(p);
-	}
-	root["players"] = playersArr;
-
-	root["buildEvents"] = buildBuildEventsJson();
-	root["killEvents"] = buildKillEventsJson();
-	root["captureEvents"] = buildCaptureEventsJson();
-	buildStateChangeEventsJson(root);
-	root["timeSeries"] = buildTimeSeriesJson();
-
-	std::string jsonStr = root.dump(2);
-
-	// Write gzip-compressed output to file
-	printf("[stats] Writing %u bytes JSON to %s\n", static_cast<unsigned int>(jsonStr.size()), statsPath.str());
-	fflush(stdout);
-	gzFile gz = gzopen(statsPath.str(), "wb9");
-	if (gz != nullptr)
-	{
-		gzwrite(gz, jsonStr.data(), static_cast<unsigned int>(jsonStr.size()));
-		gzclose(gz);
-	}
-	else
+	gzFile f = gzopen(statsPath.str(), "wb9");
+	if (f == nullptr)
 	{
 		printf("[stats] ERROR: Failed to open %s for writing\n", statsPath.str());
 		fflush(stdout);
+		s_state.resetData();
+		s_state.exportingActive = FALSE;
+		return;
 	}
 
-	// Upload gzip file to server if URL configured
-	if (!TheGlobalData->m_statsUrl.isEmpty())
+	gzputs(f, "{\n\"version\":1,\n\"game\":{");
+	gzputs(f, "\"map\":");  gzPrintJsonStr(f, TheGlobalData->m_mapName.str());
+	gzputs(f, ",\"mode\":"); gzPrintJsonStr(f, gameModeToString(TheGameLogic->getGameMode()));
+	gzprintf(f, ",\"frameCount\":%u,\"seed\":%u,",
+		TheGameLogic->getFrame(), GetGameLogicRandomSeed());
+	gzputs(f, "\"replayFile\":"); gzPrintJsonStr(f, replayFileName.str());
+	gzprintf(f, ",\"playerCount\":%d,\"snapshotInterval\":30},\n",
+		s_state.gamePlayerCount);
+
+	// Players array
+	gzputs(f, "\"players\":[");
 	{
-		FILE *f = fopen(statsPath.str(), "rb");
-		if (f != nullptr)
+		Bool first = TRUE;
+		for (Int i = 0; i < playerCount; ++i)
 		{
-			fseek(f, 0, SEEK_END);
-			long fileSize = ftell(f);
-			fseek(f, 0, SEEK_SET);
-			if (fileSize > 0)
+			Player *player = ThePlayerList->getNthPlayer(i);
+			if (player == nullptr || !isGamePlayer(player))
+				continue;
+			if (!first)
+				gzputc(f, ',');
+			first = FALSE;
+			writePlayerJson(f, player, s_state.originalToNewIndex[i]);
+		}
+	}
+	gzputs(f, "],\n");
+
+	gzputs(f, "\"buildEvents\":"); writeBuildEventsJson(f);
+	gzputs(f, ",\n\"killEvents\":"); writeKillEventsJson(f);
+	gzputs(f, ",\n\"captureEvents\":"); writeCaptureEventsJson(f);
+	writeStateChangeEventsJson(f);
+	gzputs(f, ",\n\"timeSeries\":"); writeTimeSeriesJson(f);
+
+	gzputs(f, "\n}\n");
+
+	gzclose(f);
+
+	printf("[stats] Wrote gzipped JSON to %s\n", statsPath.str());
+	fflush(stdout);
+
+	// Upload gzipped file to server if URL configured. Skip uploads for
+	// games with fewer than two human players: solo skirmishes / campaign
+	// missions / replay watches don't represent humans-vs-humans data and
+	// would just pollute the cncstats dataset.
+	if (!TheGlobalData->m_statsUrl.isEmpty() && StatsExporterHasMinHumansForUpload())
+	{
+		FILE *rf = fopen(statsPath.str(), "rb");
+		if (rf != nullptr)
+		{
+			fseek(rf, 0, SEEK_END);
+			long size = ftell(rf);
+			fseek(rf, 0, SEEK_SET);
+			if (size > 0)
 			{
-				void *fileData = malloc(static_cast<size_t>(fileSize));
+				void *fileData = malloc(static_cast<size_t>(size));
 				if (fileData != nullptr)
 				{
-					if (fread(fileData, 1, static_cast<size_t>(fileSize), f) == static_cast<size_t>(fileSize))
+					if (fread(fileData, 1, static_cast<size_t>(size), rf) == static_cast<size_t>(size))
 					{
-						printf("[stats] Uploading %ld bytes to %s\n", fileSize, TheGlobalData->m_statsUrl.str());
+						printf("[stats] Uploading %ld bytes to %s\n", size, TheGlobalData->m_statsUrl.str());
 						fflush(stdout);
-						UploadStatsToServer(TheGlobalData->m_statsUrl, fileData, static_cast<unsigned int>(fileSize), GetGameLogicRandomSeed());
+						UploadStatsToServer(TheGlobalData->m_statsUrl, fileData, static_cast<unsigned int>(size), GetGameLogicRandomSeed());
 					}
 					free(fileData);
 				}
 			}
-			fclose(f);
+			fclose(rf);
 		}
 		else
 		{

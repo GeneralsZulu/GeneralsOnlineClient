@@ -33,6 +33,7 @@
 #include "Common/GlobalData.h"
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
+#include "Common/PlayerTemplate.h"
 #include "Common/Team.h"
 #include "Common/ThingFactory.h"
 #include "Common/BuildAssistant.h"
@@ -44,9 +45,11 @@
 #include "GameLogic/Object.h"
 #include "GameLogic/AISkirmishPlayer.h"
 #include "GameLogic/SidesList.h"
+#include "Common/Recorder.h"
 #include "GameLogic/AI.h"
 #include "GameLogic/AIPathfind.h"
 #include "GameLogic/TerrainLogic.h"
+#include "GameLogic/Weapon.h"
 #include "GameLogic/Module/AIUpdate.h"
 #include "GameLogic/Module/DozerAIUpdate.h"
 #include "GameLogic/Module/RebuildHoleBehavior.h"
@@ -55,6 +58,8 @@
 #include "GameLogic/ScriptEngine.h"
 #include "GameLogic/Module/ProductionUpdate.h"
 #include "GameClient/TerrainVisual.h"
+#include "GameClient/Drawable.h"
+#include "GameClient/InGameUI.h"
 
 
 #define USE_DOZER 1
@@ -75,9 +80,23 @@ m_curLeftFlankRightDefenseAngle(0),
 m_curRightFlankLeftDefenseAngle(0),
 m_curRightFlankRightDefenseAngle(0),
 m_frameToCheckEnemy(0),
-m_currentEnemy(nullptr)
+m_currentEnemy(nullptr),
+m_nextIdleSweepFrame(0),
+m_directiveBeaconID(INVALID_ID),
+m_nextDirectiveScanFrame(0),
+m_nextDirectiveAnnounceFrame(0),
+m_nextMilestoneCheckFrame(0),
+m_milestoneAnnouncedMask(0),
+m_synAnnounced(false),
+m_nextAttackAnnounceFrame(0),
+m_nextDistressSampleFrame(0),
+m_nextDistressAnnounceFrame(0),
+m_distressRingHead(0),
+m_distressRingFilled(0)
 
 {
+	Int i;
+	for (i = 0; i < 5; ++i) { m_distressHPRing[i] = 0.0f; m_distressCountRing[i] = 0; }
 	m_frameLastBuildingBuilt = TheGameLogic->getFrame();
 	p->setCanBuildUnits(true); // turn on ai production by default.
 }
@@ -107,6 +126,38 @@ void AISkirmishPlayer::processBaseBuilding()
 		BuildListInfo	*powerInfo = nullptr;
 		Bool isUnderPowered = !m_player->getEnergy()->hasSufficientPower();
 		Bool powerUnderConstruction = false;
+
+		// Tactical AI USA: scan ahead of the main loop for owned power plants.
+		// Two flags fall out of this:
+		//   1. taiUsaWantsFirstPower — true when no power plant is yet owned
+		//      (built or under construction). Used below to elevate the power
+		//      plant as the first base building, regardless of whether the
+		//      player currently reads as underpowered.
+		//   2. taiUsaPowerUnderConstruction — true when a power plant is
+		//      mid-build. Used in the main loop to skip later power plant
+		//      entries entirely so the AI doesn't dispatch a second dozer to
+		//      a parallel reactor (the existing post-loop powerUnderConstruction
+		//      guard only blocks the override, not the bldgPlan-via-iteration
+		//      path that fires when a later PP entry runs while bldgPlan is
+		//      still null).
+		Bool taiUsaWantsFirstPower = false;
+		Bool taiUsaPowerUnderConstruction = false;
+		if (isTacticalAI() && m_player->getBaseSide().compareNoCase("USA") == 0) {
+			Bool ownsAnyPower = false;
+			for (BuildListInfo *probe = m_player->getBuildList(); probe; probe = probe->getNext()) {
+				Object *existing = TheGameLogic->findObjectByID(probe->getObjectID());
+				if (!existing) continue;
+				if (existing->getControllingPlayer() != m_player) continue;
+				if (!existing->isKindOf(KINDOF_FS_POWER)) continue;
+				if (existing->isKindOf(KINDOF_CASH_GENERATOR)) continue;
+				ownsAnyPower = true;
+				if (existing->getStatusBits().test(OBJECT_STATUS_UNDER_CONSTRUCTION)) {
+					taiUsaPowerUnderConstruction = true;
+				}
+			}
+			taiUsaWantsFirstPower = !ownsAnyPower;
+		}
+
 		for( BuildListInfo *info = m_player->getBuildList(); info; info = info->getNext() )
 		{
 			AsciiString name = info->getTemplateName();
@@ -206,10 +257,17 @@ void AISkirmishPlayer::processBaseBuilding()
 			}
 			if (curPlan->isKindOf(KINDOF_FS_POWER)) {
 				if (powerPlan==nullptr && !curPlan->isKindOf(KINDOF_CASH_GENERATOR)) {
-					if (isUnderPowered || info->isAutomaticBuild()) {
+					if (isUnderPowered || info->isAutomaticBuild() || taiUsaWantsFirstPower) {
 						powerPlan = curPlan;
 						powerInfo = info;
 					}
+				}
+				// TAI USA: don't let a second power plant entry slip into bldgPlan
+				// via the bldgPlan==nullptr fallthrough below while one is already
+				// under construction; the post-loop force gate only protects the
+				// override path, not the line-257 first-buildable path.
+				if (taiUsaPowerUnderConstruction && !curPlan->isKindOf(KINDOF_CASH_GENERATOR)) {
+					continue;
 				}
 			}
 			if (!info->isAutomaticBuild()) {
@@ -354,11 +412,13 @@ Bool AISkirmishPlayer::isAGoodIdeaToBuildTeam( TeamPrototype *proto )
 	if (!proto->evaluateProductionCondition()) {
 		return false;
 	}
-	// check build limit
-	if (proto->countTeamInstances() >= proto->getTemplateInfo()->m_maxInstances){
+	// check build limit. Use the live-instance count so depleted teams whose
+	// only survivor is a lone straggler don't lock the prototype out of being
+	// rebuilt. Teams still under construction always count as occupying a slot.
+	if (proto->countTeamInstancesAlive() >= proto->getTemplateInfo()->m_maxInstances){
 		if (TheGlobalData->m_debugAI) {
 			AsciiString str;
-			str.format("Team %s not chosen - %d already exist.", proto->getName().str(), proto->countTeamInstances());
+			str.format("Team %s not chosen - %d already exist.", proto->getName().str(), proto->countTeamInstancesAlive());
 			TheScriptEngine->AppendDebugMessage(str, false);
 		}
 		return false;	// Max already built.
@@ -498,9 +558,10 @@ void AISkirmishPlayer::acquireEnemy()
 
 			Coord3D enemyPos = m_baseCenter;
 			Region2D bounds;
-			getPlayerStructureBounds(&bounds, i);
-			enemyPos.x = bounds.lo.x + bounds.width()/2;
-			enemyPos.y = bounds.lo.y + bounds.height()/2;
+			Coord2D meanPos;
+			getPlayerStructureBounds(&bounds, i, FALSE, &meanPos);
+			enemyPos.x = meanPos.x;
+			enemyPos.y = meanPos.y;
 			Real curDistSqr = sqr(enemyPos.x-m_baseCenter.x) + sqr(enemyPos.y-m_baseCenter.y);
 
 			//Fudge for in bad shape.	 If an enemy is crippled, concentrate on the other ones.
@@ -953,6 +1014,552 @@ void AISkirmishPlayer::doTeamBuilding()
 void AISkirmishPlayer::update()
 {
 	AIPlayer::update();
+	processBeaconDirective();
+	announceMilestones();
+	processDistressSignal();
+	commitIdleArmy();
+}
+
+//----------------------------------------------------------------------------------------------------------
+// Idle Army Commit: backstops the script-driven team flow. Skirmish maps
+// rely on .scb scripts to dispatch attack teams; once those scripts stop
+// firing (or when surviving units of dead teams remain on a still-existing
+// team blocking maxInstances), combat units pile up in the base. This sweep
+// gathers the surplus and group-attacks the current enemy.
+//----------------------------------------------------------------------------------------------------------
+void AISkirmishPlayer::commitIdleArmy()
+{
+	// Gated behind the SLOT_TACTICAL_AI lobby option; vanilla Easy/Medium/Brutal
+	// AIs keep their classic behavior unchanged.
+	if (!isTacticalAI()) return;
+
+	// During replay/resume-catchup of older recordings, the original AI did
+	// not run this sweep — issuing new commands here would diverge from the
+	// recorded simulation. The recorder gates each AI feature on the replay's
+	// declared feature version.
+	if (TheRecorder && !TheRecorder->isAIFeatureEnabled(RecorderClass::ZULU_AI_FEATURE_IDLE_COMMIT))
+		return;
+
+	const Int IDLE_SWEEP_INTERVAL_SECONDS = 10;
+	const Int MIN_GARRISON_UNITS = 4;
+	const Int MIN_ATTACK_FORCE = 5;
+
+	UnsignedInt curFrame = TheGameLogic->getFrame();
+	if (curFrame < m_nextIdleSweepFrame) return;
+	m_nextIdleSweepFrame = curFrame + IDLE_SWEEP_INTERVAL_SECONDS * LOGICFRAMES_PER_SECOND;
+
+	// When a directive beacon is active, the beacon location takes the place
+	// of the regular enemy-structure target — units still attack-move, so they
+	// engage anything on the way.
+	Object *directiveBeacon = (m_directiveBeaconID != INVALID_ID)
+		? TheGameLogic->findObjectByID(m_directiveBeaconID)
+		: nullptr;
+
+	Player *enemy = getAiEnemy();
+	if (!directiveBeacon) {
+		if (!enemy) return;
+		if (!enemy->hasAnyBuildFacility() && !enemy->hasAnyUnits()) return;
+	}
+
+	// Teams that are mid-build or sitting at the rally point waiting for activation
+	// must be left alone — their units are about to receive scripted orders.
+	std::set<const Team*> reservedTeams;
+	{
+		DLINK_ITERATOR<TeamInQueue> bIter = iterate_TeamBuildQueue();
+		for (; !bIter.done(); bIter.advance())
+		{
+			TeamInQueue *t = bIter.cur();
+			if (t && t->m_team) reservedTeams.insert(t->m_team);
+		}
+		DLINK_ITERATOR<TeamInQueue> rIter = iterate_TeamReadyQueue();
+		for (; !rIter.done(); rIter.advance())
+		{
+			TeamInQueue *t = rIter.cur();
+			if (t && t->m_team) reservedTeams.insert(t->m_team);
+		}
+	}
+
+	// Walk every team this player owns and collect idle combat-capable units.
+	// Iteration order is deterministic across clients (linked lists, stable insertion order).
+	std::vector<Object*> eligible;
+	Player::PlayerTeamList::const_iterator pti;
+	for (pti = m_player->getPlayerTeams()->begin(); pti != m_player->getPlayerTeams()->end(); ++pti)
+	{
+		DLINK_ITERATOR<Team> ti = (*pti)->iterate_TeamInstanceList();
+		for (; !ti.done(); ti.advance())
+		{
+			Team *team = ti.cur();
+			if (!team) continue;
+			if (reservedTeams.find(team) != reservedTeams.end()) continue;
+
+			DLINK_ITERATOR<Object> oi = team->iterate_TeamMemberList();
+			for (; !oi.done(); oi.advance())
+			{
+				Object *obj = oi.cur();
+				if (!obj) continue;
+				if (obj->isKindOf(KINDOF_STRUCTURE)) continue;
+				if (obj->isKindOf(KINDOF_DOZER)) continue;
+				if (obj->isKindOf(KINDOF_HARVESTER)) continue;
+				if (obj->isKindOf(KINDOF_AIRCRAFT)) continue;
+				if (obj->isKindOf(KINDOF_DRONE)) continue;
+				if (!obj->isKindOf(KINDOF_INFANTRY) && !obj->isKindOf(KINDOF_VEHICLE)) continue;
+				if (!obj->isAbleToAttack()) continue;
+				if (!obj->hasAnyWeapon()) continue;
+				if (obj->getStatusBits().test(OBJECT_STATUS_UNDER_CONSTRUCTION)) continue;
+				if (obj->getStatusBits().test(OBJECT_STATUS_SOLD)) continue;
+				AIUpdateInterface *ai = obj->getAIUpdateInterface();
+				if (!ai || !ai->isIdle()) continue;
+				eligible.push_back(obj);
+			}
+		}
+	}
+
+	Int total = (Int)eligible.size();
+	Int toSend = total - MIN_GARRISON_UNITS;
+	if (toSend < MIN_ATTACK_FORCE) return;
+
+	// Aim at the enemy structure closest to our base center. Real targets are
+	// always reachable terrain and always meaningful (vs. the bbox midpoint
+	// which can land in dead space between structure clusters). Per-unit
+	// auto-targeting still engages threats encountered along the way.
+	Coord3D target;
+	Object *closestStructure = nullptr;
+	if (directiveBeacon) {
+		target = *directiveBeacon->getPosition();
+	} else {
+		Real closestDistSqr = 0.0f;
+		Player::PlayerTeamList::const_iterator eti;
+		for (eti = enemy->getPlayerTeams()->begin(); eti != enemy->getPlayerTeams()->end(); ++eti)
+		{
+			DLINK_ITERATOR<Team> tIter = (*eti)->iterate_TeamInstanceList();
+			for (; !tIter.done(); tIter.advance())
+			{
+				Team *team = tIter.cur();
+				if (!team) continue;
+				DLINK_ITERATOR<Object> oIter = team->iterate_TeamMemberList();
+				for (; !oIter.done(); oIter.advance())
+				{
+					Object *o = oIter.cur();
+					if (!o) continue;
+					if (!o->isKindOf(KINDOF_STRUCTURE)) continue;
+					if (o->isEffectivelyDead()) continue;
+					Coord3D p = *o->getPosition();
+					Real d = sqr(p.x - m_baseCenter.x) + sqr(p.y - m_baseCenter.y);
+					if (!closestStructure || d < closestDistSqr)
+					{
+						closestStructure = o;
+						closestDistSqr = d;
+					}
+				}
+			}
+		}
+		if (!closestStructure) return; // enemy has no structures; let scripts/auto-target handle.
+		target = *closestStructure->getPosition();
+	}
+
+	AIGroupPtr theGroup = TheAI->createGroup();
+	if (!theGroup) return;
+
+	// First MIN_GARRISON_UNITS in iteration order stay home; the rest commit.
+	Int i;
+	for (i = MIN_GARRISON_UNITS; i < total; ++i)
+	{
+		theGroup->add(eligible[i]);
+	}
+
+	theGroup->groupAttackMoveToPosition(&target, NO_MAX_SHOTS_LIMIT, CMD_FROM_AI);
+
+	// Ally chatter: announce attack-commit dispatches against an enemy structure.
+	// Beacon-directive dispatches are already announced via processBeaconDirective().
+	if (!directiveBeacon && enemy)
+	{
+		announceAttackCommit(&target, enemy);
+	}
+
+	if (TheGlobalData->m_debugAI)
+	{
+		AsciiString msg;
+		if (directiveBeacon) {
+			msg.format("**AI** Idle army commit: sending %d units to ally beacon at (%.0f, %.0f)",
+				toSend, target.x, target.y);
+		} else {
+			msg.format("**AI** Idle army commit: sending %d units to attack %s structure '%s'",
+				toSend,
+				TheNameKeyGenerator->keyToName(enemy->getPlayerNameKey()).str(),
+				closestStructure->getTemplate()->getName().str());
+		}
+		TheScriptEngine->AppendDebugMessage(msg, false);
+	}
+}
+
+//----------------------------------------------------------------------------------------------------------
+// Beacon Directive: a TacticalAI follows the most recently placed ally beacon
+// whose caption begins with "!attack" (case-insensitive). The beacon is treated
+// as an attack target by commitIdleArmy(); when the beacon is removed or its
+// caption no longer carries the prefix, the AI reverts to its default target
+// selection. Once per game-minute the lowest-index TacticalAI on the beacon
+// owner's team prints a local on-screen message naming the beacon owner; the
+// message is shown only on ally clients. Because the announcement is generated
+// deterministically inside the simulation, every client (and replay viewer)
+// produces the same message at the same frame without any network chat.
+//----------------------------------------------------------------------------------------------------------
+void AISkirmishPlayer::processBeaconDirective()
+{
+	if (!isTacticalAI()) return;
+
+	const Int DIRECTIVE_SCAN_INTERVAL_SECONDS  = 1;
+	const Int DIRECTIVE_ANNOUNCE_INTERVAL_SECS = 60;
+	static const WideChar PREFIX[] = L"!attack";
+
+	UnsignedInt curFrame = TheGameLogic->getFrame();
+	if (curFrame < m_nextDirectiveScanFrame) return;
+	m_nextDirectiveScanFrame = curFrame + DIRECTIVE_SCAN_INTERVAL_SECONDS * LOGICFRAMES_PER_SECOND;
+
+	// Find the newest active directive beacon owned by an ally. Newest = highest
+	// ObjectID, which is monotonic and identical across clients, keeping the
+	// selection deterministic.
+	Object *bestBeacon = nullptr;
+	Player *beaconOwner = nullptr;
+	Int playerCount = ThePlayerList->getPlayerCount();
+	Int pi;
+	for (pi = 0; pi < playerCount; ++pi)
+	{
+		Player *ally = ThePlayerList->getNthPlayer(pi);
+		if (!ally || ally == m_player) continue;
+		if (!ally->isPlayerActive()) continue;
+		if (m_player->getRelationship(ally->getDefaultTeam()) != ALLIES) continue;
+		const PlayerTemplate *pt = ally->getPlayerTemplate();
+		if (!pt) continue;
+		const ThingTemplate *beaconTmpl = TheThingFactory->findTemplate(pt->getBeaconTemplate());
+		if (!beaconTmpl) continue;
+
+		Player::PlayerTeamList::const_iterator pti;
+		for (pti = ally->getPlayerTeams()->begin(); pti != ally->getPlayerTeams()->end(); ++pti)
+		{
+			DLINK_ITERATOR<Team> ti = (*pti)->iterate_TeamInstanceList();
+			for (; !ti.done(); ti.advance())
+			{
+				Team *team = ti.cur();
+				if (!team) continue;
+				DLINK_ITERATOR<Object> oi = team->iterate_TeamMemberList();
+				for (; !oi.done(); oi.advance())
+				{
+					Object *obj = oi.cur();
+					if (!obj) continue;
+					if (!obj->getTemplate()->isEquivalentTo(beaconTmpl)) continue;
+					Drawable *d = obj->getDrawable();
+					if (!d) continue;
+					UnicodeString cap = d->getCaptionText();
+					if (!cap.startsWithNoCase(PREFIX)) continue;
+					if (!bestBeacon || obj->getID() > bestBeacon->getID())
+					{
+						bestBeacon = obj;
+						beaconOwner = ally;
+					}
+				}
+			}
+		}
+	}
+
+	ObjectID newID = bestBeacon ? bestBeacon->getID() : INVALID_ID;
+	Bool switched = (newID != m_directiveBeaconID);
+	m_directiveBeaconID = newID;
+
+	if (newID == INVALID_ID)
+	{
+		// No active directive: drop announcement state so a future beacon
+		// re-announces immediately on switch.
+		m_nextDirectiveAnnounceFrame = 0;
+		return;
+	}
+
+	Bool dueAnnounce = switched || curFrame >= m_nextDirectiveAnnounceFrame;
+	if (!dueAnnounce) return;
+	m_nextDirectiveAnnounceFrame = curFrame + DIRECTIVE_ANNOUNCE_INTERVAL_SECS * LOGICFRAMES_PER_SECOND;
+
+	// Only the lowest-index TacticalAI ally of the beacon owner announces, so
+	// multiple TacticalAI players on the same team don't spam duplicates.
+	Int lowestAllyTacticalAIIndex = -1;
+	for (pi = 0; pi < playerCount; ++pi)
+	{
+		Player *p = ThePlayerList->getNthPlayer(pi);
+		if (!p || !p->isPlayerActive()) continue;
+		if (p != beaconOwner && beaconOwner->getRelationship(p->getDefaultTeam()) != ALLIES) continue;
+		if (!p->isTacticalAIPlayer()) continue;
+		lowestAllyTacticalAIIndex = pi;
+		break;
+	}
+	if (lowestAllyTacticalAIIndex != m_player->getPlayerIndex()) return;
+
+	// Display only on clients whose local player is allied to (or is) the beacon
+	// owner. The branch is purely cosmetic — sim state is identical everywhere.
+	Player *localPlayer = ThePlayerList->getLocalPlayer();
+	if (!localPlayer) return;
+	Bool ally = (localPlayer == beaconOwner)
+		|| (localPlayer->getRelationship(beaconOwner->getDefaultTeam()) == ALLIES);
+	if (!ally) return;
+
+	RGBColor rgb;
+	rgb.setFromInt(beaconOwner->getPlayerColor());
+	UnicodeString announcement;
+	announcement.format(L"%ls is following %ls's beacon",
+		m_player->getPlayerDisplayName().str(),
+		beaconOwner->getPlayerDisplayName().str());
+#if defined(GENERALS_ONLINE)
+	TheInGameUI->messageColor(false, &rgb, UnicodeString(L"%ls"), announcement.str());
+#else
+	TheInGameUI->messageColor(&rgb, announcement);
+#endif
+}
+
+//----------------------------------------------------------------------------------------------------------
+// Ally Communication helpers
+//
+// All TacticalAI announcements use TheInGameUI->messageColor() inside the
+// deterministic simulation tick. Each client renders the same string at the
+// same frame; replays show the same announcements; no chat/network traffic.
+// Ally-only display is a cosmetic local-player relationship check on the
+// rendering side. The Syn/Dan easter egg drops the ally check so every player
+// sees it.
+//----------------------------------------------------------------------------------------------------------
+
+namespace {
+
+// Map quadrant label for a world position. Used to give attack-commit and
+// distress messages directional context ("base under attack — northeast!").
+const WideChar *quadrantLabel(const Coord3D &pos)
+{
+	Region3D bounds;
+	TheTerrainLogic->getMaximumPathfindExtent(&bounds);
+	Real cx = bounds.lo.x + bounds.width()  * 0.5f;
+	Real cy = bounds.lo.y + bounds.height() * 0.5f;
+	Real dx = pos.x - cx;
+	Real dy = pos.y - cy;
+	Real edgeMargin = (bounds.width() < bounds.height() ? bounds.width() : bounds.height()) * 0.15f;
+	if (fabsf(dx) < edgeMargin && fabsf(dy) < edgeMargin) return L"center";
+	if (dy >= 0 && dx >= 0) return L"northeast";
+	if (dy >= 0 && dx <  0) return L"northwest";
+	if (dy <  0 && dx >= 0) return L"southeast";
+	return L"southwest";
+}
+
+// True if `me` is the lowest-index TacticalAI player on `team` (the team being
+// the relationship reference: typically the announcing AI's own default team).
+// Used to dedup shared announcements when multiple TacticalAIs sit on one team.
+Bool isLowestIndexTacticalAIOnTeam(const Player *me)
+{
+	Int playerCount = ThePlayerList->getPlayerCount();
+	Int pi;
+	for (pi = 0; pi < playerCount; ++pi)
+	{
+		Player *p = ThePlayerList->getNthPlayer(pi);
+		if (!p || !p->isPlayerActive()) continue;
+		if (p != me && me->getRelationship(p->getDefaultTeam()) != ALLIES) continue;
+		if (!p->isTacticalAIPlayer()) continue;
+		return p == me;
+	}
+	return false;
+}
+
+// Render an ally-only message: a local cosmetic gate on the rendering side.
+void renderAllyMessage(const Player *speaker, const UnicodeString &text)
+{
+	Player *localPlayer = ThePlayerList->getLocalPlayer();
+	if (!localPlayer) return;
+	Bool ally = (localPlayer == speaker)
+		|| (localPlayer->getRelationship(speaker->getDefaultTeam()) == ALLIES);
+	if (!ally) return;
+	RGBColor rgb;
+	rgb.setFromInt(speaker->getPlayerColor());
+#if defined(GENERALS_ONLINE)
+	TheInGameUI->messageColor(false, &rgb, UnicodeString(L"%ls"), text.str());
+#else
+	TheInGameUI->messageColor(&rgb, text);
+#endif
+}
+
+// Render a message visible to every player.
+void renderBroadcastMessage(const Player *speaker, const UnicodeString &text)
+{
+	if (!ThePlayerList->getLocalPlayer()) return;
+	RGBColor rgb;
+	rgb.setFromInt(speaker->getPlayerColor());
+#if defined(GENERALS_ONLINE)
+	TheInGameUI->messageColor(false, &rgb, UnicodeString(L"%ls"), text.str());
+#else
+	TheInGameUI->messageColor(&rgb, text);
+#endif
+}
+
+// Sum current HP and count of all of `p`'s living non-dozer non-harvester structures.
+void sampleStructures(const Player *p, Real *outHP, Int *outCount)
+{
+	Real hp = 0.0f;
+	Int count = 0;
+	Player::PlayerTeamList::const_iterator pti;
+	for (pti = p->getPlayerTeams()->begin(); pti != p->getPlayerTeams()->end(); ++pti)
+	{
+		DLINK_ITERATOR<Team> ti = (*pti)->iterate_TeamInstanceList();
+		for (; !ti.done(); ti.advance())
+		{
+			Team *team = ti.cur();
+			if (!team) continue;
+			DLINK_ITERATOR<Object> oi = team->iterate_TeamMemberList();
+			for (; !oi.done(); oi.advance())
+			{
+				Object *o = oi.cur();
+				if (!o) continue;
+				if (!o->isKindOf(KINDOF_STRUCTURE)) continue;
+				if (o->isEffectivelyDead()) continue;
+				BodyModuleInterface *body = o->getBodyModule();
+				if (!body) continue;
+				hp += body->getHealth();
+				++count;
+			}
+		}
+	}
+	*outHP = hp;
+	*outCount = count;
+}
+
+} // anonymous namespace
+
+//----------------------------------------------------------------------------------------------------------
+// Phase milestone announcements: at 5min ("MidGame") and 15min ("LateGame") of
+// game time, the lowest-index TacticalAI on each team posts a one-shot ally-
+// visible blurb. The 15min milestone also fires the Syn/Dan easter egg if this
+// AI's current target's display name is "Syn" — that one is broadcast to all.
+//----------------------------------------------------------------------------------------------------------
+void AISkirmishPlayer::announceMilestones()
+{
+	if (!isTacticalAI()) return;
+
+	const Int CHECK_INTERVAL_SECONDS = 1;
+	const UnsignedInt MIDGAME_FRAME  = 5  * 60 * LOGICFRAMES_PER_SECOND;
+	const UnsignedInt LATEGAME_FRAME = 15 * 60 * LOGICFRAMES_PER_SECOND;
+	const Int FLAG_MIDGAME  = 1 << 0;
+	const Int FLAG_LATEGAME = 1 << 1;
+
+	UnsignedInt curFrame = TheGameLogic->getFrame();
+	if (curFrame < m_nextMilestoneCheckFrame) return;
+	m_nextMilestoneCheckFrame = curFrame + CHECK_INTERVAL_SECONDS * LOGICFRAMES_PER_SECOND;
+
+	if (curFrame >= MIDGAME_FRAME && !(m_milestoneAnnouncedMask & FLAG_MIDGAME))
+	{
+		m_milestoneAnnouncedMask |= FLAG_MIDGAME;
+		if (isLowestIndexTacticalAIOnTeam(m_player))
+		{
+			UnicodeString msg;
+			msg.format(L"%ls: massing forces for the mid-game push.",
+				m_player->getPlayerDisplayName().str());
+			renderAllyMessage(m_player, msg);
+		}
+	}
+
+	if (curFrame >= LATEGAME_FRAME && !(m_milestoneAnnouncedMask & FLAG_LATEGAME))
+	{
+		m_milestoneAnnouncedMask |= FLAG_LATEGAME;
+
+		// Syn/Dan easter egg: each TacticalAI checks its own current target.
+		// Per-player m_synAnnounced prevents repeat firing within one player.
+		Player *enemy = getAiEnemy();
+		if (enemy && !m_synAnnounced)
+		{
+			UnicodeString display = enemy->getPlayerDisplayName();
+			if (display.compareNoCase(L"Syn") == 0)
+			{
+				m_synAnnounced = true;
+				UnicodeString msg = UnicodeString(L"I'm coming for you Dan!");
+				renderBroadcastMessage(m_player, msg);
+			}
+		}
+
+		if (isLowestIndexTacticalAIOnTeam(m_player))
+		{
+			UnicodeString msg;
+			msg.format(L"%ls: late-game offensive committed.",
+				m_player->getPlayerDisplayName().str());
+			renderAllyMessage(m_player, msg);
+		}
+	}
+}
+
+//----------------------------------------------------------------------------------------------------------
+// Distress signal: poll structure HP every 2s into a 5-slot ring (10s window).
+// Trigger when (a) total structure HP drops by at least DISTRESS_HP_DELTA over
+// the window, or (b) the structure count drops by at least DISTRESS_COUNT_DROP
+// inside the window. Earlier versions fired on any single structure loss, which
+// produced false-positives for things like a Patriot Missile being picked off.
+// Cooldown is 45s and bypasses other ally-message cooldowns.
+//----------------------------------------------------------------------------------------------------------
+void AISkirmishPlayer::processDistressSignal()
+{
+	if (!isTacticalAI()) return;
+
+	const Int SAMPLE_INTERVAL_SECONDS    = 2;
+	const Int DISTRESS_COOLDOWN_SECONDS  = 45;
+	const Real DISTRESS_HP_DELTA         = 6000.0f;
+	const Int DISTRESS_COUNT_DROP        = 2;
+
+	UnsignedInt curFrame = TheGameLogic->getFrame();
+	if (curFrame < m_nextDistressSampleFrame) return;
+	m_nextDistressSampleFrame = curFrame + SAMPLE_INTERVAL_SECONDS * LOGICFRAMES_PER_SECOND;
+
+	Real curHP = 0.0f;
+	Int  curCount = 0;
+	sampleStructures(m_player, &curHP, &curCount);
+
+	// Compare against the oldest entry in the ring (5 samples * 2s = 10s window).
+	Bool hasOldest = (m_distressRingFilled >= 5);
+	Real oldestHP = hasOldest ? m_distressHPRing[m_distressRingHead] : 0.0f;
+	Int oldestCount = hasOldest ? m_distressCountRing[m_distressRingHead] : 0;
+
+	// Write current sample into the slot that just became the new "head + 5",
+	// i.e. overwrite the oldest. Then advance head.
+	m_distressHPRing[m_distressRingHead] = curHP;
+	m_distressCountRing[m_distressRingHead] = curCount;
+	m_distressRingHead = (m_distressRingHead + 1) % 5;
+	if (m_distressRingFilled < 5) ++m_distressRingFilled;
+
+	if (!hasOldest) return;
+	if (curFrame < m_nextDistressAnnounceFrame) return;
+
+	Bool structureLost = ((oldestCount - curCount) >= DISTRESS_COUNT_DROP);
+	Bool heavyDamage   = ((oldestHP - curHP) >= DISTRESS_HP_DELTA);
+	if (!structureLost && !heavyDamage) return;
+
+	m_nextDistressAnnounceFrame = curFrame + DISTRESS_COOLDOWN_SECONDS * LOGICFRAMES_PER_SECOND;
+
+	// Quadrant of the player's base center, as the rough hot zone.
+	const WideChar *quad = quadrantLabel(m_baseCenter);
+	UnicodeString msg;
+	msg.format(L"%ls: under heavy attack at %ls!",
+		m_player->getPlayerDisplayName().str(), quad);
+	renderAllyMessage(m_player, msg);
+}
+
+//----------------------------------------------------------------------------------------------------------
+// Attack-commit announcement: posted when commitIdleArmy() dispatches a force
+// against an enemy structure. 60s per-AI cooldown so several short dispatches
+// don't pile up. Beacon-directive dispatches are excluded by the caller; those
+// are already announced via processBeaconDirective().
+//----------------------------------------------------------------------------------------------------------
+void AISkirmishPlayer::announceAttackCommit(const Coord3D *target, Player *enemyPlayer)
+{
+	if (!target || !enemyPlayer) return;
+
+	const Int ATTACK_ANNOUNCE_COOLDOWN_SECONDS = 60;
+	UnsignedInt curFrame = TheGameLogic->getFrame();
+	if (curFrame < m_nextAttackAnnounceFrame) return;
+	m_nextAttackAnnounceFrame = curFrame + ATTACK_ANNOUNCE_COOLDOWN_SECONDS * LOGICFRAMES_PER_SECOND;
+
+	const WideChar *quad = quadrantLabel(*target);
+	UnicodeString msg;
+	msg.format(L"%ls: attacking %ls at %ls.",
+		m_player->getPlayerDisplayName().str(),
+		enemyPlayer->getPlayerDisplayName().str(),
+		quad);
+	renderAllyMessage(m_player, msg);
 }
 
 //----------------------------------------------------------------------------------------------------------
@@ -1186,13 +1793,14 @@ void AISkirmishPlayer::crc( Xfer *xfer )
 // ------------------------------------------------------------------------------------------------
 /** Xfer method
 	* Version Info;
-	* 1: Initial version */
+	* 1: Initial version
+	* 2: Added m_nextIdleSweepFrame */
 // ------------------------------------------------------------------------------------------------
 void AISkirmishPlayer::xfer( Xfer *xfer )
 {
 
 	// version
-	XferVersion currentVersion = 1;
+	XferVersion currentVersion = 2;
 	XferVersion version = currentVersion;
 	xfer->xferVersion( &version, currentVersion );
 
@@ -1222,6 +1830,11 @@ void AISkirmishPlayer::xfer( Xfer *xfer )
 
 	// right flank right defense angle
 	xfer->xferReal( &m_curRightFlankRightDefenseAngle );
+
+	if (version >= 2)
+	{
+		xfer->xferUnsignedInt( &m_nextIdleSweepFrame );
+	}
 
 }
 

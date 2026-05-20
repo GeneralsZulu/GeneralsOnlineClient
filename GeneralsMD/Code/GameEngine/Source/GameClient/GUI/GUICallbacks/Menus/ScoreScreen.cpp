@@ -75,6 +75,7 @@
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/ScriptEngine.h"
 #include "GameLogic/VictoryConditions.h"
+#include "GameClient/Color.h"
 #include "GameClient/Display.h"
 #include "GameClient/GUICallbacks.h"
 #include "GameClient/WindowLayout.h"
@@ -1409,7 +1410,8 @@ static void updateSkirmishBattleHonors(SkirmishBattleHonors& stats)
 				++numEasy;
 			if (TheGameInfo->getConstSlot(i)->getState() == SLOT_MED_AI)
 				++numMedium;
-			if (TheGameInfo->getConstSlot(i)->getState() == SLOT_BRUTAL_AI)
+			if (TheGameInfo->getConstSlot(i)->getState() == SLOT_BRUTAL_AI
+				|| TheGameInfo->getConstSlot(i)->getState() == SLOT_TACTICAL_AI)
 				++numBrutal;
 		}
 		else if (slot->isAI())
@@ -1531,7 +1533,8 @@ static void updateChallengeMedals(Int& medals)
 		if (slot->isAI() && !isSlotLocalAlly(TheGameInfo, slot))
 		{
 			++numAIs;
-			if (TheGameInfo->getConstSlot(i)->getState() == SLOT_BRUTAL_AI)
+			if (TheGameInfo->getConstSlot(i)->getState() == SLOT_BRUTAL_AI
+				|| TheGameInfo->getConstSlot(i)->getState() == SLOT_TACTICAL_AI)
 				++numBrutals;
 		}
 		else if (slot->isAI())
@@ -1585,7 +1588,7 @@ void populatePlayerInfo( Player *player, Int pos)
 {
 	if(!player || pos < 0 || pos >= MAX_SLOTS)
 		return;
-	Color color = player->getPlayerColor();
+	Color color = GameMakeColorReadable(player->getPlayerColor());
 	ScoreKeeper *scoreKpr = player->getScoreKeeper();
 	if(!scoreKpr)
 	{
@@ -2703,7 +2706,9 @@ void populateSideInfo( UnicodeString side,ScoreGather *sg, Int pos, Color color)
 {
 	if(pos < 0 || pos > MAX_SLOTS)
 		return;
-	
+	color = GameMakeColorReadable(color);
+
+
 	AsciiString winName;
 	UnicodeString winValue;
 	GameWindow *win;

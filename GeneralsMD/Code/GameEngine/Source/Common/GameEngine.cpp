@@ -518,6 +518,13 @@ void GameEngine::init()
 
 		TheArchiveFileSystem->loadMods();
 
+		// Re-apply Data\INI\GameData.ini after mods are mounted so a mod BIG
+		// can supply a partial GameData block that overlays specific fields
+		// (e.g. MaxCameraHeight) without having to redefine every field.
+		// xferCRC is included so modded clients have a distinct network/replay
+		// CRC from vanilla clients.
+		ini.loadFileDirectory( "Data\\INI\\GameData", INI_LOAD_OVERWRITE, &xferCRC );
+
 		// doesn't require resets so just create a single instance here.
 		TheGameLODManager = MSGNEW("GameEngineSubsystem") GameLODManager;
 		TheGameLODManager->init();
@@ -548,6 +555,17 @@ void GameEngine::init()
 		initSubsystem(TheDeepCRCSanityCheck, "TheDeepCRCSanityCheck", MSGNEW("GameEngineSubystem") DeepCRCSanityCheck, nullptr);
 #endif // DEBUG_CRC
 		initSubsystem(TheGameText, "TheGameText", CreateGameTextInterface(), nullptr);
+
+		// Load mod-supplied additional GUI strings, if present. These augment
+		// (never override) Generals.csf and survive map reset. Must run after
+		// TheGameText is constructed (its init parses the primary CSF) and
+		// after loadMods so the file can be shipped inside a mod BIG.
+		{
+			AsciiString extraStr;
+			extraStr.format("Data\\%s\\GeneralsExtras.str", GetRegistryLanguage().str());
+			TheGameText->initAdditionalStringFile(extraStr);
+		}
+
 		updateWindowTitle();
 
 #ifdef DUMP_PERF_STATS///////////////////////////////////////////////////////////////////////////
@@ -743,13 +761,6 @@ void GameEngine::init()
 #endif/////////////////////////////////////////////////////////////////////////////////////////////
 
 
-		if (TheGlobalData->m_buildMapCache)
-		{
-			// just quit, since the map cache has already updated
-			//populateMapListbox(nullptr, true, true);
-			m_quitting = TRUE;
-		}
-
 		// load the initial shell screen
 		//TheShell->push( "Menus/MainMenu.wnd" );
 
@@ -910,8 +921,10 @@ Bool GameEngine::canUpdateRegularGameLogic()
 
 #if defined(_ALLOW_DEBUG_CHEATS_IN_RELEASE)
 	const Bool useFastMode = TheGlobalData->m_TiVOFastMode;
-#else	//always allow this cheat key if we're in a replay game.
-	const Bool useFastMode = TheGlobalData->m_TiVOFastMode && TheGameLogic->isInReplayGame();
+#else	//always allow this cheat key if we're in a replay game or resume-from-replay catchup.
+	const Bool useFastMode = TheGlobalData->m_TiVOFastMode
+		&& (TheGameLogic->isInReplayGame()
+			|| (TheRecorder && TheRecorder->isResumeCatchupMode()));
 #endif
 
 	if (useFastMode || !enabled || logicTimeScaleFps >= maxRenderFps)

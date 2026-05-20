@@ -100,6 +100,22 @@ protected:
 	void adjustBuildList(BuildListInfo *list);
 	Int getMyEnemyPlayerIndex();
 	void acquireEnemy();
+	// Periodically sweeps the AI's idle combat units into a group attack on the
+	// current enemy. Backstops the script-driven team flow so accumulated idle
+	// units don't sit in base late game.
+	void commitIdleArmy();
+	// Scan ally beacons for the directive prefix; track the active directive
+	// beacon ID; announce on switch and on minute boundaries.
+	void processBeaconDirective();
+	// Once-per-second phase milestone announcements (mid-game at 5min, late-game at 15min)
+	// plus the Syn/Dan broadcast easter egg fired at the late-game milestone.
+	void announceMilestones();
+	// Sample owned-structure HP on a 2s cadence; trigger an ally-only distress
+	// message when HP drops sharply or a structure is destroyed within the window.
+	void processDistressSignal();
+	// Local helper invoked from commitIdleArmy() after a force is dispatched
+	// against an enemy structure (skipped when the dispatch was a beacon directive).
+	void announceAttackCommit(const Coord3D *target, Player *enemyPlayer);
 
 protected:
 	Int m_curFrontBaseDefense; // First is 0.
@@ -113,5 +129,24 @@ protected:
 
 	UnsignedInt m_frameToCheckEnemy;
 	Player			*m_currentEnemy;
+
+	UnsignedInt m_nextIdleSweepFrame;
+
+	// Beacon directive ("!attack" prefix in an ally beacon's caption).
+	ObjectID    m_directiveBeaconID;
+	UnsignedInt m_nextDirectiveScanFrame;
+	UnsignedInt m_nextDirectiveAnnounceFrame;
+
+	// Ally communication: phase milestones, attack-commit, and distress signals.
+	UnsignedInt m_nextMilestoneCheckFrame;
+	Int         m_milestoneAnnouncedMask; // bit 0 = mid-game, bit 1 = late-game
+	Bool        m_synAnnounced;
+	UnsignedInt m_nextAttackAnnounceFrame;
+	UnsignedInt m_nextDistressSampleFrame;
+	UnsignedInt m_nextDistressAnnounceFrame;
+	Real        m_distressHPRing[5];
+	Int         m_distressCountRing[5];
+	Int         m_distressRingHead;
+	Int         m_distressRingFilled;
 
 };

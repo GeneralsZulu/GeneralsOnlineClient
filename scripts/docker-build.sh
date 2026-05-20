@@ -154,11 +154,27 @@ run_build() {
         print_info "Target: $target"
     fi
 
+    # Pull ZULU_CLIENT_KEY from GCP Secret Manager when it isn't already set,
+    # so cmake/zuluclientkey.cmake stops failing on machines that have gcloud
+    # configured. Stays silent if gcloud is unavailable or the fetch fails —
+    # the cmake step will then surface its existing error.
+    if [[ -z "${ZULU_CLIENT_KEY:-}" ]] && command -v gcloud &>/dev/null; then
+        if fetched_key=$(gcloud secrets versions access latest --secret=zuluclientkey 2>/dev/null); then
+            export ZULU_CLIENT_KEY="$fetched_key"
+            print_info "Fetched ZULU_CLIENT_KEY from GCP Secret Manager"
+        fi
+    fi
+
     # shellcheck disable=SC2086
     docker run \
         -u "$(id -u):$(id -g)" \
         -e MAKE_TARGET="$target" \
         -e FORCE_CMAKE="$force_cmake" \
+        -e ZULU_CLIENT_KEY="${ZULU_CLIENT_KEY:-}" \
+        -e ZULU_VERSION_MAJOR="${ZULU_VERSION_MAJOR:-}" \
+        -e ZULU_VERSION_MINOR="${ZULU_VERSION_MINOR:-}" \
+        -e ZULU_VERSION_BUILDNUM="${ZULU_VERSION_BUILDNUM:-}" \
+        -e ZULU_DISCORD_WEBHOOK_URL="${ZULU_DISCORD_WEBHOOK_URL:-}" \
         -v "$PROJECT_DIR:/build/cnc" \
         --rm \
         $docker_flags \

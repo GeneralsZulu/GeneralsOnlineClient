@@ -97,6 +97,7 @@ m_curWarehouseID(INVALID_ID)
 	m_baseCenter.zero();
 	m_baseCenterSet = false;
 	m_difficulty = TheScriptEngine->getGlobalDifficulty();
+	m_isTacticalAI = false;
 	m_teamSeconds = TheAI->getAiData()->m_teamSeconds;
 }
 
@@ -1504,11 +1505,13 @@ Bool AIPlayer::isAGoodIdeaToBuildTeam( TeamPrototype *proto )
 	if (!proto->evaluateProductionCondition()) {
 		return false;
 	}
-	// check build limit
-	if (proto->countTeamInstances() >= proto->getTemplateInfo()->m_maxInstances){
+	// check build limit. Use the live-instance count so depleted teams whose
+	// only survivor is a lone straggler don't lock the prototype out of being
+	// rebuilt. Teams still under construction always count as occupying a slot.
+	if (proto->countTeamInstancesAlive() >= proto->getTemplateInfo()->m_maxInstances){
 		if (TheGlobalData->m_debugAI) {
 			AsciiString str;
-			str.format("Team %s not chosen - %d already exist.", proto->getName().str(), proto->countTeamInstances());
+			str.format("Team %s not chosen - %d already exist.", proto->getName().str(), proto->countTeamInstancesAlive());
 			TheScriptEngine->AppendDebugMessage(str, false);
 		}
 		return false;	// Max already built.
@@ -2223,7 +2226,8 @@ Object *AIPlayer::findSupplyCenter(Int minimumCash)
 				Real radius = SUPPLY_CENTER_CLOSE_DIST + obj->getGeometryInfo().getBoundingCircleRadius();
 
 				PartitionFilterAcceptByKindOf f1(MAKE_KINDOF_MASK(KINDOF_CASH_GENERATOR), KINDOFMASK_NONE);
-				PartitionFilterPlayer f2(m_player, true);	// Only find your own units.
+				// Match own + allied collectors so we don't double up on a pile an ally is already mining.
+				PartitionFilterPlayerAffiliation f2(m_player, (ALLOW_SAME_PLAYER | ALLOW_ALLIES), true);
 				PartitionFilterOnMap filterMapStatus;
 
 
@@ -2953,6 +2957,37 @@ void AIPlayer::doUpgradesAndSkills()
 	if (!checkScience) {
 		return;
 	}
+
+	// Vanilla America AI: hardcoded fixed-priority science order.
+	// SpyDrone -> Pathfinder -> DaisyCutter -> SpectreGunshipSolo -> A10 1/2/3.
+	if (m_player->getSide() == "America") {
+		static const char *const s_americaSciences[] = {
+			"SCIENCE_SpyDrone",
+			"SCIENCE_Pathfinder",
+			"SCIENCE_DaisyCutter",
+			"SCIENCE_SpectreGunshipSolo",
+			"SCIENCE_A10ThunderboltMissileStrike1",
+			"SCIENCE_A10ThunderboltMissileStrike2",
+			"SCIENCE_A10ThunderboltMissileStrike3",
+		};
+		const Int s_americaScienceCount = sizeof(s_americaSciences)/sizeof(s_americaSciences[0]);
+		Int sci;
+		for (sci = 0; sci < s_americaScienceCount; sci++) {
+			ScienceType science = TheScienceStore->getScienceFromInternalName(AsciiString(s_americaSciences[sci]));
+			if (science == SCIENCE_INVALID) continue;
+			if (m_player->isCapableOfPurchasingScience(science)) {
+				if (m_player->attemptToPurchaseScience(science)) {
+					AsciiString msg = TheNameKeyGenerator->keyToName(m_player->getPlayerNameKey());
+					msg.concat(" purchases (America override) ");
+					msg.concat(TheScienceStore->getInternalNameForScience(science));
+					msg.concat(".");
+					TheScriptEngine->AppendDebugMessage(msg, false);
+				}
+			}
+		}
+		return;
+	}
+
 	const AISideInfo *sideInfo = TheAI->getAiData()->m_sideInfo;
 	while (sideInfo) {
 		if (sideInfo->m_side == m_player->getSide()) {
@@ -3310,13 +3345,14 @@ void AIPlayer::crc( Xfer *xfer )
 	* 2: added m_teamSeconds delay.
 	* 3: Added m_curWarehouseID.
 	* 1: Reset back to 1 with major save file changes.
+	* 2: Added m_isTacticalAI (Zulu).
 */
 // ------------------------------------------------------------------------------------------------
 void AIPlayer::xfer( Xfer *xfer )
 {
 
 	// version
-	XferVersion currentVersion = 1;
+	XferVersion currentVersion = 2;
 	XferVersion version = currentVersion;
 	xfer->xferVersion( &version, currentVersion );
 
@@ -3476,6 +3512,11 @@ void AIPlayer::xfer( Xfer *xfer )
 	xfer->xferBool( &m_dozerQueuedForRepair );
 	xfer->xferBool( &m_dozerIsRepairing );
 	xfer->xferInt( &m_bridgeTimer );
+
+	if (version >= 2)
+	{
+		xfer->xferBool( &m_isTacticalAI );
+	}
 
 }
 
@@ -3795,7 +3836,7 @@ void WorkOrder::loadPostProcess()
 /**
  * Get the bounds for a player's structure.
  */
-void AIPlayer::getPlayerStructureBounds( Region2D *bounds, Int playerNdx, Bool conservative )
+void AIPlayer::getPlayerStructureBounds( Region2D *bounds, Int playerNdx, Bool conservative, Coord2D *meanPos )
 {
 	Player::PlayerTeamList::const_iterator it;
 	Bool firstObject = true;
@@ -3803,6 +3844,9 @@ void AIPlayer::getPlayerStructureBounds( Region2D *bounds, Int playerNdx, Bool c
 	bounds->hi.x = bounds->lo.x = bounds->hi.y = bounds->lo.y = 0;
 	Region2D objBounds;
 	objBounds.hi.x = objBounds.lo.x = objBounds.hi.y = objBounds.lo.y = 0;
+	Real sumX = 0.0f;
+	Real sumY = 0.0f;
+	Int sumCount = 0;
 
 	Player* pPlayer = ThePlayerList->getNthPlayer(playerNdx);
 	if (pPlayer == nullptr)
@@ -3857,6 +3901,9 @@ void AIPlayer::getPlayerStructureBounds( Region2D *bounds, Int playerNdx, Bool c
 						if (bounds->hi.x<pos.x) bounds->hi.x = pos.x;
 						if (bounds->hi.y<pos.y) bounds->hi.y = pos.y;
 					}
+					sumX += pos.x;
+					sumY += pos.y;
+					++sumCount;
 				}
 			}
 		}
@@ -3864,5 +3911,19 @@ void AIPlayer::getPlayerStructureBounds( Region2D *bounds, Int playerNdx, Bool c
 	if (!firstStructure) {
 		// Player had no structures, so use unit bounds.
 		*bounds = objBounds;
+	}
+	if (meanPos)
+	{
+		if (sumCount > 0)
+		{
+			meanPos->x = sumX / (Real)sumCount;
+			meanPos->y = sumY / (Real)sumCount;
+		}
+		else
+		{
+			// No structures: fall back to bbox midpoint (matches bounds behavior).
+			meanPos->x = (bounds->lo.x + bounds->hi.x) * 0.5f;
+			meanPos->y = (bounds->lo.y + bounds->hi.y) * 0.5f;
+		}
 	}
 }

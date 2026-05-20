@@ -27,6 +27,7 @@
 #include "Common/Recorder.h"
 #include "Common/file.h"
 #include "Common/FileSystem.h"
+#include "Common/FramePacer.h"
 #include "Common/PlayerList.h"
 #include "Common/Player.h"
 #include "Common/GlobalData.h"
@@ -35,9 +36,12 @@
 #include "GameClient/GameWindow.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/InGameUI.h"
+#include "GameClient/MapUtil.h"
 #include "GameClient/Shell.h"
 #include "GameClient/GameText.h"
 
+#include "GameNetwork/FileTransfer.h"
+#include "GameNetwork/GameInfo.h"
 #include "GameNetwork/LANAPICallbacks.h"
 #include "GameNetwork/GameMessageParser.h"
 #include "GameNetwork/GameSpy/PeerDefs.h"
@@ -46,6 +50,8 @@
 #include "Common/RandomValue.h"
 #include "Common/CRCDebug.h"
 #include "Common/OptionPreferences.h"
+#include "Common/StatsExporter.h"
+#include "Common/StatsUploader.h"
 #include "Common/version.h"
 #include "../NGMPGame.h"
 #include "../OnlineServices_Init.h"
@@ -376,6 +382,12 @@ RecorderClass::RecorderClass()
 	m_archiveReplays = FALSE;
 	m_nextFrame = 0;
 	m_wasDesync = FALSE;
+	m_replayAIFeatureVersion = ZULU_AI_FEATURE_CURRENT;
+	m_liveObserverStreamOpen      = FALSE;
+	m_liveObserverWaitingForBytes = FALSE;
+	m_liveObserverRetryPos        = 0;
+	m_liveObserverFpsBoosted      = FALSE;
+	m_liveObserverSavedFpsLimit   = 0;
 	init(); // just for the heck of it.
 }
 
@@ -383,6 +395,53 @@ RecorderClass::RecorderClass()
  * Destructor
  */
 RecorderClass::~RecorderClass() {
+}
+
+//----------------------------------------------------------------------------------------------------------
+// Zulu replay extension block helpers.
+//----------------------------------------------------------------------------------------------------------
+void RecorderClass::writeZuluReplayExtension()
+{
+	const char zuluMagic[4] = {'Z','U','L','U'};
+	m_file->write(zuluMagic, sizeof(zuluMagic));
+	UnsignedInt version = ZULU_AI_FEATURE_CURRENT;
+	m_file->write(&version, sizeof(version));
+	m_replayAIFeatureVersion = version;
+}
+
+void RecorderClass::readZuluReplayExtension()
+{
+	// Try to consume the extension block. Vanilla / pre-Zulu replays will
+	// fail the magic check; rewind so the bytes we peeked at are interpreted
+	// as the start of the command stream, as before.
+	char magic[4] = {0,0,0,0};
+	Int pos = m_file->position();
+	Int got = m_file->read(magic, sizeof(magic));
+	if (got == (Int)sizeof(magic)
+		&& magic[0] == 'Z' && magic[1] == 'U' && magic[2] == 'L' && magic[3] == 'U')
+	{
+		UnsignedInt version = 0;
+		m_file->read(&version, sizeof(version));
+		m_replayAIFeatureVersion = version;
+		DEBUG_LOG(("RecorderClass: Zulu replay extension version %u", version));
+	}
+	else
+	{
+		m_file->seek(pos, File::START);
+		m_replayAIFeatureVersion = ZULU_AI_FEATURE_NONE;
+		DEBUG_LOG(("RecorderClass: vanilla replay; Zulu AI features disabled for playback"));
+	}
+}
+
+Bool RecorderClass::isAIFeatureEnabled(UnsignedInt featureVersion) const
+{
+	if (m_mode == RECORDERMODETYPE_PLAYBACK
+		|| m_mode == RECORDERMODETYPE_SIMULATION_PLAYBACK
+		|| m_mode == RECORDERMODETYPE_RESUME_CATCHUP)
+	{
+		return m_replayAIFeatureVersion >= featureVersion;
+	}
+	return TRUE;
 }
 
 /**
@@ -408,6 +467,7 @@ void RecorderClass::init() {
 	m_wasDesync = FALSE;
 	m_doingAnalysis = FALSE;
 	m_playbackFrameCount = 0;
+	m_replayAIFeatureVersion = ZULU_AI_FEATURE_CURRENT;
 
 	OptionPreferences optionPref;
 	m_archiveReplays = optionPref.getArchiveReplaysEnabled();
@@ -431,7 +491,40 @@ void RecorderClass::reset() {
  * Do the update for this frame.
  */
 void RecorderClass::update() {
-	if (m_mode == RECORDERMODETYPE_RECORD || m_mode == RECORDERMODETYPE_NONE) {
+	// LIVE_OBSERVER: keep TiVOFastMode forced off. The standard replay FF
+	// hotkey races the observer past the live edge and desyncs us from the
+	// host. Snapshot catch-up already runs at the high FPS limit set in
+	// playbackFileLiveObserver, so the user never needs manual FF here.
+	if (m_mode == RECORDERMODETYPE_LIVE_OBSERVER
+	    && TheGlobalData && TheGlobalData->m_TiVOFastMode)
+	{
+		TheWritableGlobalData->m_TiVOFastMode = FALSE;
+		if (TheInGameUI)
+			TheInGameUI->messageNoFormat(
+				TheGameText->FETCH_OR_SUBSTITUTE("GUI:LiveObserverNoFF",
+					L"Fast Forward is unavailable while observing a live game."));
+	}
+
+	// Diagnostic: every recorder update fires a one-liner in LIVE_OBSERVER
+	// mode so the trail in ObserverLog.txt shows ticks elapsing.
+	if (m_mode == RECORDERMODETYPE_LIVE_OBSERVER)
+		LANObsLog("Recorder::update tick mode=%d frame=%u", (int)m_mode,
+			TheGameLogic ? TheGameLogic->getFrame() : 0xFFFFFFFFu);
+
+	// LIVE_OBSERVER (joiner side) and RECORD (host side): TheLAN::update is
+	// only driven by the LAN lobby menu, so once we're in-game the observer
+	// host listen socket and client TCP recv stop being pumped. Drive them
+	// here every game frame instead. Safe no-op when no observer host/client
+	// is active.
+	if (TheLAN
+	    && (m_mode == RECORDERMODETYPE_LIVE_OBSERVER || m_mode == RECORDERMODETYPE_RECORD))
+	{
+		TheLAN->updateObserver();
+	}
+
+	if (m_mode == RECORDERMODETYPE_RESUME_CATCHUP) {
+		updateResumeCatchup();
+	} else if (m_mode == RECORDERMODETYPE_RECORD || m_mode == RECORDERMODETYPE_NONE) {
 		updateRecord();
 	}
 	else if (isPlaybackMode()) {
@@ -443,6 +536,18 @@ void RecorderClass::update() {
  * Do the update for the next frame of this playback.
  */
 void RecorderClass::updatePlayback() {
+	// LIVE_OBSERVER: per-tick checkpoint so the crash log can be correlated
+	// with what the playback was doing at the moment of the fault.
+	if (isLiveObserverMode())
+	{
+		LANObsLog("updatePlayback tick: gameFrame=%u m_nextFrame=%d filePos=%d waiting=%d streamOpen=%d",
+			TheGameLogic ? TheGameLogic->getFrame() : 0xFFFFFFFFu,
+			(Int)m_nextFrame,
+			m_file ? m_file->position() : -1,
+			m_liveObserverWaitingForBytes ? 1 : 0,
+			m_liveObserverStreamOpen ? 1 : 0);
+	}
+
 	// Remove any bad commands that have been inserted by the local user that shouldn't be
 	// executed during playback.
 	CullBadCommandsResult result = cullBadCommands();
@@ -455,6 +560,50 @@ void RecorderClass::updatePlayback() {
 		return;
 	}
 
+	// LIVE_OBSERVER: if we were waiting at EOF for more bytes from the host,
+	// try to re-read now. Updates to the host's .rep file aren't visible to
+	// our stdio read buffer until we close-and-reopen the File, so do that
+	// before retrying.
+	if (isLiveObserverMode() && m_liveObserverWaitingForBytes)
+	{
+		// If the stream has closed since we started waiting, finalize.
+		if (!m_liveObserverStreamOpen)
+		{
+			DEBUG_LOG(("RecorderClass::updatePlayback - LIVE_OBSERVER stream closed; ending playback"));
+			m_liveObserverWaitingForBytes = FALSE;
+			m_nextFrame = -1;
+			stopPlayback();
+			return;
+		}
+
+		if (m_file == nullptr)
+		{
+			// We already lost the file (a prior reopen failed); give up.
+			m_liveObserverWaitingForBytes = FALSE;
+			m_nextFrame = -1;
+			return;
+		}
+
+		AsciiString fname = m_file->getName();
+		m_file->close();
+		m_file = TheFileSystem->openFile(fname.str(), File::READ | File::BINARY);
+		if (m_file == nullptr)
+		{
+			DEBUG_LOG(("RecorderClass::updatePlayback - LIVE_OBSERVER reopen failed"));
+			m_liveObserverWaitingForBytes = FALSE;
+			m_nextFrame = -1;
+			return;
+		}
+		m_file->seek(m_liveObserverRetryPos, File::START);
+
+		// Retry the read. If it still fails, readNextFrame will re-arm
+		// m_liveObserverWaitingForBytes and we'll try again next tick.
+		m_liveObserverWaitingForBytes = FALSE;
+		readNextFrame();
+		if (m_liveObserverWaitingForBytes)
+			return;
+	}
+
 	if (m_nextFrame == -1) {
 		// This is reached if there are no more commands to be executed.
 		return;
@@ -465,8 +614,32 @@ void RecorderClass::updatePlayback() {
 
 	// While there are commands to be queued up for this frame, do it.
 	while (m_nextFrame == curFrame) {
+		Int posBeforeAppend = isLiveObserverMode() && m_file ? m_file->position() : 0;
 		appendNextCommand();	// append the next command to TheCommandQueue
+		Int posAfterAppend = isLiveObserverMode() && m_file ? m_file->position() : 0;
+		if (isLiveObserverMode())
+			LANObsLog("appendNextCommand frame=%d gameFrame=%u: %d -> %d (delta=%d)",
+				(Int)m_nextFrame, curFrame, posBeforeAppend, posAfterAppend,
+				posAfterAppend - posBeforeAppend);
 		readNextFrame();	// Read the next command's frame number for playback.
+		// LIVE_OBSERVER: if readNextFrame hit EOF, bail so the retry path
+		// runs next tick rather than spinning forever here.
+		if (isLiveObserverMode() && m_liveObserverWaitingForBytes)
+			break;
+	}
+
+	// LIVE_OBSERVER: once we hit EOF for the first time, we've drained the
+	// snapshot and are now at the live edge — drop the FPS limit back to
+	// normal so we don't keep racing ahead of the host. While catching up
+	// through the snapshot, FPS stays at 1000 (set in playbackFileLiveObserver).
+	if (isLiveObserverMode()
+	    && m_liveObserverWaitingForBytes
+	    && m_liveObserverFpsBoosted
+	    && TheFramePacer)
+	{
+		LANObsLog("caught up to live edge; restoring FPS limit %d", m_liveObserverSavedFpsLimit);
+		TheFramePacer->setFramesPerSecondLimit(m_liveObserverSavedFpsLimit);
+		m_liveObserverFpsBoosted = FALSE;
 	}
 }
 
@@ -515,9 +688,30 @@ void RecorderClass::updateRecord()
 			if (msg->getArgumentCount() >= 4)
 				maxFPS = msg->getArgument(3)->integer;
 
-			startRecording(diff, m_originalGameMode, rankPoints, maxFPS);
-		}
-		else if (msg->getType() == GameMessage::MSG_CLEAR_GAME_DATA) {
+			// If the LAN lobby has a resume-replay armed, switch into catchup
+			// mode instead of starting a fresh recording. Catchup opens the
+			// replay file for READ; startRecording would open it for WRITE
+			// and truncate the very file we need to read from.
+			Bool armedResume = (TheLAN && TheLAN->GetMyGame()
+				&& !TheLAN->GetMyGame()->getResumeReplayFile().isEmpty());
+			if (armedResume)
+			{
+				AsciiString resumeFile = TheLAN->GetMyGame()->getResumeReplayFile();
+				UnsignedInt handoff    = TheLAN->GetMyGame()->getResumeHandoffFrame();
+				if (!startResumeCatchup(resumeFile, handoff))
+				{
+					// Fallback to a normal recording if catchup setup failed
+					// so the game at least runs instead of getting stuck with
+					// no replay source.
+					DEBUG_LOG(("RecorderClass::updateRecord - resume catchup setup failed, falling back to normal record"));
+					startRecording(diff, m_originalGameMode, rankPoints, maxFPS);
+				}
+			}
+			else
+			{
+				startRecording(diff, m_originalGameMode, rankPoints, maxFPS);
+			}
+		} else if (msg->getType() == GameMessage::MSG_CLEAR_GAME_DATA) {
 			if (m_file != nullptr) {
 				lastFrame = -1;
 				writeToFile(msg);
@@ -712,6 +906,11 @@ void RecorderClass::startRecording(GameDifficulty diff, Int originalGameMode, In
 	// Write maxFPS chosen
 	m_file->write(&maxFPS, sizeof(maxFPS));
 
+	// Zulu replay extension. Tags this replay with the AI feature version
+	// the recording binary supports, so older binaries reject the file via
+	// exeCRC mismatch and newer binaries can identify what features to run.
+	writeZuluReplayExtension();
+
 	DEBUG_LOG(("RecorderClass::startRecording() - diff=%d, mode=%d, FPS=%d", diff, originalGameMode, maxFPS));
 
 	/*
@@ -759,6 +958,188 @@ void RecorderClass::stopRecording() {
 		}
 #endif
 	}
+
+	// Stats + replay upload: fires for every client in a LAN/Internet
+	// multiplayer game (the conditions under which
+	// StatsExporterBeginRecording was called in GameLogic::startNewGame).
+	// For replay viewers and single-player campaigns, exportingActive is
+	// FALSE and both the stats export and the replay upload are skipped.
+	//
+	// Order: stats first, replay second. The replay upload runs even if the
+	// stats upload failed — UploadStatsToServer is best-effort and logs
+	// errors but does not propagate them, so control just falls through.
+	if (!m_fileName.isEmpty())
+	{
+		const bool wasCollecting = StatsExporterIsActive();
+		ExportGameStatsJSON(getReplayDir(), m_fileName);
+
+		// Telemetry uploads (replay + map) only fire if the game had at
+		// least two human players. Mirrors the gate inside
+		// ExportGameStatsJSON for the cncstats stats upload, so all three
+		// telemetry channels behave consistently. Logs once here so the
+		// skip is visible in stdout when debugging upload behaviour.
+		const bool hasMinHumans = StatsExporterHasMinHumansForUpload();
+		if (wasCollecting && !hasMinHumans)
+		{
+			printf("[telemetry] Skipping replay/map upload: fewer than 2 human players\n");
+			fflush(stdout);
+		}
+
+		if (wasCollecting && hasMinHumans && !TheGlobalData->m_replayUrl.isEmpty())
+		{
+			AsciiString replayPath = getReplayDir();
+			replayPath.concat(m_fileName);
+
+			// Look up the local lobby slot's display name and UTF-8 encode
+			// it so the server can record who uploaded this copy of the
+			// replay. The radarvan endpoint accepts this as an optional
+			// form field; if we can't determine it, we send empty and the
+			// upload helper just omits the field.
+			AsciiString playerNameUtf8;
+			if (TheGameInfo != nullptr)
+			{
+				Int localSlot = TheGameInfo->getLocalSlotNum();
+				if (localSlot >= 0)
+				{
+					const GameSlot *s = TheGameInfo->getConstSlot(localSlot);
+					if (s != nullptr)
+					{
+						UnicodeString w = s->getName();
+						const WideChar *p = w.str();
+						if (p != nullptr)
+						{
+							for (; *p != L'\0'; ++p)
+							{
+								unsigned int c = static_cast<unsigned int>(*p);
+								if (c < 0x80)
+								{
+									playerNameUtf8.concat(static_cast<char>(c));
+								}
+								else if (c < 0x800)
+								{
+									playerNameUtf8.concat(static_cast<char>(0xC0 | (c >> 6)));
+									playerNameUtf8.concat(static_cast<char>(0x80 | (c & 0x3F)));
+								}
+								else
+								{
+									playerNameUtf8.concat(static_cast<char>(0xE0 | (c >> 12)));
+									playerNameUtf8.concat(static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
+									playerNameUtf8.concat(static_cast<char>(0x80 | (c & 0x3F)));
+								}
+							}
+						}
+					}
+				}
+			}
+
+			FILE *rf = fopen(replayPath.str(), "rb");
+			if (rf != nullptr)
+			{
+				fseek(rf, 0, SEEK_END);
+				long size = ftell(rf);
+				fseek(rf, 0, SEEK_SET);
+				if (size > 0)
+				{
+					void *fileData = malloc(static_cast<size_t>(size));
+					if (fileData != nullptr)
+					{
+						if (fread(fileData, 1, static_cast<size_t>(size), rf) == static_cast<size_t>(size))
+						{
+							// Append a ZUTG trailer so the server can distinguish
+							// uploads sourced from the Zulu client from third-party
+							// (e.g. gentool) uploads of the same on-disk file. The
+							// disk file itself is not modified.
+							unsigned int uploadLen = 0;
+							void *uploadBuf = AppendZuluUploadTag(fileData, static_cast<unsigned int>(size), &uploadLen);
+							if (uploadBuf != nullptr)
+							{
+								printf("[replay] Uploading %u bytes (incl. %u-byte ZUTG trailer) to %s\n",
+									uploadLen, uploadLen - static_cast<unsigned int>(size), TheGlobalData->m_replayUrl.str());
+								fflush(stdout);
+								UploadReplayToServer(TheGlobalData->m_replayUrl, uploadBuf, uploadLen, m_fileName,
+									GetGameLogicRandomSeed(), playerNameUtf8);
+								free(uploadBuf);
+							}
+						}
+						free(fileData);
+					}
+				}
+				fclose(rf);
+			}
+			else
+			{
+				printf("[replay] ERROR: Failed to read %s for upload\n", replayPath.str());
+				fflush(stdout);
+			}
+		}
+
+		// Map check + conditional map upload. Runs after the replay step;
+		// independent of whether the replay/stats upload succeeded. We
+		// look up the played map's CRC from the cache, ask the server
+		// whether it already has it, and (if not) upload both the .map
+		// file and its .tga preview, tagged via X-Map-File so the server
+		// can correlate them by their shared X-Map-CRC.
+		if (wasCollecting && hasMinHumans && !TheGlobalData->m_mapCheckUrl.isEmpty()
+			&& TheMapCache != nullptr && TheGlobalData != nullptr)
+		{
+			AsciiString mapName = TheGlobalData->m_mapName;
+			const MapMetaData *md = TheMapCache->findMap(mapName);
+			if (md == nullptr || md->m_CRC == 0)
+			{
+				printf("[map] No cached metadata for \"%s\", skipping map check\n", mapName.str());
+				fflush(stdout);
+			}
+			else if (MapMissingFromServer(TheGlobalData->m_mapCheckUrl, md->m_CRC)
+				&& !TheGlobalData->m_mapUploadUrl.isEmpty())
+			{
+				// Read each asset via the universal filesystem so it
+				// works for both BIG-resident shipped maps and on-disk
+				// user/transferred maps. The preview path is derived
+				// from the .map path via GetPreviewFromMap.
+				const AsciiString assetPaths[2] = {
+					md->m_fileName,
+					GetPreviewFromMap(md->m_fileName)
+				};
+				const char * const assetKinds[2] = { "map", "preview" };
+
+				for (Int ai = 0; ai < 2; ++ai)
+				{
+					const AsciiString &assetPath = assetPaths[ai];
+					const char *kind = assetKinds[ai];
+
+					File *assetFile = TheFileSystem->openFile(assetPath.str(), File::READ);
+					if (assetFile == nullptr)
+					{
+						printf("[map] %s asset \"%s\" not found, skipping\n",
+							kind, assetPath.str());
+						fflush(stdout);
+						continue;
+					}
+
+					Int assetSize = assetFile->size();
+					char *assetBytes = assetFile->readEntireAndClose(); // closes the file
+					if (assetBytes != nullptr && assetSize > 0)
+					{
+						printf("[map] Uploading %s \"%s\" (crc=%u, %d bytes) to %s\n",
+							kind, assetPath.str(), md->m_CRC, assetSize,
+							TheGlobalData->m_mapUploadUrl.str());
+						fflush(stdout);
+						UploadMapToServer(TheGlobalData->m_mapUploadUrl,
+							assetBytes, static_cast<unsigned int>(assetSize),
+							md->m_CRC, md->m_fileName, kind, GetGameLogicRandomSeed());
+					}
+					else
+					{
+						printf("[map] ERROR: readEntireAndClose returned no data for %s \"%s\"\n",
+							kind, assetPath.str());
+						fflush(stdout);
+					}
+					delete[] assetBytes;
+				}
+			}
+		}
+	}
+
 	m_fileName.clear();
 }
 
@@ -1003,6 +1384,42 @@ Bool RecorderClass::simulateReplay(AsciiString filename)
 	Bool success = playbackFile(filename);
 	if (success)
 		m_mode = RECORDERMODETYPE_SIMULATION_PLAYBACK;
+	return success;
+}
+
+// LAN observer entry point. Reuses the normal playback bootstrap (which reads
+// the header and queues MSG_NEW_GAME) and then flips into LIVE_OBSERVER mode
+// so readNextFrame waits at EOF instead of terminating playback. The caller
+// (LANObserverClient) must call setLiveObserverStreamOpen(TRUE) before this,
+// and setLiveObserverStreamOpen(FALSE) when the network stream closes so the
+// recorder knows when to finalize.
+Bool RecorderClass::playbackFileLiveObserver(AsciiString filename)
+{
+	LANObsLog("playbackFileLiveObserver entry: filename='%s'", filename.str());
+	Bool success = playbackFile(filename);
+	LANObsLog("playbackFile returned %s; m_nextFrame=%d", success?"TRUE":"FALSE", (Int)m_nextFrame);
+	if (success)
+	{
+		m_mode = RECORDERMODETYPE_LIVE_OBSERVER;
+		m_liveObserverWaitingForBytes = FALSE;
+		m_liveObserverRetryPos        = 0;
+
+		// Boost FPS while draining the initial snapshot so the observer
+		// catches up to the live edge fast. updatePlayback drops it back to
+		// the saved value on the first EOF. Same trick RESUME_CATCHUP uses.
+		if (TheFramePacer)
+		{
+			m_liveObserverSavedFpsLimit = TheFramePacer->getFramesPerSecondLimit();
+			if (m_liveObserverSavedFpsLimit <= 0)
+				m_liveObserverSavedFpsLimit = 30;
+			TheFramePacer->setFramesPerSecondLimit(1000);
+			TheWritableGlobalData->m_useFpsLimit = TRUE;
+			m_liveObserverFpsBoosted = TRUE;
+			LANObsLog("FPS boost: saved=%d, boosted to 1000", m_liveObserverSavedFpsLimit);
+		}
+
+		LANObsLog("mode set to LIVE_OBSERVER; file pos=%d", m_file ? m_file->position() : -1);
+	}
 	return success;
 }
 
@@ -1307,6 +1724,11 @@ Bool RecorderClass::playbackFile(AsciiString filename)
 	m_crcInfo = NEW CRCInfo(header.localPlayerIndex, isMultiplayer);
 	DEBUG_LOG(("Player index is %d, replay CRC interval is %d, isMultiplayer is %d", m_crcInfo->getLocalPlayer(), REPLAY_CRC_INTERVAL, isMultiplayer));
 
+	// Zulu replay extension. Vanilla / pre-Zulu replays don't have this block;
+	// readZuluReplayExtension peeks for the magic and rewinds if absent so the
+	// next read still sees the start of the command stream.
+	readZuluReplayExtension();
+
 	DEBUG_LOG(("RecorderClass::playbackFile() - original game was mode %d", m_originalGameMode));
 
 	// TheSuperHackers @fix helmutbuhler 03/04/2025
@@ -1397,10 +1819,27 @@ AsciiString RecorderClass::readAsciiString() {
 /**
  * Read the frame number for the next command in the playback file. If the end of the file is reached, the playback
  * is stopped and the next frame is said to be -1.
+ *
+ * LIVE_OBSERVER mode: EOF means "host hasn't flushed the next frame yet" rather than
+ * "replay is over." We rewind the file position so a future retry can re-read this
+ * spot, set m_liveObserverWaitingForBytes, and leave m_nextFrame alone so
+ * updatePlayback won't advance.
  */
 void RecorderClass::readNextFrame() {
+	Int posBefore = m_file->position();
 	Int bytesRead = m_file->read(&m_nextFrame, sizeof(m_nextFrame));
 	if (bytesRead != sizeof(m_nextFrame)) {
+		if (isLiveObserverMode() && m_liveObserverStreamOpen)
+		{
+			// Roll back any partial read and wait for more bytes to arrive.
+			// The retry in updatePlayback closes-and-reopens the file so the
+			// engine File's stdio buffer doesn't keep telling us EOF after
+			// new bytes have actually been appended.
+			m_liveObserverRetryPos        = posBefore;
+			m_liveObserverWaitingForBytes = TRUE;
+			DEBUG_LOG(("RecorderClass::readNextFrame - LIVE_OBSERVER EOF at pos %d, will retry", posBefore));
+			return;
+		}
 		DEBUG_LOG(("RecorderClass::readNextFrame - read failed on frame %d", TheGameLogic->getFrame()));
 		m_nextFrame = -1;
 		stopPlayback();
@@ -1830,6 +2269,170 @@ Bool RecorderClass::isMultiplayer()
 		return true;
 
 	return false;
+}
+
+/**
+ * Resume-from-replay catchup: open the given replay file, skip past the
+ * header, prime the first frame of commands, and switch the recorder into
+ * RECORDERMODETYPE_RESUME_CATCHUP. While in catchup, update() calls
+ * updateResumeCatchup() instead of updateRecord()/updatePlayback(), so the
+ * replay's commands are injected into TheCommandList each frame while
+ * network traffic continues to flow through the usual LAN path.
+ */
+Bool RecorderClass::startResumeCatchup(AsciiString filename, UnsignedInt handoffFrame)
+{
+	// Clean up any existing file handle from a prior mode.
+	if (m_file != nullptr)
+	{
+		m_file->close();
+		m_file = nullptr;
+	}
+	m_mode = RECORDERMODETYPE_NONE;
+
+	ReplayHeader header;
+	header.forPlayback = TRUE;
+	header.filename = filename;
+	if (!readReplayHeader(header))
+	{
+		DEBUG_LOG(("RecorderClass::startResumeCatchup - readReplayHeader failed for %s", filename.str()));
+		return FALSE;
+	}
+
+	// playbackFile writes difficulty, originalGameMode, rankPoints, maxFPS
+	// to the file AFTER the header and BEFORE the command stream. We must
+	// consume those same bytes here or readNextFrame will interpret the
+	// difficulty as a frame number and never match curFrame.
+	GameDifficulty difficulty = DIFFICULTY_NORMAL;
+	m_file->read(&difficulty, sizeof(difficulty));
+	m_file->read(&m_originalGameMode, sizeof(m_originalGameMode));
+	Int rankPoints = 0;
+	m_file->read(&rankPoints, sizeof(rankPoints));
+	Int maxFPS = 0;
+	m_file->read(&maxFPS, sizeof(maxFPS));
+
+	// Mirror playbackFile's handling of the Zulu extension block.
+	readZuluReplayExtension();
+
+	m_mode = RECORDERMODETYPE_RESUME_CATCHUP;
+	m_resumeHandoffFrame = handoffFrame;
+	m_currentReplayFilename = filename;
+
+	// Prime m_nextFrame with the frame number of the first recorded command.
+	readNextFrame();
+
+	// Disable local input so clicks during catchup don't produce stray
+	// commands that would diverge from the replay.
+	if (TheInGameUI)
+		TheInGameUI->setInputEnabled(FALSE);
+
+	// Raise both the FramePacer's FPS limit AND the network's per-frame
+	// timing rate so logic can advance faster. Two gates were limiting us:
+	// (1) renderer FPS cap, (2) Network::timeForNewFrame() which uses
+	// m_frameRate as its own rate gate independent of the renderer.
+	// Lockstep is unchanged — each frame still goes through full network
+	// ack, just faster. On LAN this gives a real speedup; on slower
+	// networks it tops out at whatever round-trip allows.
+	if (TheFramePacer)
+	{
+		m_resumeSavedFpsLimit = TheFramePacer->getFramesPerSecondLimit();
+		TheFramePacer->setFramesPerSecondLimit(1000);
+	}
+	if (TheNetwork)
+	{
+		m_resumeSavedNetFrameRate = TheNetwork->setLogicFrameRate(1000);
+	}
+
+	DEBUG_LOG(("RecorderClass::startResumeCatchup - catching up %s to frame %u",
+		filename.str(), handoffFrame));
+	return TRUE;
+}
+
+/**
+ * Per-frame update for RESUME_CATCHUP mode. Strips any local user input
+ * that slipped into TheCommandList, injects the replay's recorded commands
+ * for the current logic frame, then exits catchup cleanly when the handoff
+ * frame is reached (or the replay ends sooner). Unlike stopPlayback this
+ * does NOT call exitGame — the LAN session continues uninterrupted.
+ */
+void RecorderClass::updateResumeCatchup()
+{
+	UnsignedInt curFrame = TheGameLogic ? TheGameLogic->getFrame() : 0;
+
+	// Drop both rate caps back to normal once we're within 10 seconds (300
+	// logic frames at 30fps) of the handoff so players see a realtime preview
+	// before control is handed back. If the handoff is closer than that to
+	// the start of catchup, just stay at the elevated rate.
+	const UnsignedInt FF_OFF_LEAD_FRAMES = 300;
+	const Bool inLeadIn =
+		(m_resumeHandoffFrame >= FF_OFF_LEAD_FRAMES
+			&& curFrame >= m_resumeHandoffFrame - FF_OFF_LEAD_FRAMES);
+	if (inLeadIn)
+	{
+		if (TheFramePacer
+			&& TheFramePacer->getFramesPerSecondLimit() != m_resumeSavedFpsLimit)
+		{
+			TheFramePacer->setFramesPerSecondLimit(m_resumeSavedFpsLimit);
+		}
+		if (TheNetwork)
+		{
+			TheNetwork->setLogicFrameRate(m_resumeSavedNetFrameRate);
+		}
+	}
+
+	// Handoff condition: we've reached the handoff frame OR the replay file
+	// ran out of commands before we got there.
+	if (curFrame >= m_resumeHandoffFrame || m_nextFrame == (UnsignedInt)-1)
+	{
+		if (m_file != nullptr)
+		{
+			m_file->close();
+			m_file = nullptr;
+		}
+		m_mode = RECORDERMODETYPE_NONE;
+		m_currentReplayFilename.clear();
+
+		// Hand input back to the players. (Network resync was needed when
+		// FF was bypassing the lockstep gate; with realtime catchup the
+		// network has been keeping pace and no resync is required.)
+		if (TheInGameUI)
+			TheInGameUI->setInputEnabled(TRUE);
+
+		// Restore both rate caps to their pre-catchup values.
+		if (TheFramePacer)
+			TheFramePacer->setFramesPerSecondLimit(m_resumeSavedFpsLimit);
+		if (TheNetwork)
+			TheNetwork->setLogicFrameRate(m_resumeSavedNetFrameRate);
+
+		// Show an in-game notification so every player can see that control
+		// has been handed over. TheLAN->OnChat only writes to the lobby's
+		// chat listboxes, which don't exist during live gameplay. Each peer
+		// hits this code path in lockstep so the message renders on every
+		// client.
+		if (TheInGameUI)
+		{
+			TheInGameUI->message("GUI:ResumeHandoffComplete");
+		}
+
+		DEBUG_LOG(("RecorderClass::updateResumeCatchup - handoff at frame %u", curFrame));
+		return;
+	}
+
+	// NOTE: cullBadCommands() intentionally skipped during catchup.
+	// cullBadCommands strips any command in the MSG_BEGIN_NETWORK_MESSAGES
+	// range from TheCommandList, which includes exactly the commands we
+	// just appended via appendNextCommand. During pure single-player
+	// playback the cull runs before injection so the sequence is fine, but
+	// here the live LAN network layer is also writing into TheCommandList
+	// each frame — culling in the middle is not safe. Local UI input is
+	// already suppressed via InGameUI::setGUICommand, which is the right
+	// gate for this mode.
+
+	// Inject every command recorded for this frame.
+	while (m_nextFrame == curFrame)
+	{
+		appendNextCommand();
+		readNextFrame();
+	}
 }
 
 /**

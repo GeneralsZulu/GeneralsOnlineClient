@@ -69,6 +69,47 @@
 // PRIVATE DATA ///////////////////////////////////////////////////////////////////////////////////
 static const char *mapExtension = ".map";
 
+// Sentinel written into ZuluMapCache.ini headers. Also used to detect vanilla
+// MapCache.ini files that earlier Zulu builds polluted with cratePosition /
+// techDerrickPosition fields (which crash the retail vanilla parser). Bump
+// when the on-disk Zulu cache format gains new fields the engine relies on.
+static const char *MAP_CACHE_FORMAT_VERSION_TAG = "; MapCacheFormatVersion = 2";
+
+static Bool hasZuluFormatSentinel(const AsciiString &filename)
+{
+	File *fp = TheFileSystem->openFile(filename.str(), File::READ);
+	if (fp == nullptr)
+		return FALSE;
+	char buf[1024];
+	Int n = fp->read(buf, sizeof(buf) - 1);
+	fp->close();
+	if (n <= 0)
+		return FALSE;
+	buf[n] = '\0';
+	return strstr(buf, MAP_CACHE_FORMAT_VERSION_TAG) != nullptr;
+}
+
+// If a previous Zulu build wrote vanilla's MapCache.ini, truncate it to zero
+// bytes so the next vanilla launch parses cleanly (and rebuilds from disk for
+// the user dir; standard dir may need -buildmapcache). Truncation reuses the
+// same write permission Zulu already had on the file; deletion would also
+// require directory write access, which is more permission-fragile.
+static void truncateIfZuluPolluted(const AsciiString &mapDir, const char *vanillaCacheName)
+{
+	AsciiString vanillaPath;
+	vanillaPath.format("%s\\%s", mapDir.str(), vanillaCacheName);
+
+	if (!TheFileSystem->doesFileExist(vanillaPath.str()))
+		return;
+	if (!hasZuluFormatSentinel(vanillaPath))
+		return;
+
+	DEBUG_LOG(("MapCache: %s was written by a prior Zulu build; truncating so vanilla can rebuild\n", vanillaPath.str()));
+	FILE *fp = fopen(vanillaPath.str(), "w");
+	if (fp != nullptr)
+		fclose(fp);
+}
+
 static Int m_width = 0;						///< Height map width.
 static Int m_height = 0;					///< Height map height (y size of array).
 static Int m_borderSize = 0;			///< Non-playable border area.
@@ -80,6 +121,8 @@ static Dict worldDict = 0;
 static WaypointMap *m_waypoints = nullptr;
 static Coord3DList	m_supplyPositions;
 static Coord3DList	m_techPositions;
+static Coord3DList	m_cratePositions;
+static Coord3DList	m_techDerrickPositions;
 
 static Int m_mapDX = 0;
 static Int m_mapDY = 0;
@@ -147,11 +190,35 @@ static Bool ParseObjectDataChunk(DataChunkInput &file, DataChunkInfo *info, void
 	}
 	else if (pThisOne->getThingTemplate() && pThisOne->getThingTemplate()->isKindOf(KINDOF_TECH_BUILDING))
 	{
-		m_techPositions.push_back(loc);
+		// Split derricks (template name contains "Derrick") from generic tech buildings
+		// so the lobby preview can render them with a distinct icon.
+		AsciiString templateLower = pThisOne->getThingTemplate()->getName();
+		templateLower.toLower();
+		if (strstr(templateLower.str(), "derrick") != nullptr)
+		{
+			m_techDerrickPositions.push_back(loc);
+		}
+		else
+		{
+			m_techPositions.push_back(loc);
+		}
 	}
 	else if (pThisOne->getThingTemplate() && pThisOne->getThingTemplate()->isKindOf(KINDOF_SUPPLY_SOURCE_ON_PREVIEW))
 	{
-		m_supplyPositions.push_back(loc);
+		// Match radarvan's split: small supply piles (template name contains
+		// "Small", e.g. SupplyPileSmall) render with a distinct icon; everything
+		// else (SupplyDock, SupplyWarehouse, regular SupplyPile, ToxinRepository)
+		// keeps the standard green Cash icon.
+		AsciiString templateLower = pThisOne->getThingTemplate()->getName();
+		templateLower.toLower();
+		if (strstr(templateLower.str(), "small") != nullptr)
+		{
+			m_cratePositions.push_back(loc);
+		}
+		else
+		{
+			m_supplyPositions.push_back(loc);
+		}
 	}
 
 	deleteInstance(pThisOne);
@@ -256,6 +323,8 @@ static void resetMap()
 
 	m_techPositions.clear();
 	m_supplyPositions.clear();
+	m_cratePositions.clear();
+	m_techDerrickPositions.clear();
 }
 
 static void getExtent( Region3D *extent )
@@ -314,6 +383,7 @@ void WaypointMap::update()
 }
 
 const char *const MapCache::m_mapCacheName = "MapCacheGO.ini";
+const char *const MapCache::m_zuluMapCacheName = "ZuluMapCache.ini";
 
 AsciiString MapCache::getMapDir(bool bCustomMapDebug) const
 {
@@ -341,7 +411,7 @@ void MapCache::writeCacheINI( const AsciiString &mapDir )
 
 	TheFileSystem->createDirectory(mapDir);
 
-	filepath.concat(m_mapCacheName);
+	filepath.concat(m_zuluMapCacheName);
 	FILE *fp = fopen(filepath.str(), "w");
 	DEBUG_ASSERTCRASH(fp != nullptr, ("Failed to create %s", filepath.str()));
 	if (fp == nullptr) {
@@ -350,6 +420,7 @@ void MapCache::writeCacheINI( const AsciiString &mapDir )
 
 	fprintf(fp, "; FILE: %s /////////////////////////////////////////////////////////////\n", filepath.str());
 	fprintf(fp, "; This INI file is auto-generated - do not modify\n");
+	fprintf(fp, "%s\n", MAP_CACHE_FORMAT_VERSION_TAG);
 	fprintf(fp, "; /////////////////////////////////////////////////////////////////////////////\n");
 
 	MapCache::iterator it = begin();
@@ -398,6 +469,18 @@ void MapCache::writeCacheINI( const AsciiString &mapDir )
 				pos = *itc3d;
 				fprintf(fp, "  supplyPosition = X:%2.2f Y:%2.2f Z:%2.2f\n", pos.x, pos.y, pos.z);
 			}
+			itc3d = md.m_cratePositions.begin();
+			for (; itc3d != md.m_cratePositions.end(); ++itc3d)
+			{
+				pos = *itc3d;
+				fprintf(fp, "  cratePosition = X:%2.2f Y:%2.2f Z:%2.2f\n", pos.x, pos.y, pos.z);
+			}
+			itc3d = md.m_techDerrickPositions.begin();
+			for (; itc3d != md.m_techDerrickPositions.end(); ++itc3d)
+			{
+				pos = *itc3d;
+				fprintf(fp, "  techDerrickPosition = X:%2.2f Y:%2.2f Z:%2.2f\n", pos.x, pos.y, pos.z);
+			}
 			fprintf(fp, "END\n\n");
 		}
 		else
@@ -415,6 +498,26 @@ void MapCache::updateCache()
 
 	const AsciiString mapDir = getMapDir();
 	const AsciiString userMapDir = getUserMapDir();
+
+	// Clean up vanilla's MapCache.ini if a previous Zulu build polluted it with
+	// fields the retail vanilla parser doesn't understand. We don't share a
+	// cache file with vanilla anymore; Zulu uses ZuluMapCache.ini exclusively.
+	truncateIfZuluPolluted(mapDir, m_mapCacheName);
+	truncateIfZuluPolluted(userMapDir, m_mapCacheName);
+
+	// If our ZuluMapCache.ini is missing in the standard dir (fresh install or
+	// just-migrated from the shared MapCache.ini), force a rebuild from the
+	// .map files this session so official maps populate the new cache.
+	Bool stdCacheRebuilt = FALSE;
+	{
+		AsciiString stdCachePath;
+		stdCachePath.format("%s\\%s", mapDir.str(), m_zuluMapCacheName);
+		if (!TheFileSystem->doesFileExist(stdCachePath.str()))
+		{
+			DEBUG_LOG(("MapCache: %s missing, forcing rebuild this session\n", stdCachePath.str()));
+			TheWritableGlobalData->m_buildMapCache = TRUE;
+		}
+	}
 
 	// Create the standard map cache if required. Is only relevant for Mod developers.
 	// TheSuperHackers @tweak This step is done before loading any other map caches to not poison the cached state.
@@ -434,6 +537,7 @@ void MapCache::updateCache()
 			if (loadMapsFromDisk(mapDir, isOfficial, filterByAllowedMaps))
 			{
 				writeCacheINI(mapDir);
+				stdCacheRebuilt = TRUE;
 			}
 		}
 		m_doCreateStandardMapCacheINI = FALSE;
@@ -455,9 +559,17 @@ void MapCache::updateCache()
 
 	// Load standard maps from map cache last.
 	// This overwrites matching user maps to prevent munkees getting rowdy :)
-	if (m_doLoadStandardMapCacheINI)
+	// Skip if we just rebuilt the standard cache from disk this session: the
+	// in-memory entries are fresh, and the on-disk MapCache.ini may have failed
+	// to write (typical when the install dir isn't user-writable, e.g. Program
+	// Files). Reading it back would clobber the fresh data with stale entries.
+	if (m_doLoadStandardMapCacheINI && !stdCacheRebuilt)
 	{
 		loadMapsFromMapCacheINI(mapDir);
+		m_doLoadStandardMapCacheINI = FALSE;
+	}
+	else if (stdCacheRebuilt)
+	{
 		m_doLoadStandardMapCacheINI = FALSE;
 	}
 }
@@ -505,7 +617,7 @@ void MapCache::loadMapsFromMapCacheINI( const AsciiString &mapDir )
 {
 	INI ini;
 	AsciiString fname;
-	fname.format("%s\\%s", mapDir.str(), m_mapCacheName);
+	fname.format("%s\\%s", mapDir.str(), m_zuluMapCacheName);
 
 	if (TheFileSystem->doesFileExist(fname.str()))
 	{
@@ -659,6 +771,8 @@ Bool MapCache::addMap(
 	md.m_timestamp.m_lowTimeStamp = fileInfo.timestampLow;
 	md.m_supplyPositions = m_supplyPositions;
 	md.m_techPositions = m_techPositions;
+	md.m_cratePositions = m_cratePositions;
+	md.m_techDerrickPositions = m_techDerrickPositions;
 	md.m_CRC = calcCRC(fname);
 
 	Bool exists = false;
@@ -1014,6 +1128,127 @@ Int populateMapListbox( GameWindow *listbox, Bool useSystemMaps, Bool isMultipla
 	GadgetListBoxReset( listbox );
 
 	return populateMapListboxNoReset( listbox, useSystemMaps, isMultiplayer, mapToSelect );
+}
+
+//-------------------------------------------------------------------------------------------------
+// Case-insensitive substring search across two wide-char strings. Returns
+// true when needle is empty or appears anywhere inside haystack.
+static Bool wideContainsNoCase(const WideChar *haystack, const WideChar *needle)
+{
+	if (needle == nullptr || *needle == 0)
+		return TRUE;
+	if (haystack == nullptr)
+		return FALSE;
+
+	const size_t needleLen = wcslen(needle);
+	for (const WideChar *p = haystack; *p != 0; ++p)
+	{
+		if (_wcsnicmp(p, needle, needleLen) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Sorts maps by display name (case-insensitive) so the merged system+user
+// list comes out alphabetically rather than in MapCache iteration order.
+struct UnicodeStringNoCaseLess
+{
+	bool operator()(const UnicodeString& a, const UnicodeString& b) const
+	{
+		return _wcsicmp(a.str(), b.str()) < 0;
+	}
+};
+
+//-------------------------------------------------------------------------------------------------
+Int populateMapListboxFiltered( GameWindow *listbox, Bool isMultiplayer, const UnicodeString& nameFilter, Int playerCountFilter, AsciiString mapToSelect )
+{
+	if (!TheMapCache)
+		return -1;
+	if (!listbox)
+		return -1;
+
+	GadgetListBoxReset( listbox );
+
+	MapListBoxData lbData;
+	lbData.listbox = listbox;
+	lbData.numLength = GadgetListBoxGetListLength( listbox );
+	lbData.numColumns = GadgetListBoxGetNumColumns( listbox );
+	lbData.mapToSelect = mapToSelect;
+	lbData.isMultiplayer = isMultiplayer;
+
+	if (lbData.numColumns > 1)
+	{
+		lbData.easyImage = TheMappedImageCollection->findImageByName("Star-Bronze");
+		lbData.mediumImage = TheMappedImageCollection->findImageByName("Star-Silver");
+		lbData.brutalImage = TheMappedImageCollection->findImageByName("Star-Gold");
+		lbData.maxBrutalImage = TheMappedImageCollection->findImageByName("RedYell_Star");
+		lbData.battleHonors = new SkirmishBattleHonors;
+
+		lbData.w = lbData.brutalImage ? lbData.brutalImage->getImageWidth() : 10;
+		lbData.w = min(GadgetListBoxGetColumnWidth(listbox, 0), lbData.w);
+		lbData.h = lbData.w;
+	}
+
+	// Collect candidate map filenames, sorted by display name. We deliberately
+	// pass an empty mapDir to addMapToMapListbox so its directory check
+	// (mapName.startsWithNoCase("")) accepts every entry — system and user
+	// maps end up in one merged list.
+	const WideChar *needle = nameFilter.isEmpty() ? nullptr : nameFilter.str();
+
+	typedef std::map<UnicodeString, AsciiString, UnicodeStringNoCaseLess> SortedDisplayToFile;
+	SortedDisplayToFile sorted;
+
+	MapCache::iterator it = TheMapCache->begin();
+	for (; it != TheMapCache->end(); ++it)
+	{
+		const MapMetaData &mapData = it->second;
+		if (mapData.m_isMultiplayer != isMultiplayer)
+			continue;
+		if (mapData.m_displayName.isEmpty())
+			continue;
+		if (playerCountFilter > 0 && mapData.m_numPlayers != playerCountFilter)
+			continue;
+		if (!wideContainsNoCase(mapData.m_displayName.str(), needle))
+			continue;
+		sorted[mapData.m_displayName] = it->first;
+	}
+
+	const AsciiString emptyDir;
+
+	SortedDisplayToFile::const_iterator sIt = sorted.begin();
+	for (; sIt != sorted.end(); ++sIt)
+	{
+		MapCache::iterator mapCacheIt = TheMapCache->find(sIt->second);
+		if (mapCacheIt == TheMapCache->end())
+			continue;
+
+		if (!addMapToMapListbox(lbData, emptyDir, mapCacheIt->first, mapCacheIt->second))
+			break;
+	}
+
+	if (lbData.battleHonors)
+	{
+		delete lbData.battleHonors;
+		lbData.battleHonors = nullptr;
+	}
+
+	GadgetListBoxSetSelected(listbox, &lbData.selectionIndex, 1);
+
+	if (lbData.selectionIndex >= 0)
+	{
+		Int topIndex = GadgetListBoxGetTopVisibleEntry(listbox);
+		Int bottomIndex = GadgetListBoxGetBottomVisibleEntry(listbox);
+		Int rowsOnScreen = bottomIndex - topIndex;
+
+		if (lbData.selectionIndex >= bottomIndex)
+		{
+			Int newTop = max( 0, lbData.selectionIndex - max( 1, rowsOnScreen / 2 ) );
+			GadgetListBoxSetTopVisibleEntry( listbox, newTop );
+		}
+	}
+
+	return lbData.selectionIndex;
 }
 
 
