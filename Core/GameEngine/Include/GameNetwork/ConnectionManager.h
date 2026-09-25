@@ -193,6 +193,12 @@ private:
 
 	void requestFrameDataResend(Int playerID, UnsignedInt frame); ///< request of this player that he send the specified frame's data.
 
+	// TheSuperHackers @feature bill-rich 24/09/2026 The latency this machine
+	// reports for run-ahead sizing: jitter aware unless something else is already
+	// accounting for jitter. See the definition.
+	Real getReportedRunAheadLatency();
+	Bool isMeshJitterSlackActive();
+
 	// The connections are set up like the slot list. The connection corresponding to the local
 	// player's position in the slot list will be null.  Connections corresponding to slots that
 	// do not have a player will also be null.
@@ -225,6 +231,13 @@ private:
 	Int  m_minFps;
 	UnsignedInt m_smallestPacketArrivalCushion;
 	Bool m_didSelfSlug;
+
+	// TheSuperHackers @feature bill-rich 24/09/2026 Run-ahead hysteresis (packet
+	// router only): the last value we sent, and how many consecutive metrics ticks
+	// have wanted something lower.
+	Int m_lastSentRunAhead;
+	Int m_runAheadLowerTicks;
+	Int m_frameGroupingMs;		///< Current packet send interval (before the router's halving), for jitter sizing.
 
 	// -----------------------------------------------------------------------------
 	FileCommandMap s_fileCommandMap;

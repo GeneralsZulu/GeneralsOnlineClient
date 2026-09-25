@@ -279,6 +279,68 @@ Real FrameMetrics::getAverageLatency() {
 	return m_averageLatency;
 }
 
+// TheSuperHackers @feature bill-rich 24/09/2026 Percentile of the latency
+// history, in seconds. The history is small (m_networkLatencyHistoryLength),
+// so a copy and a sort on a metrics tick is cheap; the scratch buffer is a
+// member so it does not reallocate every time.
+Real FrameMetrics::getLatencyPercentile(Int pct) {
+#if defined(USE_NEW_FRAMEMETRIC_LOGIC)
+	if (m_mapLatenciesLookup.empty()) {
+		return m_averageLatency;
+	}
+	m_latencyScratch.clear();
+	m_latencyScratch.reserve(m_mapLatenciesLookup.size());
+	for (auto& kvPair : m_mapLatenciesLookup) {
+		m_latencyScratch.push_back(kvPair.second);
+	}
+#else
+	const Int historyLength = (Int)TheGlobalData->m_networkLatencyHistoryLength;
+	if (historyLength <= 0) {
+		return m_averageLatency;
+	}
+	m_latencyScratch.assign(m_latencyList, m_latencyList + historyLength);
+#endif
+	std::sort(m_latencyScratch.begin(), m_latencyScratch.end());
+	const Int n = (Int)m_latencyScratch.size();
+	Int idx = (n * pct) / 100;
+	if (idx < 0) {
+		idx = 0;
+	}
+	if (idx > (n - 1)) {
+		idx = n - 1;
+	}
+	return m_latencyScratch[idx];
+}
+
+/**
+ * TheSuperHackers @feature bill-rich 24/09/2026 The mean is blind to jitter: a
+ * link that averages 80ms but spikes to 300ms every few seconds gets a window
+ * sized for 80ms and stalls on every spike. So add the spread between the mean
+ * and a high percentile of the history.
+ *
+ * Two guards keep this from feeding on itself. Packets go out every batchSec
+ * (the frame grouping, itself derived from run-ahead), so every sample already
+ * carries up to a batch interval of random wait at each end; that spread is
+ * subtracted before it counts as jitter, otherwise a bigger window makes bigger
+ * "jitter" and run-ahead ratchets to its cap even on a perfect LAN. And the
+ * allowance is capped at NET_RUNAHEAD_JITTER_CAP_MS so a few retry-inflated
+ * samples cannot buy the whole game a second of input lag.
+ */
+Real FrameMetrics::getRunAheadLatency(Real batchSec) {
+	if (NET_LEGACY_TIMING) {
+		return m_averageLatency;
+	}
+	Real spread = getLatencyPercentile(NET_RUNAHEAD_LAT_PERCENTILE) - m_averageLatency - batchSec;
+	if (spread < 0.0f) {
+		spread = 0.0f;
+	}
+	const Real cap = (Real)NET_RUNAHEAD_JITTER_CAP_MS / 1000.0f;
+	if (spread > cap) {
+		spread = cap;
+	}
+	return m_averageLatency + spread;
+}
+
 Int FrameMetrics::getMinimumCushion() {
 	return m_minimumCushion;
 }

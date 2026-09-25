@@ -333,6 +333,9 @@ void ConnectionManager::init()
 		m_latencyAverages[i] = 0.0; // using zero since all floating point standards should be able to specify 0.0 accurately.
 	}
 	m_smallestPacketArrivalCushion = -1;
+	m_lastSentRunAhead = 0;
+	m_runAheadLowerTicks = 0;
+	m_frameGroupingMs = 0;
 
 	m_frameMetrics.init();
 
@@ -1397,7 +1400,7 @@ void ConnectionManager::updateRunAhead(Int oldRunAhead, Int frameRate, Bool didS
 	if ((lasttimesent == 0) || ((curTime - lasttimesent) > TheGlobalData->m_networkRunAheadMetricsTime)) {
 		if (m_localSlot == m_packetRouterSlot) {
 			// We are the packet router, time to compute a new run ahead for this game.
-			m_latencyAverages[m_localSlot] = m_frameMetrics.getAverageLatency();
+			m_latencyAverages[m_localSlot] = getReportedRunAheadLatency();
 
 			// since we are now using the display frame rate rather than the logic frame rate to get our average FPS,
 			// it doesn't make sense to send the desired logic frame rate if we "slugged" ourself.
@@ -1539,6 +1542,27 @@ void ConnectionManager::updateRunAhead(Int oldRunAhead, Int frameRate, Bool didS
 			if (pinCatchupRates) {
 				newRunAhead = CATCHUP_RUNAHEAD;
 				minFps      = CATCHUP_FRAME_RATE;
+				m_lastSentRunAhead = 0;
+				m_runAheadLowerTicks = 0;
+			} else if (!NET_LEGACY_TIMING) {
+				// TheSuperHackers @feature bill-rich 24/09/2026 Hysteresis: go up at once,
+				// come down only after the lower value has held for NET_RUNAHEAD_DECAY_TICKS
+				// metrics ticks, then all the way to it. Without this a link that hovers
+				// around a frame boundary flips the whole game's window every metrics tick;
+				// with a slower decay a transient stall's inflated samples cost everyone
+				// input lag for minutes.
+				if (m_lastSentRunAhead > 0) {
+					if (newRunAhead < m_lastSentRunAhead) {
+						if (++m_runAheadLowerTicks >= NET_RUNAHEAD_DECAY_TICKS) {
+							m_runAheadLowerTicks = 0;
+						} else {
+							newRunAhead = m_lastSentRunAhead;
+						}
+					} else {
+						m_runAheadLowerTicks = 0;
+					}
+				}
+				m_lastSentRunAhead = newRunAhead;
 			}
 
 			NetRunAheadCommandMsg* msg = newInstance(NetRunAheadCommandMsg);
@@ -1640,7 +1664,9 @@ void ConnectionManager::updateRunAhead(Int oldRunAhead, Int frameRate, Bool didS
 			if (DoesCommandRequireACommandID(msg->getNetCommandType())) {
 				msg->setID(GenerateNextCommandID());
 			}
-			msg->setAverageLatency(m_frameMetrics.getAverageLatency());
+			// Reported in the retail "average" field: a jitter-aware value on purpose,
+			// so an old packet router simply sees a slightly higher average.
+			msg->setAverageLatency(getReportedRunAheadLatency());
 
 			// see above for explanation.
 //			if (didSelfSlug) {
@@ -2023,7 +2049,51 @@ NetCommandList *ConnectionManager::getFrameCommandList(UnsignedInt frame)
 	return retlist; // retlist deallocated by calling function.
 }
 
+/**
+ * TheSuperHackers @feature bill-rich 24/09/2026 The latency this machine reports
+ * into the run-ahead negotiation.
+ *
+ * Run-ahead used to be sized from the MEAN round-trip latency, which is blind to
+ * jitter: a link averaging 80ms with 300ms spikes got a window sized for 80ms and
+ * stalled on every spike. FrameMetrics::getRunAheadLatency reports a high
+ * percentile of the history instead, capped so one retry-inflated sample cannot
+ * buy the whole game a second of input lag. It is carried in the retail "average"
+ * field on purpose, so an old packet router simply sees a slightly higher average
+ * and the wire format is unchanged.
+ *
+ * GeneralsOnline has its own jitter allowance: when the service config turns on
+ * the run-ahead tweaks, updateRunAhead widens the slack multiplier from jitter
+ * measured on the NGMP mesh. Reporting a jitter-inflated latency as well would
+ * count the same jitter twice, so in that case the mean is reported and GO's
+ * mechanism is left to do the work alone.
+ */
+Real ConnectionManager::getReportedRunAheadLatency() {
+	if (isMeshJitterSlackActive()) {
+		return m_frameMetrics.getAverageLatency();
+	}
+	return m_frameMetrics.getRunAheadLatency((Real)m_frameGroupingMs / 1000.0f);
+}
+
+Bool ConnectionManager::isMeshJitterSlackActive() {
+#if defined(GENERALS_ONLINE)
+	if (TheNGMPGame == nullptr) {
+		return FALSE;
+	}
+	if (NGMP_OnlineServicesManager::GetInstance() == nullptr) {
+		return FALSE;
+	}
+	ServiceConfig& serviceConf = NGMP_OnlineServicesManager::GetInstance()->GetServiceConfig();
+	return serviceConf.ibra_ra_tweaks && (NGMP_OnlineServicesManager::GetNetworkMesh() != nullptr);
+#else
+	return FALSE;
+#endif
+}
+
 void ConnectionManager::setFrameGrouping(time_t frameGrouping) {
+	// TheSuperHackers @feature bill-rich 24/09/2026 Remember the negotiated send
+	// interval: FrameMetrics needs it to tell jitter from packet batching.
+	m_frameGroupingMs = (Int)frameGrouping;
+
 	// Since we are the packet router, we should send more packets per second since we
 	// may become the latency bottleneck for sending packets from one player to the next.
 	// This is probably ok since the packet router should have the fastest connection of all
