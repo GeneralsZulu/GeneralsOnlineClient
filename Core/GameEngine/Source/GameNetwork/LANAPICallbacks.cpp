@@ -38,6 +38,7 @@
 #include "Common/QuotedPrintable.h"
 #include "Common/RandomValue.h"
 #include "Common/UserPreferences.h"
+#include "GameClient/Color.h"
 #include "GameClient/GameText.h"
 #include "GameClient/LanguageFilter.h"
 #include "GameClient/MapUtil.h"
@@ -45,8 +46,16 @@
 #include "GameLogic/GameLogic.h"
 #include "GameNetwork/FileTransfer.h"
 #include "GameNetwork/LANAPICallbacks.h"
+#include "GameNetwork/MapDownloadHook.h"
 #include "GameNetwork/networkutil.h"
 #include "GameNetwork/ResumeFromReplay.h"
+
+// Zero Hour only: the multiplayer loading-screen "battlefield intel" panel.
+// StatsUploader (and the radarvan endpoints it talks to) live in the Zero Hour
+// tree, so gate the include and the trigger on the ZH build.
+#if RTS_ZEROHOUR
+#include "Common/StatsUploader.h"
+#endif
 
 LANAPI *TheLAN = nullptr;
 extern Bool LANbuttonPushed;
@@ -100,17 +109,21 @@ void LANAPI::OnAccept( UnsignedInt playerIP, Bool status )
 {
 	if( AmIHost() )
 	{
-		Int i = 0;
-		for (; i < MAX_SLOTS; i++)
+		// Resolve by (IP, source port), not IP alone: two players behind one
+		// NAT share a public IP, and an IP-only match would apply the second
+		// player's accept to the first -- leaving the second stuck
+		// un-accepted forever (the start button never unlocks).
+		Int i = findSlotForSender(playerIP);
+		if (i < 0)
 		{
-			if (m_currentGame->getIP(i) == playerIP)
-			{
-				if(status)
-					m_currentGame->getLANSlot(i)->setAccept();
-				else
-					m_currentGame->getLANSlot(i)->unAccept();
-				break;
-			}
+			i = MAX_SLOTS;
+		}
+		else
+		{
+			if(status)
+				m_currentGame->getLANSlot(i)->setAccept();
+			else
+				m_currentGame->getLANSlot(i)->unAccept();
 		}
 		if (i != MAX_SLOTS )
 		{
@@ -134,14 +147,22 @@ void LANAPI::OnHasMap( UnsignedInt playerIP, Bool status )
 {
 	if( AmIHost() )
 	{
-		Int i = 0;
-		for (; i < MAX_SLOTS; i++)
+		// Same-NAT disambiguation as OnAccept above.
+		Int i = findSlotForSender(playerIP);
+		if (i < 0)
 		{
-			if (m_currentGame->getIP(i) == playerIP)
-			{
-				m_currentGame->getLANSlot(i)->setMapAvailability( status );
-				break;
-			}
+			i = MAX_SLOTS;
+		}
+		else if (m_currentGame->getLANSlot(i)->hasMap() == status)
+		{
+			// Joiners repeat their availability report whenever their copy of
+			// the options changes; an unchanged report needs no UI refresh
+			// and, more importantly, no repeated "player has no map" chat.
+			return;
+		}
+		else
+		{
+			m_currentGame->getLANSlot(i)->setMapAvailability( status );
 		}
 		if (i != MAX_SLOTS )
 		{
@@ -173,6 +194,134 @@ void LANAPI::OnHasMap( UnsignedInt playerIP, Bool status )
 	}
 }
 
+#if RTS_ZEROHOUR
+// Have we already kicked off the intel fetch for the current start attempt?
+// Set when the countdown timer starts, cleared when the game actually starts,
+// so the timer + start pair only fires one worker.
+static Bool s_lanIntelFired = FALSE;
+
+// Build the roster from the current game and fire the (non-blocking) radarvan
+// intel worker for the multiplayer load screen. Requires a clean two-team
+// game; anything else (free-for-all, unteamed slots) just resets the intel
+// state so the load screen shows the themed fallback instead.
+static void startLanBattlefieldIntel(GameInfo *game)
+{
+	if (game == nullptr)
+	{
+		RadarvanIntelReset();
+		return;
+	}
+
+	std::vector<MapSummaryPlayer> roster;
+	Int localTeam = 0;
+	Int localRosterIdx = -1;
+	Int localSlot = game->getLocalSlotNum();
+	Int i;
+	for (i = 0; i < MAX_SLOTS; ++i)
+	{
+		const GameSlot *slot = game->getConstSlot(i);
+		if (!slot || !slot->isOccupied())
+			continue;
+		if (slot->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
+			continue;
+		MapSummaryPlayer entry;
+		entry.name.translate(slot->getName());
+		if (slot->isAI())
+		{
+			// AI names carry spaces ("Easy AI"); strip them so the server sees
+			// a single token, matching how map_summary sends AI slots.
+			AsciiString joined;
+			for (const char *p = entry.name.str(); *p != '\0'; ++p)
+			{
+				if (*p != ' ')
+					joined.concat(*p);
+			}
+			entry.name = joined;
+		}
+		if (entry.name.isEmpty())
+			continue;
+		entry.general = slot->getPlayerTemplate();
+		// predict wants 1-based teams (0 = no team). getTeamNumber() is 0-based
+		// with -1 = "no team", so a clean NvN maps to 1..N here.
+		entry.team = slot->getTeamNumber() + 1;
+		if (i == localSlot)
+			localRosterIdx = (Int)roster.size();
+		roster.push_back(entry);
+	}
+
+	// Require exactly two distinct teams, all teamed (no team-0 entries):
+	// predict only handles two-team matches, and synergy/team_stats are team
+	// concepts. Free-for-alls just get the fallback note.
+	Int teamValues[MAX_SLOTS];
+	Int distinct = 0;
+	Bool hasUnteamed = FALSE;
+	size_t r;
+	for (r = 0; r < roster.size(); ++r)
+	{
+		Int t = roster[r].team;
+		if (t <= 0) { hasUnteamed = TRUE; break; }
+		Bool seen = FALSE;
+		Int d;
+		for (d = 0; d < distinct; ++d)
+			if (teamValues[d] == t) { seen = TRUE; break; }
+		if (!seen && distinct < MAX_SLOTS)
+			teamValues[distinct++] = t;
+	}
+	// A 2-player game with no real teams is just a 1v1: synthesize opposing
+	// teams so predict/synergy have two sides to work with. (3+ unteamed
+	// players is a genuine free-for-all we can't forecast.)
+	if (roster.size() == 2 && (hasUnteamed || distinct != 2))
+	{
+		roster[0].team = 1;
+		roster[1].team = 2;
+		hasUnteamed = FALSE;
+		distinct = 2;
+	}
+
+	if (hasUnteamed || distinct != 2 || roster.size() < 2)
+	{
+		RadarvanIntelReset();
+		return;
+	}
+
+	localTeam = (localRosterIdx >= 0 && localRosterIdx < (Int)roster.size())
+		? roster[localRosterIdx].team : 0;
+
+	// Map name: prefer the .map's display name (what players see), stripped of
+	// the trailing " (N)" player-count suffix and lowercased, matching what
+	// map_summary sends so the server keys on the same identifier.
+	AsciiString mapName;
+	if (TheMapCache)
+	{
+		const MapMetaData *md = TheMapCache->findMap(game->getMap());
+		if (md && !md->m_displayName.isEmpty())
+			mapName.translate(md->m_displayName);
+	}
+	const char *ms = mapName.str();
+	Int mlen = mapName.getLength();
+	if (mlen >= 4 && ms[mlen - 1] == ')')
+	{
+		Int mi = mlen - 2;
+		while (mi > 0 && ms[mi] >= '0' && ms[mi] <= '9')
+			--mi;
+		if (mi >= 1 && ms[mi] == '(' && ms[mi - 1] == ' ' && mi != mlen - 2)
+		{
+			AsciiString trimmed;
+			Int j;
+			for (j = 0; j < mi - 1; ++j)
+				trimmed.concat(ms[j]);
+			mapName = trimmed;
+		}
+	}
+	mapName.toLower();
+
+	RadarvanIntelStart(TheGlobalData->m_predictUrl,
+	                   TheGlobalData->m_teamStatsUrl,
+	                   TheGlobalData->m_synergyUrl,
+	                   mapName, localTeam, roster);
+}
+#endif // RTS_ZEROHOUR
+
 void LANAPI::OnGameStartTimer( Int seconds )
 {
 	UnicodeString text;
@@ -181,12 +330,32 @@ void LANAPI::OnGameStartTimer( Int seconds )
 	else
 		text.format(TheGameText->fetch("LAN:GameStartTimerPlural"), seconds);
 	OnChat(L"SYSTEM", m_localIP, text, LANCHAT_SYSTEM);
+
+#if RTS_ZEROHOUR
+	// Countdown has begun on this client: fire the intel fetch now so it has
+	// the whole countdown + load time to come back. Guard so the follow-up
+	// OnGameStart() doesn't start a second worker.
+	if (!s_lanIntelFired)
+	{
+		startLanBattlefieldIntel(m_currentGame);
+		s_lanIntelFired = TRUE;
+	}
+#endif
 }
 
 void LANAPI::OnGameStart()
 {
 	//DEBUG_LOG(("Map is '%s', preview is '%s'", m_currentGame->getMap().str(), GetPreviewFromMap(m_currentGame->getMap()).str()));
 	//DEBUG_LOG(("Map is '%s', INI is '%s'", m_currentGame->getMap().str(), GetINIFromMap(m_currentGame->getMap()).str()));
+
+#if RTS_ZEROHOUR
+	// Immediate start (countdown of 0) never fires OnGameStartTimer, so kick
+	// the intel fetch here if it hasn't run yet. Either way, clear the guard
+	// so the next game starts fresh.
+	if (!s_lanIntelFired)
+		startLanBattlefieldIntel(m_currentGame);
+	s_lanIntelFired = FALSE;
+#endif
 
 	if (m_currentGame)
 	{
@@ -287,11 +456,25 @@ void LANAPI::OnGameStart()
 		GameMessage *msg = TheMessageStream->appendMessage( GameMessage::MSG_NEW_GAME );
 		msg->appendIntegerArgument(GAME_LAN);
 
-		TheWritableGlobalData->m_useFpsLimit = false;
+		// A network game is rendered under the same cap as everything else.
+		// Uncapping here was retail behaviour that never got undone, so a
+		// single LAN match left m_useFpsLimit off for the rest of the
+		// process -- including the shell. FramePacer already lifts the cap
+		// for the paths that genuinely need it (resume catchup, the live
+		// observer snapshot drain), keyed off live state, so it comes back
+		// by itself when those end.
 
 		// Set the seeds
 		InitRandom( m_currentGame->getSeed() );
 		DEBUG_LOG(("InitRandom( %d )", m_currentGame->getSeed()));
+
+		// Open the observer-streaming TCP listen socket if we're the host.
+		// Joiners who try to enter after this point are offered a "Watch as
+		// observer" prompt instead of a hard rejection.
+		if (m_currentGame->amIHost())
+		{
+			startObserverHost();
+		}
 	}
 }
 
@@ -313,6 +496,47 @@ void LANAPI::OnGameOptions( UnsignedInt playerIP, Int playerSlot, AsciiString op
 		AsciiString oldOptions = GameInfoToAsciiString(m_currentGame); // save these off for if we get booted
 		if(ParseGameOptionsString(m_currentGame,options))
 		{
+			// Peer-side cncstats download: if the host just advertised a
+			// map CRC we don't have locally, fetch it from the cncstats
+			// server now so the lobby preview can show immediately
+			// (instead of waiting for the launch-time P2P transfer and
+			// requiring a game restart for the preview to load).
+			//
+			// The fetch runs on a worker thread: we are inside the network
+			// callback here, on the same thread that services the LAN
+			// heartbeat, so a slow CDN would freeze the lobby and get us
+			// dropped from the game. updateMapDownload() installs the map
+			// and flips the availability bit once the bytes are in.
+			//
+			// Hooks are set by GeneralsMD; null in classic Generals builds.
+			// On failure we fall through to the legacy at-launch P2P
+			// transfer in FileTransfer::DoAnyMapTransfers.
+			Int localSlot = m_currentGame->getLocalSlotNum();
+			if (TheMapDownloadStartHook != nullptr
+				&& !m_mapDownloadPending
+				&& localSlot >= 0
+				&& !m_currentGame->getConstSlot(localSlot)->hasMap()
+				&& m_currentGame->getMapCRC() != 0
+				&& m_currentGame->getMapCRC() != m_mapDownloadFailedCRC)
+			{
+				UnsignedInt crc = m_currentGame->getMapCRC();
+				if (TheMapDownloadStartHook(m_currentGame->getMap(), crc,
+					m_currentGame->getMapContentsMask()))
+				{
+					m_mapDownloadPending = TRUE;
+					m_mapDownloadCRC = crc;
+					UnicodeString msg;
+					msg.format(L"Downloading map from server...");
+					OnChat(L"SYSTEM", m_localIP, msg, LANCHAT_SYSTEM);
+				}
+				else
+				{
+					// Nothing started (no download URL, or one already in
+					// flight). Don't retry this CRC on every options packet.
+					m_mapDownloadFailedCRC = crc;
+				}
+			}
+
 			lanUpdateSlotList();
 			updateGameOptions();
 		}
@@ -493,6 +717,47 @@ void LANAPI::OnGameOptions( UnsignedInt playerIP, Int playerSlot, AsciiString op
 	}
 }
 
+// Completion half of the peer-side background map download kicked off in
+// OnGameOptions. The poll hook does the disk install and the MapCache refresh,
+// so it has to run here on the main thread rather than on the worker.
+void LANAPI::updateMapDownload()
+{
+	if (!m_mapDownloadPending || TheMapDownloadPollHook == nullptr)
+		return;
+
+	MapDownloadStatus status = TheMapDownloadPollHook();
+	if (status == MAPDOWNLOAD_PENDING)
+		return;
+
+	m_mapDownloadPending = FALSE;
+
+	// We left the game while the download was running: the result is moot.
+	if (m_currentGame == nullptr)
+		return;
+
+	UnicodeString msg;
+	if (status == MAPDOWNLOAD_INSTALLED)
+	{
+		// Re-apply the host's CRC so GameInfo's local mapAvailability bit flips
+		// from false to true now that the file exists on disk and MapCache
+		// knows about it. setMapCRC re-runs the cache lookup.
+		m_currentGame->setMapCRC(m_currentGame->getMapCRC());
+		RequestHasMap();
+		lanUpdateSlotList();
+		updateGameOptions();
+		msg.format(L"Map downloaded.");
+	}
+	else
+	{
+		// Don't hammer the server for this CRC again on every options packet.
+		// The launch-time P2P transfer from the host is still available as a
+		// fallback, which is what the message is telling the user.
+		m_mapDownloadFailedCRC = m_mapDownloadCRC;
+		msg.format(L"Map download failed; the host will send it when the game starts.");
+	}
+	OnChat(L"SYSTEM", m_localIP, msg, LANCHAT_SYSTEM);
+}
+
 
 /*
 void LANAPI::OnSlotList( ReturnType ret, LANGameInfo *theGame )
@@ -529,9 +794,44 @@ void LANAPI::OnPlayerJoin( Int slot, UnicodeString playerName )
 
 		// Send out the game options
 		RequestGameOptions(GenerateGameOptionsString(), true);
+
+		// Direct-connect games: joiners arrive by address with no LAN-lobby
+		// presence beforehand, so give the host an explicit heads-up in chat
+		// (on LAN you watch people walk in from the lobby; over a direct
+		// connect they just materialize in a slot).
+		if (m_currentGame->getIsDirectConnect())
+		{
+			UnicodeString msg;
+			msg.format(L"%s has joined the game.", playerName.str());
+			OnChat(L"", 0, msg, LANCHAT_SYSTEM);
+		}
 	}
 
 	lanUpdateSlotList();
+}
+
+// Pending observer-prompt state stashed for the MessageBoxYesNo callbacks,
+// which are plain function pointers and have no userData parameter. Set by
+// handleJoinDeny in LANAPIhandlers.cpp (where the join-deny payload lives), or
+// straight from RequestGameJoin when we already know the game is running;
+// consumed here in OnGameJoin to decide whether to show the observer prompt.
+UnsignedInt   s_pendingObserveHostIP   = 0;
+UnsignedShort s_pendingObservePort     = 0;
+
+static void lanAcceptObserveCallback()
+{
+	if (TheLAN && s_pendingObservePort != 0)
+	{
+		((LANAPI *)TheLAN)->RequestObserve(s_pendingObserveHostIP, s_pendingObservePort);
+	}
+	s_pendingObserveHostIP = 0;
+	s_pendingObservePort   = 0;
+}
+
+static void lanDeclineObserveCallback()
+{
+	s_pendingObserveHostIP = 0;
+	s_pendingObservePort   = 0;
 }
 
 void LANAPI::OnGameJoin( ReturnType ret, LANGameInfo *theGame )
@@ -555,6 +855,27 @@ void LANAPI::OnGameJoin( ReturnType ret, LANGameInfo *theGame )
 		options.format("NAT=%d", FirewallHelperClass::FIREWALL_TYPE_SIMPLE); // BGC: This is a LAN game, so there is no firewall.
 		RequestGameOptions( options, true );
 	}
+	else if (ret == RET_GAME_STARTED && s_pendingObservePort != 0)
+	{
+		// theGame may be null here because handleRequestJoin's deny payload
+		// for RET_GAME_STARTED doesn't set the game name; the joiner only
+		// needs the host IP + observer port, both already stashed by
+		// handleJoinDeny.
+		(void)theGame;
+		// Game's already started. Offer to spectate via the observer stream.
+		// The host advertised the TCP observer port in the JOIN_DENY payload;
+		// handleJoinDeny stashed it into s_pendingObservePort for us.
+		UnicodeString title, body;
+		title = TheGameText->fetch("LAN:JoinFailed");
+		body  = TheGameText->fetch("LAN:OfferObserveBody");
+		if (body.isEmpty())
+		{
+			// Fallback if the localization key hasn't been added yet so we
+			// still show something useful on dev builds.
+			body = L"This game is already in progress. Watch it as an observer?";
+		}
+		MessageBoxYesNo(title, body, lanAcceptObserveCallback, lanDeclineObserveCallback);
+	}
 	else if (ret != RET_BUSY)
 	{
 		/// @todo: re-enable lobby controls?  Error msgs?
@@ -562,6 +883,8 @@ void LANAPI::OnGameJoin( ReturnType ret, LANGameInfo *theGame )
 		title = TheGameText->fetch("LAN:JoinFailed");
 		body = getErrorStringFromReturnType(ret);
 		MessageBoxOk(title, body, nullptr);
+		s_pendingObserveHostIP = 0;
+		s_pendingObservePort   = 0;
 	}
 }
 
@@ -748,7 +1071,7 @@ void LANAPI::OnChat( UnicodeString player, UnsignedInt ip, UnicodeString message
 						Int colorIndex = gs->getColor();
 						MultiplayerColorDefinition *def = TheMultiplayerSettings->getColor(colorIndex);
 						if (def)
-							chatColor = def->getColor();
+							chatColor = GameMakeColorReadable(def->getColor());
 					}
 				}
 			}

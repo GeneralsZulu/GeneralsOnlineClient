@@ -421,18 +421,10 @@ extern Bool LANSocketErrorDetected;
 // connect to. RequestGameJoin sets them directly for the robust
 // (no-UDP-deny-needed) observe path below.
 //
-// STAGE 2: the Zulu fork defines these (and LANAPI::updateMapDownload below) in
-// LANAPICallbacks.cpp, which is hand-merged separately. Delete both definitions
-// from here when that file lands, or the link will fail on duplicate symbols.
-UnsignedInt   s_pendingObserveHostIP = 0;
-UnsignedShort s_pendingObservePort   = 0;
-
-// Peer-side background map download. OnGameOptions (LANAPICallbacks.cpp) starts
-// the fetch; until that file is merged nothing ever starts one, so this pump has
-// nothing to finish.
-void LANAPI::updateMapDownload()
-{
-}
+// Defined in LANAPICallbacks.cpp alongside the observe prompt that consumes
+// them; RequestGameJoin below is the other writer.
+extern UnsignedInt   s_pendingObserveHostIP;
+extern UnsignedShort s_pendingObservePort;
 
 void LANAPI::update()
 {
