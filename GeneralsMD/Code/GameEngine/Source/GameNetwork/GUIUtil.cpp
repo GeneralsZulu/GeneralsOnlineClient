@@ -71,6 +71,13 @@ void EnableAcceptControls(Bool Enabled, GameInfo *myGame, GameWindow *comboPlaye
 	if(slotNum == -1 || slotNum >= MAX_SLOTS )
 		slotNum = myGame->getLocalSlotNum();
 
+	// An options parse can leave us temporarily unmatched in the slot list, so
+	// getLocalSlotNum() can be -1 here; getConstSlot(-1) returns null and the
+	// dereference below crashed the client. Skip the refresh; the next update
+	// after the slot is restored redraws everything.
+	if (slotNum < 0 || myGame->getConstSlot(slotNum) == nullptr)
+		return;
+
 	Bool isObserver = myGame->getConstSlot(slotNum)->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER;
 
 	if( !myGame->amIHost() && (buttonStart != nullptr) )
@@ -299,7 +306,9 @@ void PopulatePlayerTemplateComboBox(Int comboBox, GameWindow *comboArray[], Game
 // -----------------------------------------------------------------------------
 
 // team colors for UI (team combo + minimap start positions).
-UnsignedInt GetTeamUiColor(Int teamNumber)
+// Declared in GUIUtil.h as Color (a signed Int) so every caller agrees on the
+// type; GameMakeColor already produces a Color.
+Color GetTeamUiColor(Int teamNumber)
 {
     switch (teamNumber)
     {
@@ -342,7 +351,7 @@ void PopulateTeamComboBox(Int comboBox, GameWindow *comboArray[], GameInfo *myGa
 		AsciiString teamStr;
 		teamStr.format("Team:%d", c + 1);
 		teamName = TheGameText->fetch(teamStr.str());
-        UnsignedInt teamColor = GetTeamUiColor(c);
+        Color teamColor = GetTeamUiColor(c);
         newIndex = GadgetComboBoxAddEntry(comboArray[comboBox],teamName,teamColor);
         GadgetComboBoxSetItemData(comboArray[comboBox], newIndex, (void *)c);
     }
