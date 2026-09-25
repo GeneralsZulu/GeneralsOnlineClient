@@ -47,3 +47,19 @@ struct RandomSlotAssignment
 // slots that changed and what changed, for callers that must push the roll
 // through an authoritative service instead of applying it locally.
 void performRandomAssign(GameInfo *game, std::vector<RandomSlotAssignment> *outChanges = nullptr);
+
+// Source of randomness for assignStartPositionsGlobal. Returns a value in
+// [lo, hi] inclusive. Game start passes a GameLogicRandomValue wrapper so
+// every peer computes the same assignment.
+typedef Int (*StartSpotRandomFunc)(Int lo, Int hi);
+
+// Assign start positions to every occupied non-observer slot that doesn't
+// have one, by enumerating all team-to-spot assignments and scoring the
+// arrangement as a whole: maximize the smallest opposing-player distance,
+// then minimize teammate spread, then pick randomly among near-ties.
+// Distances are ground-path based when the map cache has them (rivers and
+// cliffs separate spots that look adjacent), straight-line otherwise.
+// Deliberately chosen spots are honored and score as fixed points.
+// Which teammate gets which of the team's spots is then shuffled (the
+// enumeration itself hands them out in slot order).
+void assignStartPositionsGlobal(GameInfo *game, StartSpotRandomFunc randFunc);
