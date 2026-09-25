@@ -50,6 +50,7 @@
 #include "Common/BuildAssistant.h"
 #include "Common/Recorder.h"
 #include "Common/SpecialPower.h"
+#include "Common/StatsExporter.h"
 
 #include "GameClient/Anim2D.h"
 #include "GameClient/ControlBar.h"
@@ -6529,86 +6530,14 @@ void InGameUI::notifySpecialPowerUsed(Player* player, const SpecialPowerTemplate
 // every faction, plus the GLA supply stash). Capability is checked from command
 // sets rather than faction lists so captured cross-faction structures and stolen
 // dozers count naturally (and can make a player un-hunted again).
+//
+// The walk itself lives with the stats export as StatsExporterComputePlayerIsHunted:
+// it is the same question asked of the same objects, and the stats path needs it
+// during -simulateReplay where no InGameUI exists. What stays here is the viewer's
+// caching of the answer -- m_playerHunted / m_playerHuntedSinceFrame, refreshed on
+// a stagger by updateHuntedPlayers -- because the walk is far too expensive to run
+// per frame per player.
 //-----------------------------------------------------------------------------
-struct HuntedCheckData
-{
-	Bool hasBuilder;
-};
-
-// Whether a structure's command set can queue a dozer-kind unit. Resolving a command
-// set is a name walk over every set, so the answer is cached per command set name.
-static Bool templateCanBuildDozer(const Object *obj)
-{
-	static std::unordered_map<std::string, Bool> s_cache;
-	const AsciiString& setName = obj->getCommandSetString();
-	if (setName.isEmpty())
-		return FALSE;
-	std::unordered_map<std::string, Bool>::const_iterator found = s_cache.find(setName.str());
-	if (found != s_cache.end())
-		return found->second;
-
-	Bool canBuild = FALSE;
-	const CommandSet *commandSet = TheControlBar ? TheControlBar->findCommandSet(setName) : nullptr;
-	if (commandSet != nullptr)
-	{
-		for (Int j = 0; j < MAX_COMMANDS_PER_SET && !canBuild; ++j)
-		{
-			const CommandButton *button = commandSet->getCommandButton(j);
-			if (button == nullptr || button->getCommandType() != GUI_COMMAND_UNIT_BUILD)
-				continue;
-			const ThingTemplate *thing = button->getThingTemplate();
-			if (thing != nullptr && thing->isKindOf(KINDOF_DOZER))
-				canBuild = TRUE;
-		}
-	}
-	s_cache[setName.str()] = canBuild;
-	return canBuild;
-}
-
-static void huntedCheckObjectFn(Object *obj, void *userData)
-{
-	HuntedCheckData *data = (HuntedCheckData *)userData;
-	if (data->hasBuilder || obj == nullptr)
-		return;
-	if (obj->isEffectivelyDead())
-		return;
-
-	if (obj->isKindOf(KINDOF_DOZER))
-	{
-		data->hasBuilder = TRUE;
-		return;
-	}
-
-	// A GLA hole regrows its structure with a worker of its own, so the player is
-	// not out of builders while one stands.
-	if (obj->isKindOf(KINDOF_REBUILD_HOLE))
-	{
-		data->hasBuilder = TRUE;
-		return;
-	}
-
-	// A structure only counts if it is finished, not being sold, and can
-	// queue a dozer-kind unit from its command set. Units never can.
-	if (!obj->isKindOf(KINDOF_STRUCTURE))
-		return;
-	if (obj->getStatusBits().test(OBJECT_STATUS_UNDER_CONSTRUCTION))
-		return;
-	if (obj->getStatusBits().test(OBJECT_STATUS_SOLD))
-		return;
-	if (templateCanBuildDozer(obj))
-		data->hasBuilder = TRUE;
-}
-
-static Bool computePlayerIsHunted(const Player *player)
-{
-	if (player == nullptr)
-		return FALSE;
-
-	HuntedCheckData data;
-	data.hasBuilder = FALSE;
-	player->iterateObjects(huntedCheckObjectFn, &data);
-	return !data.hasBuilder;
-}
 
 //-------------------------------------------------------------------------------------------------
 /** Refresh the cached "hunted" flag for every player and announce the transitions.
@@ -6650,7 +6579,7 @@ void InGameUI::updateHuntedPlayers()
 			continue;
 		}
 
-		const Bool hunted = computePlayerIsHunted(player);
+		const Bool hunted = StatsExporterComputePlayerIsHunted(player);
 		if (hunted == m_playerHunted[playerIndex])
 			continue;
 
@@ -7276,14 +7205,13 @@ void InGameUI::drawRenderFps(Int& x, Int& y)
 		updateRenderFpsString();
 	}
 
-	UnsignedInt renderFpsLimit = 0u;
-	if (TheGlobalData->m_useFpsLimit)
+	// Show the cap actually in effect this frame: the pacer suspends it during
+	// fast-forward and replay catchup, so read the actual value rather than the
+	// raw user setting.
+	UnsignedInt renderFpsLimit = (UnsignedInt)TheFramePacer->getActualFramesPerSecondLimit();
+	if (renderFpsLimit == RenderFpsPreset::UncappedFpsValue)
 	{
-		renderFpsLimit = (UnsignedInt)TheFramePacer->getFramesPerSecondLimit();
-		if (renderFpsLimit == RenderFpsPreset::UncappedFpsValue)
-		{
-			renderFpsLimit = 0u;
-		}
+		renderFpsLimit = 0u;
 	}
 	if (renderFpsLimit != m_lastRenderFpsLimit)
 	{
