@@ -2887,8 +2887,36 @@ void ConnectionManager::notifyOthersOfNewFrame(UnsignedInt frame) {
 }
 
 void ConnectionManager::sendFrameDataToPlayer(UnsignedInt playerID, UnsignedInt startingFrame) {
-	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("ConnectionManager::sendFrameDataToPlayer - sending frame data to player %d starting with frame %d", playerID, startingFrame));
-	for (UnsignedInt frame = startingFrame; frame < TheGameLogic->getFrame(); ++frame) {
+	// TheSuperHackers @bugfix bill-rich 24/09/2026 Serve the current frame too.
+	// The loop stopped one short of it, which is exactly the frame a resend
+	// request asks for: allCommandsReady wipes the inconsistent frame on the
+	// requester and then asks us for it, so the answer was an empty one and
+	// recovery fell back entirely on the slower disconnect screen path.
+	//
+	// Also serve the frames inside the run-ahead window that have already been
+	// generated, since the requester may have lost those too and will need them
+	// the moment it catches up. The ring behind m_frameData only holds
+	// FRAMES_TO_KEEP frames either side of the simulation, so clamp to that;
+	// sendSingleFrameToPlayer refuses anything older on the same grounds.
+	const UnsignedInt currentFrame = TheGameLogic->getFrame();
+	UnsignedInt lastFrame = currentFrame;
+	if (TheNetwork != NULL) {
+		lastFrame += TheNetwork->getRunAhead();
+	}
+	if (lastFrame > (currentFrame + FRAMES_TO_KEEP)) {
+		lastFrame = currentFrame + FRAMES_TO_KEEP;
+	}
+
+	// Skip straight to the oldest frame we would actually serve rather than
+	// spinning through thousands of refusals; the disconnect screen can ask for a
+	// frame from very early in a long match.
+	UnsignedInt firstFrame = startingFrame;
+	if (((Int)currentFrame - FRAMES_TO_KEEP) > (Int)firstFrame) {
+		firstFrame = (UnsignedInt)((Int)currentFrame - FRAMES_TO_KEEP);
+	}
+
+	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("ConnectionManager::sendFrameDataToPlayer - sending frame data to player %d for frames %d..%d", playerID, firstFrame, lastFrame));
+	for (UnsignedInt frame = firstFrame; frame <= lastFrame; ++frame) {
 		sendSingleFrameToPlayer(playerID, frame);
 	}
 	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("ConnectionManager::sendFrameDataToPlayer - done sending commands to player %d", playerID));
@@ -2911,6 +2939,14 @@ void ConnectionManager::sendSingleFrameToPlayer(UnsignedInt playerID, UnsignedIn
 	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("ConnectionManager::sendFrameDataToPlayer - sending data for frame %d", frame));
 	for (Int i = 0; i < MAX_SLOTS; ++i) {
 		if ((m_frameData[i] != nullptr) && (i != playerID)) { // no need to send his own commands to him.
+			// TheSuperHackers @bugfix bill-rich 24/09/2026 A frame whose command count
+			// we have not been told yet reads back as -1 (FrameData's "unknown"), and
+			// serving that as a count would poison the requester's frame data for good.
+			// Frames inside the run-ahead window can legitimately be in that state, so
+			// skip them and let the live stream deliver them normally.
+			if (m_frameData[i]->getFrameCommandCount(frame) == (UnsignedInt)-1) {
+				continue;
+			}
 			NetCommandList *list = m_frameData[i]->getFrameCommandList(frame);
 			if (list != nullptr) {
 				NetCommandRef *ref = list->getFirstMessage();
