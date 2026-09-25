@@ -38,6 +38,7 @@
 #include "Common/PlayerList.h"
 #include "Common/RandomValue.h"
 #include "Common/Recorder.h"
+#include "Common/ReleaseLog.h"
 
 #include "GameClient/Diplomacy.h"
 #include "GameClient/GameText.h"
@@ -336,6 +337,8 @@ void ConnectionManager::init()
 	m_lastSentRunAhead = 0;
 	m_runAheadLowerTicks = 0;
 	m_frameGroupingMs = 0;
+	m_lastStallLogMs = 0;
+	resetNetStats();
 
 	m_frameMetrics.init();
 
@@ -666,11 +669,17 @@ Bool ConnectionManager::processNetCommand(NetCommandRef *ref) {
 }
 
 void ConnectionManager::processFrameResendRequest(NetFrameResendRequestCommandMsg *msg) {
+	++m_netStats.resendReqRx;
 	// first make sure this is a valid slot
 	const UnsignedInt playerID = msg->getPlayerID();
 	if (playerID >= MAX_SLOTS) {
 		return;
 	}
+
+	// Rare by design, so no rate limit: a resend request means a peer's copy of a
+	// frame was inconsistent and it is waiting on us to rebuild it.
+	ReleaseLog("NETRESEND serving slot=%u from frame %u (we are on %u)",
+		playerID, msg->getFrameToResend(), TheGameLogic->getFrame());
 
 	// make sure this player is still in our game.
 	if ((m_connections[playerID] == nullptr) || (m_connections[playerID]->isQuitting() == TRUE)) {
@@ -2202,6 +2211,12 @@ PlayerLeaveCode ConnectionManager::disconnectPlayer(Int slot) {
 		m_connections[slot] = nullptr;
 	}
 
+	// TheSuperHackers @feature bill-rich 24/09/2026 Forget the departed peer's
+	// telemetry too, so NETSTAT stops naming a slot nobody is waiting on any more.
+	// The rest of this player's state that feeds the lockstep (m_latencyAverages,
+	// m_fpsAverages) is already gated on the connection being live.
+	m_netStats.stallOn[slot] = 0;
+
 //	if (playerID == m_localSlot) {
 //		TheMessageStream->appendMessage(GameMessage::MSG_CLEAR_GAME_DATA);
 //	}
@@ -2927,6 +2942,8 @@ UnsignedInt ConnectionManager::getNextPacketRouterSlot(UnsignedInt playerID) {
 }
 
 void ConnectionManager::requestFrameDataResend(Int playerID, UnsignedInt frame) {
+	++m_netStats.resendReqTx;
+	ReleaseLog("NETRESEND requesting frame=%u from slot=%d (frame data inconsistent)", frame, playerID);
 	NetFrameResendRequestCommandMsg *msg = newInstance(NetFrameResendRequestCommandMsg);
 	msg->setPlayerID(m_localSlot);
 	msg->setFrameToResend(frame);
@@ -2946,4 +2963,114 @@ void ConnectionManager::requestFrameDataResend(Int playerID, UnsignedInt frame) 
 	}
 
 	msg->detach();
+}
+
+// -----------------------------------------------------------------------------
+// TheSuperHackers @feature bill-rich 24/09/2026 Lockstep health telemetry.
+//
+// Nothing in the lockstep layer wrote to ReleaseLog before this, so a match that
+// "felt choppy" left no trace: no stall, no retry, no run-ahead change. One
+// NETSTAT line every NET_STATS_INTERVAL_MS while in-game, plus a NETSTALL line
+// for any single wait past NET_STALL_LOG_MS. Kept deliberately small.
+//
+// A stall is the simulation waiting on a peer's frame data; a hitch is the local
+// main thread not turning at all. Separating the two is what tells "his link"
+// apart from "his box".
+// -----------------------------------------------------------------------------
+void ConnectionManager::resetNetStats() {
+	memset(&m_netStats, 0, sizeof(m_netStats));
+}
+
+UnsignedInt ConnectionManager::getNotReadyMask(UnsignedInt frame) {
+	UnsignedInt mask = 0;
+	for (Int i = 0; i < MAX_SLOTS; ++i) {
+		if ((m_frameData[i] != nullptr) && (m_frameData[i]->getIsQuitting() == FALSE)) {
+			if (!m_frameData[i]->isFrameReady(frame)) {
+				mask |= (1 << i);
+			}
+		}
+	}
+	return mask;
+}
+
+void ConnectionManager::noteStall(UnsignedInt frame, UnsignedInt durationMs, UnsignedInt notReadyMask) {
+	++m_netStats.stallCount;
+	m_netStats.stallMs += durationMs;
+	if (durationMs > m_netStats.stallMaxMs) {
+		m_netStats.stallMaxMs = durationMs;
+	}
+	for (Int i = 0; i < MAX_SLOTS; ++i) {
+		if (notReadyMask & (1 << i)) {
+			++m_netStats.stallOn[i];
+		}
+	}
+	if (durationMs >= (UnsignedInt)NET_STALL_LOG_MS) {
+		const UnsignedInt now = timeGetTime();
+		if ((m_lastStallLogMs == 0) || ((now - m_lastStallLogMs) >= 5000)) {
+			m_lastStallLogMs = now;
+			ReleaseLog("NETSTALL frame=%u waited=%ums on=0x%02x", frame, durationMs, notReadyMask);
+		}
+	}
+}
+
+void ConnectionManager::noteHitch(UnsignedInt gapMs) {
+	++m_netStats.hitchCount;
+	if (gapMs > m_netStats.hitchMaxMs) {
+		m_netStats.hitchMaxMs = gapMs;
+	}
+}
+
+void ConnectionManager::emitNetStats(UnsignedInt frame, Int runAhead, Int frameRate) {
+	// links=[slot:retries+repeats/srttms ...] one entry per live connection.
+	// Retries fired the adaptive timer (probable loss); repeats are the deliberate
+	// per-packet frame-info redundancy and are normal whenever the round trip
+	// exceeds the send interval.
+	char links[160];
+	Int len = 0;
+	links[0] = 0;
+	Int i;
+	for (i = 0; (i < MAX_SLOTS) && (len < (Int)sizeof(links) - 16); ++i) {
+		if (m_connections[i] == nullptr) {
+			continue;
+		}
+		len += snprintf(links + len, sizeof(links) - len, "%s%d:%d+%d/%d",
+			len ? " " : "", i, m_connections[i]->takeResendCount(), m_connections[i]->takeRedundantCount(),
+			m_connections[i]->getSmoothedRttMs());
+	}
+
+	// on=[slot:stalls ...] which peers we were waiting on when a stall began.
+	char on[96];
+	len = 0;
+	on[0] = 0;
+	for (i = 0; (i < MAX_SLOTS) && (len < (Int)sizeof(on) - 12); ++i) {
+		if (m_netStats.stallOn[i] == 0) {
+			continue;
+		}
+		len += snprintf(on + len, sizeof(on) - len, "%s%d:%u", len ? " " : "", i, m_netStats.stallOn[i]);
+	}
+
+	// peers=[slot:reportedms ...] only the packet router knows these.
+	char peers[128];
+	len = 0;
+	peers[0] = 0;
+	if (m_localSlot == m_packetRouterSlot) {
+		for (i = 0; (i < MAX_SLOTS) && (len < (Int)sizeof(peers) - 12); ++i) {
+			if ((i == (Int)m_localSlot) || !isPlayerConnected(i)) {
+				continue;
+			}
+			len += snprintf(peers + len, sizeof(peers) - len, "%s%d:%d", len ? " " : "", i, (Int)(m_latencyAverages[i] * 1000.0f));
+		}
+	}
+
+	ReleaseLog("NETSTAT frame=%u ra=%d fps=%d router=%d lat=%d/%d links=[%s] stall=%u/%ums/max%u on=[%s] hitch=%u/max%u rreq=%u/%u peers=[%s]",
+		frame, runAhead, frameRate, (Int)m_packetRouterSlot,
+		(Int)(m_frameMetrics.getAverageLatency() * 1000.0f),
+		(Int)(getReportedRunAheadLatency() * 1000.0f),
+		links,
+		m_netStats.stallCount, m_netStats.stallMs, m_netStats.stallMaxMs,
+		on,
+		m_netStats.hitchCount, m_netStats.hitchMaxMs,
+		m_netStats.resendReqTx, m_netStats.resendReqRx,
+		peers);
+	resetNetStats();
 }

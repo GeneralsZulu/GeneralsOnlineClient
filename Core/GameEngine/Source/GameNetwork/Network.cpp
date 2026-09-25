@@ -51,6 +51,7 @@
 #include "GameLogic/ScriptEngine.h"
 #include "Common/Recorder.h"
 #include "GameClient/MessageBox.h"
+#include "Common/ReleaseLog.h"
 #include "../NGMP_include.h"
 
 
@@ -225,6 +226,14 @@ protected:
 	Bool m_frameDataReady;																		///< Is the frame data for the next frame ready to be executed by TheGameLogic?
 	Bool m_isStalling;
 
+	// TheSuperHackers @feature bill-rich 24/09/2026 Telemetry bookkeeping, see
+	// ConnectionManager::emitNetStats.
+	UnsignedInt m_lastUpdateMs;				///< Wall clock of the previous in-game update() (0 = none); a big gap is a hitch.
+	UnsignedInt m_stallStartMs;				///< When the current wait for frame data became late (0 = not stalling).
+	UnsignedInt m_stallMask;					///< Slots we were waiting on when the stall began.
+	UnsignedInt m_lastStatsMs;				///< Last NETSTAT emission.
+	UnsignedInt m_lastRunAheadLogMs;	///< Rate limit for the NETRA line.
+
 	// CRC info
 	Bool m_checkCRCsThisFrame;
 	Bool m_sawCRCMismatch;
@@ -288,6 +297,11 @@ Network::Network()
 	m_sawCRCMismatch = FALSE;
 	m_conMgr = NULL;
 	m_messageWindow = NULL;
+	m_lastUpdateMs = 0;
+	m_stallStartMs = 0;
+	m_stallMask = 0;
+	m_lastStatsMs = 0;
+	m_lastRunAheadLogMs = 0;
 
 #if defined(RTS_DEBUG)
 	m_networkOn = TRUE;
@@ -350,6 +364,11 @@ void Network::init()
 	m_frameDataReady = FALSE;
 	m_isStalling = FALSE;
 	m_didSelfSlug = FALSE;
+	m_lastUpdateMs = 0;
+	m_stallStartMs = 0;
+	m_stallMask = 0;
+	m_lastStatsMs = 0;
+	m_lastRunAheadLogMs = 0;
 
 	m_localStatus = NETLOCALSTATUS_PREGAME;
 
@@ -703,6 +722,16 @@ void Network::processFrameSynchronizedNetCommand(NetCommandRef* msg) {
 }
 
 void Network::processRunAheadCommand(NetRunAheadCommandMsg* msg) {
+	// TheSuperHackers @feature bill-rich 24/09/2026 A run-ahead change is the one
+	// lockstep event a player actually feels, so put it in the release log.
+	if ((m_runAhead != msg->getRunAhead()) || (m_frameRate != msg->getFrameRate())) {
+		const UnsignedInt now = timeGetTime();
+		if ((m_lastRunAheadLogMs == 0) || ((now - m_lastRunAheadLogMs) >= 1000)) {
+			m_lastRunAheadLogMs = now;
+			ReleaseLog("NETRA frame=%u runahead %d->%d fps %d->%d",
+				TheGameLogic->getFrame(), m_runAhead, msg->getRunAhead(), m_frameRate, msg->getFrameRate());
+		}
+	}
 	m_runAhead = msg->getRunAhead();
 	m_frameRate = msg->getFrameRate();
 	time_t frameGrouping = (1000 * m_runAhead) / m_frameRate; // number of miliseconds between packet sends
@@ -781,6 +810,18 @@ void Network::update()
 #endif
 
 	GetCommandsFromCommandList(); // Remove commands from TheCommandList and send them to the connection manager.
+
+	// TheSuperHackers @feature bill-rich 24/09/2026 A gap between consecutive
+	// updates means the main thread was not turning at all (a blocking call, a
+	// frozen machine); while the sim merely waits on a peer, update() keeps being
+	// called every loop. Separating the two is what tells "his link" from "his box".
+	const UnsignedInt nowMs = timeGetTime();
+	const Bool inGame = (m_conMgr != NULL) && (m_localStatus == NETLOCALSTATUS_INGAME);
+	if (inGame && (m_lastUpdateMs != 0) && ((nowMs - m_lastUpdateMs) >= (UnsignedInt)NET_HITCH_MS)) {
+		m_conMgr->noteHitch(nowMs - m_lastUpdateMs);
+	}
+	m_lastUpdateMs = inGame ? (nowMs ? nowMs : 1) : 0;
+
 	if (m_conMgr != NULL) {
 		if (m_localStatus == NETLOCALSTATUS_INGAME) {
 #if defined(GENERALS_ONLINE_RUN_FAST)
@@ -813,6 +854,10 @@ void Network::update()
 	const Bool inCatchup = TheRecorder && TheRecorder->isResumeCatchupMode() && !TheRecorder->isResumeCatchupLeadIn();
 
 	if (!resumeFrozen && AllCommandsReady(TheGameLogic->getFrame())) { // If all the commands are ready for the next frame...
+		if ((m_stallStartMs != 0) && (m_conMgr != NULL)) {
+			m_conMgr->noteStall(TheGameLogic->getFrame(), nowMs - m_stallStartMs, m_stallMask);
+		}
+		m_stallStartMs = 0;
 		m_conMgr->handleAllCommandsReady();
 		//		DEBUG_LOG(("Network::update - frame %d is ready", TheGameLogic->getFrame()));
 		if (inCatchup || timeForNewFrame()) { // This needs to come after any other pre-frame execution checks as this changes the timing variables.
@@ -824,6 +869,21 @@ void Network::update()
 		__int64 curTime;
 		QueryPerformanceCounter((LARGE_INTEGER*)&curTime);
 		m_isStalling = curTime >= m_nextFrameTime;
+		// Not during the resume-from-replay freeze: that hold is deliberate, and
+		// counting it as a stall would blame a peer for our own countdown.
+		if (m_isStalling && inGame && !resumeFrozen && (m_stallStartMs == 0)) {
+			m_stallStartMs = nowMs ? nowMs : 1;
+			m_stallMask = m_conMgr->getNotReadyMask(TheGameLogic->getFrame());
+		}
+	}
+
+	if (inGame) {
+		if (m_lastStatsMs == 0) {
+			m_lastStatsMs = nowMs ? nowMs : 1;
+		} else if ((nowMs - m_lastStatsMs) >= (UnsignedInt)NET_STATS_INTERVAL_MS) {
+			m_lastStatsMs = nowMs;
+			m_conMgr->emitNetStats(TheGameLogic->getFrame(), m_runAhead, m_frameRate);
+		}
 	}
 }
 

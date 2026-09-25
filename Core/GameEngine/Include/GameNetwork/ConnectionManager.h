@@ -155,6 +155,13 @@ public:
 	Int getAverageFPS();
 	Int getSlotAverageFPS(Int slot);
 
+	// TheSuperHackers @feature bill-rich 24/09/2026 Lockstep health telemetry
+	// (ReleaseLog NETSTAT / NETSTALL lines).
+	UnsignedInt getNotReadyMask(UnsignedInt frame);					///< Bit per slot whose frame data we are still waiting on.
+	void noteStall(UnsignedInt frame, UnsignedInt durationMs, UnsignedInt notReadyMask);
+	void noteHitch(UnsignedInt gapMs);
+	void emitNetStats(UnsignedInt frame, Int runAhead, Int frameRate);
+
 #if defined(RTS_DEBUG)
 	void debugPrintConnectionCommands();
 #endif
@@ -238,6 +245,23 @@ private:
 	Int m_lastSentRunAhead;
 	Int m_runAheadLowerTicks;
 	Int m_frameGroupingMs;		///< Current packet send interval (before the router's halving), for jitter sizing.
+
+	// TheSuperHackers @feature bill-rich 24/09/2026 Counters behind the NETSTAT
+	// line, reset every time one is emitted.
+	struct NetStats
+	{
+		UnsignedInt stallCount;
+		UnsignedInt stallMs;
+		UnsignedInt stallMaxMs;
+		UnsignedInt stallOn[MAX_SLOTS];
+		UnsignedInt hitchCount;
+		UnsignedInt hitchMaxMs;
+		UnsignedInt resendReqTx;
+		UnsignedInt resendReqRx;
+	};
+	NetStats m_netStats;
+	UnsignedInt m_lastStallLogMs;
+	void resetNetStats();
 
 	// -----------------------------------------------------------------------------
 	FileCommandMap s_fileCommandMap;
