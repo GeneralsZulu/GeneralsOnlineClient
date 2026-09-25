@@ -49,6 +49,12 @@ Connection::Connection() {
 	m_isQuitting = false;
 	m_quitTime = 0;
 	m_averageLatency = 0.0f;
+	m_srtt = 0.0f;
+	m_rttvar = 0.0f;
+	m_rttSeeded = FALSE;
+	m_adaptiveRetryMs = NET_RETRY_DEFAULT_MS;
+	m_resendCount = 0;
+	m_redundantCount = 0;
 	Int i;
 	for(i = 0; i < CONNECTION_LATENCY_HISTORY_LENGTH; i++)
 	{
@@ -91,6 +97,12 @@ void Connection::init() {
 		m_latencies[i] = 0;
 	}
 	m_averageLatency = 0;
+	m_srtt = 0.0f;
+	m_rttvar = 0.0f;
+	m_rttSeeded = FALSE;
+	m_adaptiveRetryMs = NET_RETRY_DEFAULT_MS;
+	m_resendCount = 0;
+	m_redundantCount = 0;
 	m_isQuitting = FALSE;
 	m_quitTime = 0;
 }
@@ -290,14 +302,27 @@ UnsignedInt Connection::doSend() {
 			NetCommandRef *next = msg->getNext(); // Need this since msg could be deleted
 
 			time_t timeLastSent = msg->getTimeLastSent();
+			const Bool neverSent = (timeLastSent == -1);
 
-			if (((curtime - timeLastSent) > m_retryTime) || (timeLastSent == -1)) {
+			// TheSuperHackers @feature bill-rich 24/09/2026 The retry interval is per
+			// command now: the adaptive RTT estimate for most of them, zero (i.e. every
+			// packet) for frame info that is still ahead of the simulation.
+			const time_t interval = retryIntervalFor(msg);
+
+			if (neverSent || ((curtime - timeLastSent) >= interval)) {
 				notDone = packet->addCommand(msg);
 				if (notDone) {
 					// the msg command was added to the packet.
 					if (CommandRequiresAck(msg->getCommand())) {
-						if (timeLastSent != -1) {
+						if (!neverSent) {
 							++m_numRetries;
+							if (interval == 0) {
+								++m_redundantCount;
+							} else {
+								++m_resendCount;
+							}
+						} else {
+							msg->setTimeFirstSent(curtime);
 						}
 						doRetryMetrics();
 						msg->setTimeLastSent(curtime);
@@ -378,11 +403,22 @@ NetCommandRef * Connection::processAck(UnsignedShort commandID, UnsignedByte ori
 
 	Int index = temp->getCommand()->getID() % CONNECTION_LATENCY_HISTORY_LENGTH;
 	m_averageLatency -= ((Real)(m_latencies[index])) / CONNECTION_LATENCY_HISTORY_LENGTH;
-	Real lat = timeGetTime() - temp->getTimeLastSent();
+	// TheSuperHackers @feature bill-rich 24/09/2026 Measure from the FIRST send. With
+	// frame info repeated in every packet most commands go out more than once; timing
+	// from the last copy would produce tiny samples whenever the original's ack was
+	// simply still in flight, and the estimate would spiral down into ever more resends.
+	time_t sentAt = temp->getTimeFirstSent();
+	if (sentAt == -1) {
+		sentAt = temp->getTimeLastSent();
+	}
+	Real lat = (Real)(timeGetTime() - sentAt);
 
 	NetworkLog(ELogVerbosity::LOG_DEBUG, "Latency calc is %f, avg is %f", lat, m_averageLatency);
 	m_averageLatency += lat / CONNECTION_LATENCY_HISTORY_LENGTH;
 	m_latencies[index] = lat;
+	if (temp->getTimeLastSent() != -1) {
+		addRttSample(lat);
+	}
 
 #if defined(RTS_DEBUG)
 	if (doDebug == TRUE) {
@@ -396,6 +432,76 @@ NetCommandRef * Connection::processAck(UnsignedShort commandID, UnsignedByte ori
 void Connection::setFrameGrouping(time_t frameGrouping) {
 	m_frameGrouping = frameGrouping;
 //	m_retryTime = frameGrouping * 4;
+}
+
+/**
+ * How long a command may sit unacked before it goes out again.
+ */
+time_t Connection::retryIntervalFor(const NetCommandRef *msg) const {
+	if (NET_LEGACY_TIMING) {
+		return m_retryTime;
+	}
+	const NetCommandMsg *cmd = msg->getCommand();
+	if ((cmd->getNetCommandType() == NETCOMMANDTYPE_FRAMEINFO)
+			&& ((cmd->getExecutionFrame() + 1) >= TheGameLogic->getFrame())) {
+		// Frame info gates every frame of the lockstep and repeat-codes down to a
+		// couple of bytes, so repeat it in every packet while the frame it describes
+		// is still ahead of the simulation. One lost packet then costs one send
+		// interval instead of a retry timeout. Once the sim has passed the frame the
+		// info is only needed to clear the ack, so it falls back to the adaptive
+		// interval and the pending set stays bounded.
+		return 0;
+	}
+	return m_adaptiveRetryMs;
+}
+
+/**
+ * TCP-style smoothed RTT with variance (RFC 6298 shape), clamped for use as the
+ * retry interval. Called from processAck with a sample measured from the
+ * command's first send.
+ */
+void Connection::addRttSample(Real ms) {
+	// A sample longer than the retry ceiling is a stalled peer (map load, a
+	// disconnect screen), not a round trip; feeding 45s into the estimator would
+	// pin the retry interval at its ceiling for dozens of samples.
+	if (ms > (Real)NET_RETRY_MAX_MS) {
+		ms = (Real)NET_RETRY_MAX_MS;
+	}
+	if (ms < 0.0f) {
+		ms = 0.0f;
+	}
+	if (!m_rttSeeded) {
+		m_srtt = ms;
+		m_rttvar = ms / 2.0f;
+		m_rttSeeded = TRUE;
+	} else {
+		Real err = m_srtt - ms;
+		if (err < 0.0f) {
+			err = -err;
+		}
+		m_rttvar = 0.75f * m_rttvar + 0.25f * err;
+		m_srtt = 0.875f * m_srtt + 0.125f * ms;
+	}
+	// Variance floor: acks ride the peer's next send interval and the receiver's
+	// next engine loop, so even a clean link jitters by tens of milliseconds. A
+	// spurious retry is only a duplicate packet, but keep them rare.
+	Real var4 = 4.0f * m_rttvar;
+	if (var4 < 50.0f) {
+		var4 = 50.0f;
+	}
+	m_adaptiveRetryMs = clamp<Int>(NET_RETRY_MIN_MS, (Int)(m_srtt + var4), NET_RETRY_MAX_MS);
+}
+
+Int Connection::takeResendCount() {
+	Int n = m_resendCount;
+	m_resendCount = 0;
+	return n;
+}
+
+Int Connection::takeRedundantCount() {
+	Int n = m_redundantCount;
+	m_redundantCount = 0;
+	return n;
 }
 
 void Connection::doRetryMetrics() {

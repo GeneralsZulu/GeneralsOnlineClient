@@ -54,6 +54,40 @@ static constexpr const Int CATCHUP_FRAME_RATE = 1000;
 static constexpr const Int FRAME_DATA_LENGTH = (MAX_FRAMES_AHEAD + 1) * 2;
 static constexpr const Int FRAMES_TO_KEEP = (MAX_FRAMES_AHEAD / 2) + 1;
 
+// TheSuperHackers @feature bill-rich 24/09/2026 Lockstep resilience tuning.
+// One player on a lossy or jittery link used to drag a whole game down, because
+// every command that needs an ack was retried on a fixed 2s timer and run-ahead
+// was sized from mean latency alone. The rationale for each value lives beside
+// the code that uses it; NetworkUtil.cpp carries the summary.
+//
+// NET_LEGACY_TIMING restores the retail behaviour (fixed retry, mean-latency
+// run-ahead, no send-interval cap) so a lab run can A/B the two on the same
+// network shape. It is a variable rather than a constant because it is meant to
+// be flipped from the command line; see the note in NetworkUtil.cpp.
+extern Bool NET_LEGACY_TIMING;
+
+// Adaptive retry bounds, in milliseconds. The estimate is TCP-shaped
+// (SRTT + 4*RTTVAR) and clamped into this range; NET_RETRY_MAX_MS is the
+// retail fixed value, now only a ceiling.
+static constexpr const Int NET_RETRY_MIN_MS = 60;
+static constexpr const Int NET_RETRY_MAX_MS = 2000;
+static constexpr const Int NET_RETRY_DEFAULT_MS = 300;		///< Used until the first ack sample arrives.
+
+// Ceiling on the packet send interval derived from run-ahead. See
+// Network::processRunAheadCommand.
+static constexpr const Int NET_SEND_INTERVAL_MAX_MS = 100;
+
+// Jitter-aware run-ahead. See FrameMetrics::getRunAheadLatency and the
+// hysteresis in ConnectionManager::updateRunAhead.
+static constexpr const Int NET_RUNAHEAD_LAT_PERCENTILE = 95;
+static constexpr const Int NET_RUNAHEAD_JITTER_CAP_MS = 250;
+static constexpr const Int NET_RUNAHEAD_DECAY_TICKS = 6;
+
+// ReleaseLog telemetry pacing. See ConnectionManager::emitNetStats.
+static constexpr const Int NET_STATS_INTERVAL_MS = 10000;
+static constexpr const Int NET_HITCH_MS = 200;
+static constexpr const Int NET_STALL_LOG_MS = 500;
+
 // This is the connection numbering: 1-8 are for players
 enum ConnectionNumbers CPP_11(: Int)
 {

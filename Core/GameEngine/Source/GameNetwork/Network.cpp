@@ -722,6 +722,14 @@ void Network::processRunAheadCommand(NetRunAheadCommandMsg* msg) {
 	}
 #endif
 
+	// TheSuperHackers @feature bill-rich 24/09/2026 Cap the packet send interval.
+	// It is derived from run-ahead, which makes it both the floor on how fast a
+	// lost packet can be repeated and a feedback path into the latency samples
+	// that size run-ahead in the first place. See NetworkUtil.cpp.
+	if (!NET_LEGACY_TIMING && (frameGrouping > NET_SEND_INTERVAL_MAX_MS)) {
+		frameGrouping = NET_SEND_INTERVAL_MAX_MS;
+	}
+
 	m_conMgr->setFrameGrouping(frameGrouping);
 }
 

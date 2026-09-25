@@ -27,6 +27,24 @@
 
 #include "GameNetwork/networkutil.h"
 
+// TheSuperHackers @feature bill-rich 24/09/2026 Lockstep resilience.
+//
+// Every command that needs an ack used to be retried on a fixed 2s timer, so
+// one lost packet carrying frame data froze the whole lockstep game for up to
+// two seconds. Retries now follow a per-connection RTT estimate (TCP-style
+// SRTT + 4*RTTVAR, clamped to NET_RETRY_MIN_MS..NET_RETRY_MAX_MS), and
+// frame-info commands, which gate every frame and repeat-code down to a couple
+// of bytes, ride in every packet until acked. Run-ahead is sized from a high
+// percentile of the latency history rather than the mean, so a link that spikes
+// does not stall on every spike, and the packet send interval is capped so a
+// large run-ahead cannot become the floor on loss recovery.
+//
+// NET_LEGACY_TIMING puts all of that back the way retail had it, for A/B runs.
+// TheSuperHackers @todo bill-rich 24/09/2026 Nothing sets this yet: the
+// "-netlegacy" command-line switch that flips it lives in CommandLine.cpp,
+// which is outside this change.
+Bool NET_LEGACY_TIMING = FALSE;
+
 #ifdef DEBUG_LOGGING
 
 void dumpBufferToLog(const void *vBuf, Int len, const char *fname, Int line)

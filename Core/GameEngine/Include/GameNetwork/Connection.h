@@ -80,12 +80,22 @@ public:
 	void setQuitting();
 	Bool isQuitting() { return m_isQuitting; }
 
+	// TheSuperHackers @feature bill-rich 24/09/2026 Telemetry for the NETSTAT line:
+	// resends since the last call, and the RTT estimate / retry interval this
+	// connection is currently using.
+	Int takeResendCount();				///< Adaptive-timer retries (probable loss) since the last call.
+	Int takeRedundantCount();			///< Deliberate frame-info repeats since the last call.
+	Int getSmoothedRttMs() const { return (Int)m_srtt; }
+	Int getRetryMs() const { return m_adaptiveRetryMs; }
+
 #if defined(RTS_DEBUG)
 	void debugPrintCommands();
 #endif
 
 protected:
 	void doRetryMetrics();
+	time_t retryIntervalFor(const NetCommandRef *msg) const;
+	void addRttSample(Real ms);
 
 	Bool m_isQuitting;
 	UnsignedInt m_quitTime;
@@ -102,4 +112,15 @@ protected:
 	time_t m_lastTimeSent;				///< The time of the last packet send.
 	Int m_numRetries;							///< The number of retries for the last second.
 	time_t m_retryMetricsTime;		///< The start time of the current retry metrics thing.
+
+	// TheSuperHackers @feature bill-rich 24/09/2026 Adaptive retry, see the notes
+	// in NetworkUtil.cpp. Samples are measured from a command's FIRST send, so a
+	// retried command can only push the estimate up, never collapse it into a
+	// resend feedback loop.
+	Real m_srtt;
+	Real m_rttvar;
+	Bool m_rttSeeded;
+	Int m_adaptiveRetryMs;
+	Int m_resendCount;						///< Timer retries since the last takeResendCount().
+	Int m_redundantCount;					///< Frame-info repeats since the last takeRedundantCount().
 };
