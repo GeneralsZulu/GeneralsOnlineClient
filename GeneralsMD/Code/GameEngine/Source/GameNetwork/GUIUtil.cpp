@@ -495,7 +495,10 @@ void UpdateSlotList( GameInfo *myGame, GameWindow *comboPlayer[],
 			}
 			else
 			{
-				GadgetComboBoxSetSelectedPos(comboPlayer[i], slot->getState(), TRUE);
+				// Combo position is not the SlotState value: the list runs
+				// Open/Closed/Tactical/Hard/Medium/Easy, and SLOT_PLAYER and
+				// SLOT_TACTICAL_AI both sit past its end.
+				GadgetComboBoxSetSelectedPos(comboPlayer[i], lobbyComboPosFromSlotState(slot->getState()), TRUE);
 				if (buttonAccept && buttonAccept[i])
 					buttonAccept[i]->winHide(TRUE);
 

@@ -1919,11 +1919,21 @@ void InitWOLGameGadgets()
 
 		if (theGameInfo->getLocalSlotNum() != i)
 		{
+			// AI tiers run strongest-first, matching the LAN and Skirmish lobbies.
+			// slotStateFromLobbyComboPos / lobbyComboPosFromSlotState (GameInfo.h)
+			// are the only translation between a position here and a SlotState.
 			GadgetComboBoxAddEntry(comboBoxPlayer[i], TheGameText->fetch("GUI:Open"), GameSpyColor[GSCOLOR_PLAYER_NORMAL]);
+			GadgetComboBoxSetItemData(comboBoxPlayer[i], 0, (void *)SLOT_OPEN);
 			GadgetComboBoxAddEntry(comboBoxPlayer[i], TheGameText->fetch("GUI:Closed"), GameSpyColor[GSCOLOR_PLAYER_NORMAL]);
-			GadgetComboBoxAddEntry(comboBoxPlayer[i], TheGameText->fetch("GUI:EasyAI"), GameSpyColor[GSCOLOR_PLAYER_NORMAL]);
-			GadgetComboBoxAddEntry(comboBoxPlayer[i], TheGameText->fetch("GUI:MediumAI"), GameSpyColor[GSCOLOR_PLAYER_NORMAL]);
+			GadgetComboBoxSetItemData(comboBoxPlayer[i], 1, (void *)SLOT_CLOSED);
+			GadgetComboBoxAddEntry(comboBoxPlayer[i], TheGameText->fetch("GUI:TacticalAI"), GameSpyColor[GSCOLOR_PLAYER_NORMAL]);
+			GadgetComboBoxSetItemData(comboBoxPlayer[i], 2, (void *)SLOT_TACTICAL_AI);
 			GadgetComboBoxAddEntry(comboBoxPlayer[i], TheGameText->fetch("GUI:HardAI"), GameSpyColor[GSCOLOR_PLAYER_NORMAL]);
+			GadgetComboBoxSetItemData(comboBoxPlayer[i], 3, (void *)SLOT_BRUTAL_AI);
+			GadgetComboBoxAddEntry(comboBoxPlayer[i], TheGameText->fetch("GUI:MediumAI"), GameSpyColor[GSCOLOR_PLAYER_NORMAL]);
+			GadgetComboBoxSetItemData(comboBoxPlayer[i], 4, (void *)SLOT_MED_AI);
+			GadgetComboBoxAddEntry(comboBoxPlayer[i], TheGameText->fetch("GUI:EasyAI"), GameSpyColor[GSCOLOR_PLAYER_NORMAL]);
+			GadgetComboBoxSetItemData(comboBoxPlayer[i], 5, (void *)SLOT_EASY_AI);
 			GadgetComboBoxSetSelectedPos(comboBoxPlayer[i], 0);
 		}
 		else
@@ -4204,8 +4214,15 @@ WindowMsgHandledType WOLGameSetupMenuSystem( GameWindow *window, UnsignedInt msg
 						// Get
 						Int pos = -1;
 						GadgetComboBoxGetSelectedPos(comboBoxPlayer[i], &pos);
-						if (pos != SLOT_PLAYER && pos >= 0)
+						// Combo lays out Open/Closed/Tactical/Hard/Medium/Easy at positions 0..5
+						// (AI tiers strongest-first). slotStateFromLobbyComboPos translates the
+						// selected position into the corresponding SlotState. The retail guard
+						// here was `pos != SLOT_PLAYER`, which only ever kept a five-entry combo
+						// from selecting past its end; a sixth entry collided with it and
+						// silently dropped every Tactical AI click.
+						if (pos >= 0)
 						{
+							SlotState newState = slotStateFromLobbyComboPos(pos);
 							if (myGame->getSlot(i)->getState() == SLOT_PLAYER)
 							{
 								// TODO_NGMP: Support kick again
@@ -4228,8 +4245,8 @@ WindowMsgHandledType WOLGameSetupMenuSystem( GameWindow *window, UnsignedInt msg
 								int64_t userBeingKicked = pSlot->m_userID;
 
 								pLobbyInterface->UpdateCurrentLobby_KickUser(userBeingKicked, name);
-								pLobbyInterface->UpdateCurrentLobby_SetSlotState(i, SlotState(pos));  // use what host selected
-								myGame->getSlot(i)->setState(SlotState(pos));
+								pLobbyInterface->UpdateCurrentLobby_SetSlotState(i, newState);  // use what host selected
+								myGame->getSlot(i)->setState(newState);
 								myGame->resetAccepted();
 
 								// // TODO_NGMP
@@ -4239,10 +4256,10 @@ WindowMsgHandledType WOLGameSetupMenuSystem( GameWindow *window, UnsignedInt msg
 								WOLDisplaySlotList();
 								//TheLAN->OnPlayerLeave(name);
 							}
-							else if (myGame->getSlot(i)->getState() != pos)
+							else if (myGame->getSlot(i)->getState() != newState)
 							{
 								Bool wasAI = (myGame->getSlot(i)->isAI());
-								myGame->getSlot(i)->setState(SlotState(pos));
+								myGame->getSlot(i)->setState(newState);
 								Bool isAI = (myGame->getSlot(i)->isAI());
 								myGame->resetAccepted();
 								if (TheNGMPGame && TheNGMPGame->IsCountdownStarted())
@@ -4254,7 +4271,7 @@ WindowMsgHandledType WOLGameSetupMenuSystem( GameWindow *window, UnsignedInt msg
 								NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
 								if (pLobbyInterface != nullptr)
 								{
-									pLobbyInterface->UpdateCurrentLobby_SetSlotState(i, pos);
+									pLobbyInterface->UpdateCurrentLobby_SetSlotState(i, newState);
 								}
 
 								WOLDisplaySlotList();
