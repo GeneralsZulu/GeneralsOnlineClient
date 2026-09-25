@@ -507,6 +507,8 @@ GlobalData* GlobalData::m_theOriginal = nullptr;
 
 	{ "PlayStats",									INI::parseInt,				nullptr,			offsetof( GlobalData, m_playStats ) },
 
+	{ "LogsUrl",										INI::parseAsciiString,nullptr,			offsetof( GlobalData, m_logsUrl ) },
+
 #if defined(RTS_DEBUG)
 	{ "DisableCameraFade",			INI::parseBool,				nullptr,			offsetof( GlobalData, m_disableCameraFade ) },
 	{ "DisableScriptedInputDisabling",			INI::parseBool,		nullptr,			offsetof( GlobalData, m_disableScriptedInputDisabling ) },
@@ -637,6 +639,17 @@ GlobalData::GlobalData()
 	m_chipSetType = 0;
 	m_headless = FALSE;
 	m_exportStats = FALSE;
+	m_statsUrl = "https://cncstats.computersrfun.org/stats";
+	m_logsUrl = "https://cncstats.computersrfun.org/logs";
+	m_replayUrl = "https://www.radarvan.com/api/upload_replay";
+	m_mapCheckUrl = "https://cncstats.computersrfun.org/map_exists";
+	m_mapUploadUrl = "https://cncstats.computersrfun.org/add_map";
+	m_mapAssetsUrl = "https://cncstats.computersrfun.org/list_map_assets";
+	m_mapDownloadUrl = "https://cncstats.computersrfun.org/get_map_file";
+	m_predictUrl = "https://www.radarvan.com/api/predict";
+	m_teamStatsUrl = "https://www.radarvan.com/api/team_stats/";
+	m_synergyUrl = "https://www.radarvan.com/api/player_ratings/synergy/";
+	m_mapMatchCountsUrl = "https://www.radarvan.com/api/map_match_counts";
 	m_windowed = 0;
 	m_xResolution = 800;
 	m_yResolution = 600;
@@ -1007,6 +1020,9 @@ GlobalData::GlobalData()
 	m_simulateReplays.clear();
 	m_liveReplayFile.clear();
 	m_simulateReplayJobs = SIMULATE_REPLAYS_SEQUENTIAL;
+
+	m_watchReplayFile.clear();
+	m_replayTheater = FALSE;
 
 	for (i = LEVEL_FIRST; i <= LEVEL_LAST; ++i)
 		m_healthBonus[i] = 1.0f;

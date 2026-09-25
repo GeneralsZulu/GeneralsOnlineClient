@@ -2058,14 +2058,15 @@ static AsciiString mapSidecarPath(Int idx, const AsciiString& localMapPath)
 	return AsciiString::TheEmptyString;
 }
 
-// The map-download endpoint lives on TheGlobalData as m_mapDownloadUrl in the
-// Zulu fork. GlobalData.h/.cpp and CommandLine.cpp are hand-merged separately
-// on this branch, so the field is not here yet and the on-demand CDN map
-// download stays inert: both entry points below bail out on the empty URL.
-// Point this at TheGlobalData->m_mapDownloadUrl once that field lands.
+// The map-download endpoint (GlobalData m_mapDownloadUrl, overridable with
+// -mapDownloadUrl). Empty disables the on-demand CDN map download entirely:
+// both entry points below bail out, and the game falls back to the legacy
+// at-launch P2P map transfer.
 static AsciiString mapDownloadUrl()
 {
-	return AsciiString::TheEmptyString;
+	if (TheGlobalData == nullptr)
+		return AsciiString::TheEmptyString;
+	return TheGlobalData->m_mapDownloadUrl;
 }
 
 Bool DownloadAndInstallMap(const AsciiString& localMapPath,

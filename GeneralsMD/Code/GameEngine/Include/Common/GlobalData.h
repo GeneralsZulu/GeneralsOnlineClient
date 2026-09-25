@@ -134,6 +134,49 @@ public:
 	// URL to POST compressed stats JSON after export.
 	AsciiString m_statsUrl;
 
+	// URL to POST per-match client debug logs (gzip'd, multipart) after a game.
+	AsciiString m_logsUrl;
+
+	// URL to POST the replay file after stats are uploaded.
+	AsciiString m_replayUrl;
+
+	// URL to GET ?crc=<hex> to check whether the server already has the
+	// map that was just played. Body "false" triggers a map upload.
+	AsciiString m_mapCheckUrl;
+
+	// URL to POST the map file when the check URL reports the server
+	// doesn't already have it.
+	AsciiString m_mapUploadUrl;
+
+	// URL to GET ?crc=<dec> for the list of asset kinds the server already
+	// holds for a map, as {"kinds":["map","preview",...]}. Lets an upload
+	// fill in only the sidecars that are missing, instead of the check URL's
+	// all-or-nothing "do you have this map at all". Empty string falls back
+	// to that older behaviour.
+	AsciiString m_mapAssetsUrl;
+
+	// URL to GET ?crc=<dec>&kind=<map|preview|ini|str|solo|assets|readme>
+	// to pull one stored map asset when a peer joins a lobby for a map it
+	// doesn't have locally. Empty string disables in-lobby map downloads
+	// (game falls back to the legacy at-launch P2P transfer).
+	AsciiString m_mapDownloadUrl;
+
+	// URLs for the multiplayer loading-screen "battlefield intel" panel.
+	// When the countdown starts, each client fires these (non-blocking) and
+	// shows a distilled win-prediction / team-chemistry blurb in place of the
+	// general-features text. Any empty string disables that particular call.
+	//   m_predictUrl    : POST /api/predict          -> win probability
+	//   m_teamStatsUrl  : GET  /api/team_stats/      -> full-lineup W/L record
+	//   m_synergyUrl    : GET  /api/player_ratings/synergy/ -> standout duo
+	AsciiString m_predictUrl;
+	AsciiString m_teamStatsUrl;
+	AsciiString m_synergyUrl;
+
+	// URL to GET a JSON array of {map, matchCount} entries the map-select
+	// dialogs use to annotate each listbox row with how often the map has
+	// been played. Empty string disables the call.
+	AsciiString m_mapMatchCountsUrl;
+
 	Bool m_windowed;
 	Int m_xResolution;
 	Int m_yResolution;
@@ -592,6 +635,17 @@ public:
 	Bool				m_breakTheMovie;								///< The user has hit escape!
 	AsciiString m_modDir;
 	AsciiString m_modBIG;
+
+	// Replay Theater (-watchReplay / -replaytheater). Watching a replay from
+	// an older release means booting with that release's data mounted, which
+	// can only be decided before startup, so ZuluLauncher relaunches us with
+	// the right -mod plus these. m_watchReplayFile is a path relative to the
+	// user's Replays folder; m_replayTheater says this process exists solely
+	// to play it, and must exit rather than fall through to the shell (where
+	// the player could start a live game on data that does not match anyone
+	// else's). See installer/replay_data_versions.csv.
+	AsciiString m_watchReplayFile;
+	Bool        m_replayTheater;
 
 	//-allAdvice feature
 	//Bool m_allAdvice;

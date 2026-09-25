@@ -30,6 +30,7 @@
 #include "Common/CRCDebug.h"
 #include "Common/LocalFileSystem.h"
 #include "Common/Recorder.h"
+#include "Common/ReplaySimulation.h"
 #include "Common/version.h"
 #include "GameClient/ClientInstance.h"
 #include "GameClient/TerrainVisual.h" // for TERRAIN_LOD_MIN definition
@@ -439,6 +440,162 @@ Int parseStatsUrl(char *args[], int num)
 	return 1;
 }
 
+Int parseNoStats(char *args[], int num)
+{
+	TheWritableGlobalData->m_exportStats = FALSE;
+	return 1;
+}
+
+// Override the /logs endpoint (GameData.ini LogsUrl). Lets the
+// connection-failure and end-of-match log uploads be pointed at a local
+// listener for testing instead of production cncstats.
+Int parseLogsUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_logsUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+// TheSuperHackers @feature Path to a JSON-lines file that batch replay
+// simulation appends a per-replay verdict to (OK / OK_RETAIL_UNCHECKED /
+// DESYNC / INCOMPLETE / CANT_OPEN). Forwarded to worker processes when
+// using -jobs. The path lives on ReplaySimulation rather than GlobalData so
+// the Core-side simulator does not have to reach into the per-game GlobalData.
+Int parseResultLog(char *args[], int num)
+{
+	if (num > 1)
+	{
+		ReplaySimulation::setResultLogPath(AsciiString(args[1]));
+		return 2;
+	}
+	return 1;
+}
+
+// TheSuperHackers @feature Force the replay determinism epoch for playback so a
+// modern binary re-simulates an older replay bit-exactly. Accepts a name
+// (retail / v121 / v128 / v130 / v155 / current) or the numeric enum value. Without
+// this, the epoch is auto-detected from the replay's recorded version string
+// (which fails for retail "Version 1.04", so pass it for those).
+Int parseReplayEpoch(char *args[], int num)
+{
+	if (num > 1)
+	{
+		AsciiString a = args[1];
+		Int epoch = -1;
+		if (a.compareNoCase("retail") == 0)       epoch = RecorderClass::REPLAY_EPOCH_RETAIL;
+		else if (a.compareNoCase("v121") == 0)    epoch = RecorderClass::REPLAY_EPOCH_V121;
+		else if (a.compareNoCase("v128") == 0)    epoch = RecorderClass::REPLAY_EPOCH_V128;
+		else if (a.compareNoCase("v130") == 0)    epoch = RecorderClass::REPLAY_EPOCH_V130;
+		else if (a.compareNoCase("v155") == 0)    epoch = RecorderClass::REPLAY_EPOCH_V155;
+		else if (a.compareNoCase("current") == 0) epoch = RecorderClass::REPLAY_EPOCH_CURRENT;
+		else                                      epoch = atoi(a.str());
+		RecorderClass::setReplayEpochOverride(epoch);
+		return 2;
+	}
+	return 1;
+}
+
+Int parseReplayUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_replayUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+Int parseMapCheckUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_mapCheckUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+Int parseMapAssetsUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_mapAssetsUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+Int parseMapUploadUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_mapUploadUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+Int parseMapDownloadUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_mapDownloadUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+Int parsePredictUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_predictUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+Int parseTeamStatsUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_teamStatsUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+Int parseSynergyUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_synergyUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+Int parseMapMatchCountsUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_mapMatchCountsUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+// Retail lockstep timing (2s fixed retry, mean-latency run-ahead) for A/B
+// runs in the lab. See NetworkUtil.cpp.
+Int parseNetLegacy(char *args[], int num)
+{
+	NET_LEGACY_TIMING = TRUE;
+	return 1;
+}
+
 // TheSuperHackers @feature bill-rich 15/09/2026 -liveReplay <file.rep>: watch a replay that is still being written to, as
 // a live observer would. The file is opened from the Replays folder and played back
 // in RECORDERMODETYPE_LIVE_OBSERVER: end of file means wait for more bytes. Meant for
@@ -477,6 +634,52 @@ Int parseReplay(char *args[], int num)
 
 		return 2;
 	}
+	return 1;
+}
+
+// TheSuperHackers @feature Watch a replay in the normal game window, as
+// opposed to -replay, which runs the headless batch re-simulation and exits.
+// ZuluLauncher's Replay Theater passes this together with the -mod that
+// mounts the data the replay was recorded against; see
+// installer/replay_data_versions.csv. The path is relative to the user's
+// Replays folder, the same as the in-game replay list uses.
+Int parseWatchReplay(char *args[], int num)
+{
+	if (num > 1)
+	{
+		AsciiString filename = args[1];
+		if (!filename.endsWithNoCase(RecorderClass::getReplayExtention()))
+		{
+			printf("Invalid replay name \"%s\"\n", filename.str());
+			exit(1);
+		}
+		TheWritableGlobalData->m_watchReplayFile = filename;
+
+		// Straight into the replay: no intro, no sizzle, no shell map behind it.
+		TheWritableGlobalData->m_playIntro = FALSE;
+		TheWritableGlobalData->m_playSizzle = FALSE;
+		TheWritableGlobalData->m_shellMapOn = FALSE;
+
+		// Allow running alongside another client, but do NOT skip the primary
+		// instance the way -replay does. Instance ids above 1 read
+		// Options_Instance<NN>.ini instead of Options.ini (OptionPreferences),
+		// so forcing a secondary id here would ignore the player's own display
+		// settings and open the replay at the default 800x600. Left alone, the
+		// index starts at 0 (= instance 1, the player's real Options.ini) and
+		// still steps up automatically if a game is already running.
+		rts::ClientInstance::setMultiInstance(TRUE);
+
+		return 2;
+	}
+	return 1;
+}
+
+// This process exists only to play the -watchReplay file. Its data very
+// likely is not this release's, so it must never reach the shell, where the
+// player could start a live game whose rules match no one else's.
+Int parseReplayTheater(char *args[], int num)
+{
+	TheWritableGlobalData->m_replayTheater = TRUE;
 	return 1;
 }
 
@@ -1182,11 +1385,69 @@ static CommandLineParam paramsForStartup[] =
 	// If you do not call this, all replays will be simulated in sequence in the same process.
 	{ "-jobs", parseJobs },
 
+	// Watch a single replay in the normal game window and quit when it ends.
+	// Paired with -replaytheater and a -mod by ZuluLauncher's Replay Theater.
+	{ "-watchReplay", parseWatchReplay },
+	{ "-replaytheater", parseReplayTheater },
+
 	// Export game stats as JSON alongside replay file.
 	{ "-exportStats", parseExportStats },
 
+	// Disable stats export entirely (no file, no upload).
+	{ "-noStats", parseNoStats },
+
 	// URL to POST compressed stats JSON after export.
 	{ "-statsUrl", parseStatsUrl },
+
+	// Override the client log-upload endpoint (GameData.ini LogsUrl).
+	{ "-logsUrl", parseLogsUrl },
+
+	// Path to a JSON-lines result log for batch replay simulation. Each replay
+	// appends one line with its verdict (OK / OK_RETAIL_UNCHECKED / DESYNC /
+	// INCOMPLETE / CANT_OPEN), frame counts, stale command references, and
+	// whether stats were exported.
+	{ "-resultLog", parseResultLog },
+
+	// Force the replay determinism epoch (retail/v121/v128/v130/v155/current or
+	// the numeric value) so a modern binary re-simulates an older replay
+	// bit-exactly. Auto-detected from the replay version when omitted.
+	{ "-replayEpoch", parseReplayEpoch },
+
+	// URL to POST the replay file after stats are uploaded. Defaults to
+	// the project replay endpoint; pass an empty string ("") to skip.
+	{ "-replayUrl", parseReplayUrl },
+
+	// URL to GET ?crc=<hex> to ask the server whether it already has the
+	// played map. Body "false" triggers a map upload to -mapUploadUrl.
+	// Pass an empty string ("") to skip the check (and the upload).
+	{ "-mapCheckUrl", parseMapCheckUrl },
+
+	// URL to GET ?crc=<dec> for the list of asset kinds the server already
+	// holds, so an upload can fill in only the missing sidecars instead of
+	// treating a present .map as "nothing to do". Pass an empty string ("")
+	// to fall back to the coarser -mapCheckUrl probe alone.
+	{ "-mapAssetsUrl", parseMapAssetsUrl },
+
+	// URL to POST the .map file when the check URL reports the server
+	// doesn't already have it. Pass an empty string ("") to skip the
+	// upload even if the check reports false.
+	{ "-mapUploadUrl", parseMapUploadUrl },
+
+	// URL to GET ?crc=<dec>&kind=<...> to pull one stored map asset when
+	// a lobby peer needs a map it doesn't have. Empty string disables
+	// in-lobby map downloads (falls back to launch-time P2P transfer).
+	{ "-mapDownloadUrl", parseMapDownloadUrl },
+
+	// Loading-screen "battlefield intel" endpoints. Pass an empty string
+	// ("") to disable any one of them.
+	{ "-predictUrl", parsePredictUrl },
+	{ "-teamStatsUrl", parseTeamStatsUrl },
+	{ "-synergyUrl", parseSynergyUrl },
+
+	// URL the map-select dialogs GET to fetch a JSON array of
+	// {map, matchCount} entries, used to annotate each row with how
+	// often the map has been played. Pass an empty string ("") to disable.
+	{ "-mapMatchCountsUrl", parseMapMatchCountsUrl },
 };
 
 // These Params are parsed during Engine Init before INI data is loaded
@@ -1203,6 +1464,8 @@ static CommandLineParam paramsForEngineInit[] =
 	{ "-playStats", parsePlayStats },
 	{ "-mod", parseMod },
 	{ "-disableCommunityDataPatch", parseDisableCommunityDataPatch },
+	// Retail lockstep timing, for A/B runs against the adaptive timing.
+	{ "-netlegacy", parseNetLegacy },
 	{ "-noshaders", parseNoShaders },
 	{ "-quickstart", parseQuickStart },
 	{ "-useWaveEditor", parseUseWaveEditor },
