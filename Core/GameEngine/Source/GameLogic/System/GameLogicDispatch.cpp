@@ -43,6 +43,7 @@
 #include "Common/MessageStream.h"
 #include "Common/MultiplayerSettings.h"
 #include "Common/Recorder.h"
+#include "Common/ReleaseLog.h"
 #include "Common/BuildAssistant.h"
 #include "Common/SpecialPower.h"
 #include "Common/ThingTemplate.h"
@@ -1805,7 +1806,36 @@ bool GameLogic::onDoForceAttackGround(MAYBE_UNUSED GameMessage *msg, AIGroupPtr 
 
 bool GameLogic::onQueueUpgrade(MAYBE_UNUSED GameMessage *msg, AIGroupPtr &currentlySelectedGroup)
 {
-	const UpgradeTemplate *upgradeT = TheUpgradeCenter->findUpgradeByKey( (NameKeyType)(msg->getArgument( 1 )->integer) );
+	//
+	// Live clients (and V155+ recordings) carry the upgrade's stable id (mask
+	// bit). Older replays recorded the raw NameKeyType, whose numbering belongs
+	// to the recording build and must be translated, not looked up against our
+	// own namekeys -- resolving it directly is what silently queued the wrong
+	// upgrade for every recorded purchase after an early namekey registration
+	// shifted the numbering (the v1.5.2 replay regression).
+	//
+	const Int upgradeId = msg->getArgument( 1 )->integer;
+	const UpgradeTemplate *upgradeT;
+	const Bool legacyUpgradeId =
+		(TheRecorder && !TheRecorder->isReplayEpochAtLeast( RecorderClass::REPLAY_EPOCH_V155 ));
+	if (legacyUpgradeId)
+		upgradeT = TheUpgradeCenter->findUpgradeByLegacyReplayKey( upgradeId, TheRecorder->getReplayLegacyUpgradeKeyDelta() );
+	else
+		upgradeT = TheUpgradeCenter->findUpgradeByStableId( upgradeId );
+	// @diag ZULU_QUP_LOG: log every queue-upgrade decode (raw id, decode path,
+	// this build's name for the raw value as a namekey, resolved upgrade), so a
+	// replay-fidelity issue can be pinned to the exact command without a rebuild.
+	{
+		static const char *s_qup = getenv("ZULU_QUP_LOG");
+		if (s_qup && s_qup[0])
+			ReleaseLog("QUP f%d obj=%d raw=%d legacy=%d delta=%d keyName=%s -> %s",
+				(Int)TheGameLogic->getFrame(),
+				(Int)msg->getArgument( 0 )->objectID,
+				upgradeId, (Int)legacyUpgradeId,
+				TheRecorder ? TheRecorder->getReplayLegacyUpgradeKeyDelta() : -1,
+				TheNameKeyGenerator->keyToName( (NameKeyType)upgradeId ).str(),
+				upgradeT ? upgradeT->getUpgradeName().str() : "NULL");
+	}
 	if (!upgradeT)	// sanity
 		return false;
 
@@ -1824,7 +1854,13 @@ bool GameLogic::onCancelUpgrade(MAYBE_UNUSED GameMessage *msg, AIGroupPtr &curre
 #else
 	Object *producer = getSingleObjectFromSelection(currentlySelectedGroup.Peek());
 #endif
-	const UpgradeTemplate *upgradeT = TheUpgradeCenter->findUpgradeByKey( (NameKeyType)(msg->getArgument( 0 )->integer) );
+	// stable id live / V155+; translated legacy namekey for older replays (see onQueueUpgrade)
+	const Int cancelUpgradeId = msg->getArgument( 0 )->integer;
+	const UpgradeTemplate *upgradeT;
+	if (TheRecorder && !TheRecorder->isReplayEpochAtLeast( RecorderClass::REPLAY_EPOCH_V155 ))
+		upgradeT = TheUpgradeCenter->findUpgradeByLegacyReplayKey( cancelUpgradeId, TheRecorder->getReplayLegacyUpgradeKeyDelta() );
+	else
+		upgradeT = TheUpgradeCenter->findUpgradeByStableId( cancelUpgradeId );
 
 	// sanity
 	if( producer == nullptr || upgradeT == nullptr )
@@ -2062,6 +2098,11 @@ bool GameLogic::onCreateSelectedGroup(MAYBE_UNUSED GameMessage *msg)
 	for (Int i = 1; i < msg->getArgumentCount(); ++i) {
 		Object *obj = findObjectByID( msg->getArgument( i )->objectID );
 		if (!obj) {
+			// A recorded selection should resolve in a faithful re-simulation; the
+			// recording client selected an object that existed for it. Counted as a
+			// fidelity signal for the replay verdict (see ReplaySimulation.cpp).
+			if (TheRecorder && TheRecorder->isPlaybackMode())
+				TheRecorder->notePlaybackStaleObjectRef();
 			continue;
 		}
 
@@ -2080,6 +2121,8 @@ bool GameLogic::onRemoveFromSelectedGroup(MAYBE_UNUSED GameMessage *msg)
 		ObjectID objID = msg->getArgument(i)->objectID;
 		Object *objToRemove = findObjectByID(objID);
 		if (!objToRemove) {
+			if (TheRecorder && TheRecorder->isPlaybackMode())
+				TheRecorder->notePlaybackStaleObjectRef();
 			continue;
 		}
 

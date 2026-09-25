@@ -33,6 +33,7 @@
 #include "Common/AudioEventRTS.h"
 #include "Common/GameAudio.h"
 #include "Common/Xfer.h"
+#include "Common/Recorder.h"
 
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Object.h"
@@ -108,12 +109,13 @@ void FlammableUpdate::onDamage( DamageInfo *damageInfo )
 			m_flameDamageLimit = getFlammableUpdateModuleData()->m_flameDamageLimitData;
 		}
 		m_lastFlameDamageDealt = now;
-#if RETAIL_COMPATIBLE_CRC || PRESERVE_NO_XP_FROM_FLAME_KILLS
-		m_flameSource = getObject()->getID();
-#else
-		// TheSuperHackers @bugfix Stubbjax 03/09/2025 Allow flame damage to award xp to the flame source.
-		m_flameSource = damageInfo->in.m_sourceID;
-#endif
+		// Allow flame damage to award xp to the flame source. Introduced in 1.2.8;
+		// older replays credited the flame to the burning object itself, so gate
+		// on the epoch to keep those replays deterministic.
+		if (!TheRecorder || TheRecorder->isReplayEpochAtLeast(RecorderClass::REPLAY_EPOCH_V128))
+			m_flameSource = damageInfo->in.m_sourceID;
+		else
+			m_flameSource = getObject()->getID();
 
 		Object *me = getObject();
 		if( !me->getStatusBits().test( OBJECT_STATUS_AFLAME ) && !me->getStatusBits().test( OBJECT_STATUS_BURNED ) )

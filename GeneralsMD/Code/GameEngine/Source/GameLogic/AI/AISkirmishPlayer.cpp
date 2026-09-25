@@ -1025,7 +1025,10 @@ void AISkirmishPlayer::update()
 {
 	AIPlayer::update();
 	processBeaconDirective();
-	processSurrenderDirective();
+	// Surrender directive introduced in 1.3.0; skip for older replays so they
+	// stay deterministic (see getReplayEpoch()).
+	if (!TheRecorder || TheRecorder->isReplayEpochAtLeast(RecorderClass::REPLAY_EPOCH_V130))
+		processSurrenderDirective();
 	announceMilestones();
 	processDistressSignal();
 	commitIdleArmy();
@@ -1087,14 +1090,15 @@ struct AIObjectUpgradeRow
 	const char *upgradeName;		// The Type = OBJECT upgrade to buy.
 	size_t      weightOffset;		// offsetof(TAiData, ...) of this row's relative weight.
 	size_t      cashReserveOffset;	// offsetof(TAiData, ...) of the cash floor for this row.
+	UnsignedInt replayFeature;		// RecorderClass::ZULU_AI_FEATURE_* gate, so older replays stay bit-exact.
 };
 
 static const AIObjectUpgradeRow TheAIObjectUpgradeTable[] =
 {
 	// USA: vehicle drones (Humvee, Ambulance, Tomahawk, Crusader, Paladin, Avenger, Microwave).
-	{ "USA",   "Upgrade_AmericaBattleDrone",           offsetof(TAiData, m_taiUsaBattleDroneWeight),         offsetof(TAiData, m_taiUsaDroneCashReserve) },
-	{ "USA",   "Upgrade_AmericaScoutDrone",            offsetof(TAiData, m_taiUsaScoutDroneWeight),          offsetof(TAiData, m_taiUsaDroneCashReserve) },
-	{ "USA",   "Upgrade_AmericaHellfireDrone",         offsetof(TAiData, m_taiUsaHellfireDroneWeight),       offsetof(TAiData, m_taiUsaDroneCashReserve) },
+	{ "USA",   "Upgrade_AmericaBattleDrone",           offsetof(TAiData, m_taiUsaBattleDroneWeight),         offsetof(TAiData, m_taiUsaDroneCashReserve),        RecorderClass::ZULU_AI_FEATURE_USA_DRONES },
+	{ "USA",   "Upgrade_AmericaScoutDrone",            offsetof(TAiData, m_taiUsaScoutDroneWeight),          offsetof(TAiData, m_taiUsaDroneCashReserve),        RecorderClass::ZULU_AI_FEATURE_USA_DRONES },
+	{ "USA",   "Upgrade_AmericaHellfireDrone",         offsetof(TAiData, m_taiUsaHellfireDroneWeight),       offsetof(TAiData, m_taiUsaDroneCashReserve),        RecorderClass::ZULU_AI_FEATURE_USA_DRONES },
 
 	// China: Overlord turret upgrades. The Overlord is a 2000cr tank the AI otherwise fields
 	// completely bare, with no anti-air at all, so the Gattling Cannon (1200) dominates the
@@ -1105,8 +1109,8 @@ static const AIObjectUpgradeRow TheAIObjectUpgradeTable[] =
 	// which the AI has no logic to do, so buying it is a straight downgrade. Note that the
 	// CommandSet test alone would NOT exclude it -- a standard Overlord does have a Battle
 	// Bunker button -- so leaving it out of this table is the thing that excludes it.
-	{ "China", "Upgrade_ChinaOverlordGattlingCannon",  offsetof(TAiData, m_taiChinaOverlordGattlingWeight),   offsetof(TAiData, m_taiChinaOverlordCashReserve) },
-	{ "China", "Upgrade_ChinaOverlordPropagandaTower", offsetof(TAiData, m_taiChinaOverlordPropagandaWeight), offsetof(TAiData, m_taiChinaOverlordCashReserve) },
+	{ "China", "Upgrade_ChinaOverlordGattlingCannon",  offsetof(TAiData, m_taiChinaOverlordGattlingWeight),   offsetof(TAiData, m_taiChinaOverlordCashReserve),        RecorderClass::ZULU_AI_FEATURE_CHINA_OVERLORD },
+	{ "China", "Upgrade_ChinaOverlordPropagandaTower", offsetof(TAiData, m_taiChinaOverlordPropagandaWeight), offsetof(TAiData, m_taiChinaOverlordCashReserve),        RecorderClass::ZULU_AI_FEATURE_CHINA_OVERLORD },
 };
 
 // enum (not static const Int): VC6 will not accept every const object as an array bound.
@@ -1159,6 +1163,7 @@ void AISkirmishPlayer::buyObjectUpgrades()
 		// During replay / resume-catchup of a recording made before this feature existed,
 		// the original AI did not buy this upgrade -- spending its money here would diverge
 		// from the recorded simulation.
+		if (TheRecorder && !TheRecorder->isAIFeatureEnabled( row->replayFeature )) continue;
 
 		Int weight = readTAiDataInt( aiData, row->weightOffset );
 		if (weight <= 0) continue; // 0 = never pick this one; all-zero disables the faction.
@@ -1415,9 +1420,10 @@ void AISkirmishPlayer::laserLockMissileDefenders()
 	// changed no state at all -- otherwise replays recorded before this feature existed would
 	// diverge. Same reason buyObjectUpgrades() does its filtering first.
 
-	// NOTE: the Zulu fork gates this on RecorderClass::isAIFeatureEnabled() so a
-	// recording made before the feature existed replays bit-exact. Recorder.h/.cpp
-	// are hand-merged separately on this branch, so the gate is not wired up yet.
+	// During replay / resume-catchup of a recording made before this feature existed, the original
+	// AI did not laser lock -- issuing the command here would diverge from the recorded simulation.
+	if (TheRecorder && !TheRecorder->isAIFeatureEnabled( RecorderClass::ZULU_AI_FEATURE_MD_LASER_LOCK ))
+		return;
 
 	// BaseSide is "USA" for base USA, Air Force, Laser and SuperWeapon, so this one test covers
 	// every sub-general that fields a Missile Defender, and excludes China/GLA for free.
@@ -1550,9 +1556,12 @@ void AISkirmishPlayer::commitIdleArmy()
 	// AIs keep their classic behavior unchanged.
 	if (!isTacticalAI()) return;
 
-	// NOTE: the Zulu fork gates this on RecorderClass::isAIFeatureEnabled() so a
-	// recording made before the feature existed replays bit-exact. Recorder.h/.cpp
-	// are hand-merged separately on this branch, so the gate is not wired up yet.
+	// During replay/resume-catchup of older recordings, the original AI did
+	// not run this sweep - issuing new commands here would diverge from the
+	// recorded simulation. The recorder gates each AI feature on the replay's
+	// declared feature version.
+	if (TheRecorder && !TheRecorder->isAIFeatureEnabled(RecorderClass::ZULU_AI_FEATURE_IDLE_COMMIT))
+		return;
 
 	const Int IDLE_SWEEP_INTERVAL_SECONDS = 10;
 	const Int MIN_GARRISON_UNITS = 4;

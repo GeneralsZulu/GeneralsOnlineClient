@@ -540,7 +540,9 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 			// send the message
 			GameMessage *msg = TheMessageStream->appendMessage( GameMessage::MSG_QUEUE_UPGRADE );
 			msg->appendObjectIDArgument( obj->getID() );
-			msg->appendIntegerArgument( upgradeT->getUpgradeNameKey() );
+			// stable id, not the raw namekey: namekey numbering shifts across builds,
+			// which silently broke every recorded upgrade purchase (see MSG_QUEUE_UPGRADE)
+			msg->appendIntegerArgument( TheUpgradeCenter->getStableUpgradeId( upgradeT ) );
 
 			break;
 
@@ -585,7 +587,9 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 			// send the message
 			GameMessage *msg = TheMessageStream->appendMessage( GameMessage::MSG_QUEUE_UPGRADE );
 			msg->appendObjectIDArgument( objID );
-			msg->appendIntegerArgument( upgradeT->getUpgradeNameKey() );
+			// stable id, not the raw namekey: namekey numbering shifts across builds,
+			// which silently broke every recorded upgrade purchase (see MSG_QUEUE_UPGRADE)
+			msg->appendIntegerArgument( TheUpgradeCenter->getStableUpgradeId( upgradeT ) );
 
 			break;
 
@@ -626,7 +630,9 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 
 			// send the message
 			GameMessage *msg = TheMessageStream->appendMessage( GameMessage::MSG_CANCEL_UPGRADE );
-			msg->appendIntegerArgument( upgradeT->getUpgradeNameKey() );
+			// stable id, not the raw namekey: namekey numbering shifts across builds,
+			// which silently broke every recorded upgrade purchase (see MSG_QUEUE_UPGRADE)
+			msg->appendIntegerArgument( TheUpgradeCenter->getStableUpgradeId( upgradeT ) );
 
 			break;
 
