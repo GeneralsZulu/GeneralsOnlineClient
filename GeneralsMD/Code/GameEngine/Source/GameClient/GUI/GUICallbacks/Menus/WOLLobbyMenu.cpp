@@ -111,6 +111,12 @@ static NameKeyType buttonBackID = NAMEKEY_INVALID;
 static NameKeyType buttonHostID = NAMEKEY_INVALID;
 static NameKeyType buttonRefreshID = NAMEKEY_INVALID;
 static NameKeyType buttonJoinID = NAMEKEY_INVALID;
+// TheSuperHackers @feature bill-rich 24/09/2026 "Live" toggles the game list between lobbies and matches in
+// progress that are being streamed for spectating; Join then watches the selected one.
+static NameKeyType buttonLiveGamesID = NAMEKEY_INVALID;
+static GameWindow *buttonLiveGames = nullptr;
+static Bool s_liveGamesMode = FALSE;
+static UnicodeString s_joinButtonText;
 static NameKeyType buttonBuddyID = NAMEKEY_INVALID;
 static NameKeyType buttonEmoteID = NAMEKEY_INVALID;
 static NameKeyType textEntryChatID = NAMEKEY_INVALID;
@@ -271,6 +277,76 @@ Bool handleLobbySlashCommands(UnicodeString uText, Bool *wasRateLimited)
 		// Added 2/19/03 added the game refresh
 		refreshGameList(TRUE);
 		refreshPlayerList(TRUE);
+		return TRUE; // was a slash command
+	}
+	else if (token == "watch")
+	{
+		// TheSuperHackers @feature bill-rich 24/09/2026 /watch lists the matches being streamed for live
+		// spectating; /watch <number> pulls that stream and plays it as it grows, behind the
+		// service's broadcast delay. Matches in progress are not in the lobby list, so this
+		// is the observer's entry point until the browser grows a Watch button.
+		NGMP_OnlineServices_LivestreamInterface* pLivestreams = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LivestreamInterface>();
+		if (pLivestreams == nullptr)
+		{
+			return TRUE;
+		}
+		AsciiString arg;
+		remainder.nextToken(&arg);
+		if (arg.isEmpty())
+		{
+			GadgetListBoxAddEntryText(listboxLobbyChat, UnicodeString(L"Looking for matches in progress..."), GameSpyColor[GSCOLOR_CHAT_NORMAL], -1, -1);
+			pLivestreams->ListStreams([](bool bSuccess, std::vector<LivestreamEntry> streams)
+				{
+					if (listboxLobbyChat == nullptr)
+					{
+						return;
+					}
+					if (!bSuccess)
+					{
+						GadgetListBoxAddEntryText(listboxLobbyChat, UnicodeString(L"Could not fetch the list of matches in progress."), GameMakeColor(255, 0, 0, 255), -1, -1);
+						return;
+					}
+					if (streams.empty())
+					{
+						GadgetListBoxAddEntryText(listboxLobbyChat, UnicodeString(L"No matches are being streamed right now."), GameSpyColor[GSCOLOR_CHAT_NORMAL], -1, -1);
+						return;
+					}
+					Int index = 1;
+					for (const LivestreamEntry& stream : streams)
+					{
+						UnicodeString line;
+						UnicodeString name, map;
+						name.translate(AsciiString(stream.name.c_str()));
+						map.translate(AsciiString(stream.map_name.c_str()));
+						line.format(L"%d) %s - %s - %d players - %d:%02d in", index, name.str(), map.str(), stream.players, stream.seconds_live / 60, stream.seconds_live % 60);
+						GadgetListBoxAddEntryText(listboxLobbyChat, line, GameSpyColor[GSCOLOR_CHAT_NORMAL], -1, -1);
+						++index;
+					}
+					GadgetListBoxAddEntryText(listboxLobbyChat, UnicodeString(L"Type /watch <number> to spectate one."), GameSpyColor[GSCOLOR_CHAT_NORMAL], -1, -1);
+				});
+			return TRUE; // was a slash command
+		}
+
+		const Int choice = atoi(arg.str());
+		const std::vector<LivestreamEntry>& streams = pLivestreams->GetLastStreamList();
+		if (choice < 1 || choice > (Int)streams.size())
+		{
+			GadgetListBoxAddEntryText(listboxLobbyChat, UnicodeString(L"No such match. Type /watch to list the matches in progress first."), GameMakeColor(255, 0, 0, 255), -1, -1);
+			return TRUE; // was a slash command
+		}
+		if (!pLivestreams->HasMapFor(streams[choice - 1]))
+		{
+			GadgetListBoxAddEntryText(listboxLobbyChat, UnicodeString(L"You do not have that match's map installed."), GameMakeColor(255, 0, 0, 255), -1, -1);
+			return TRUE; // was a slash command
+		}
+		if (pLivestreams->StartWatching(streams[choice - 1]))
+		{
+			GadgetListBoxAddEntryText(listboxLobbyChat, UnicodeString(L"Joining the stream. Playback starts as soon as the broadcast delay has passed."), GameSpyColor[GSCOLOR_CHAT_NORMAL], -1, -1);
+		}
+		else
+		{
+			GadgetListBoxAddEntryText(listboxLobbyChat, UnicodeString(L"Could not start watching that match."), GameMakeColor(255, 0, 0, 255), -1, -1);
+		}
 		return TRUE; // was a slash command
 	}
 	/*
@@ -1279,6 +1355,16 @@ void WOLLobbyMenuInit( WindowLayout *layout, void *userData )
 
 	buttonJoinID = TheNameKeyGenerator->nameToKey("WOLCustomLobby.wnd:ButtonJoin");
 	buttonJoin = TheWindowManager->winGetWindowFromId(parent, buttonJoinID);
+	buttonLiveGamesID = TheNameKeyGenerator->nameToKey("WOLCustomLobby.wnd:ButtonLiveGames");
+	buttonLiveGames = TheWindowManager->winGetWindowFromId(parent, buttonLiveGamesID); // absent from older layouts; /watch still works
+	s_liveGamesMode = FALSE;
+	if (buttonLiveGames)
+	{
+		buttonLiveGames->winSetText(TheGameText->FETCH_OR_SUBSTITUTE("GUI:LiveGames", L"Live"));
+		buttonLiveGames->winSetTooltip(TheGameText->FETCH_OR_SUBSTITUTE("TOOLTIP:LiveGames", L"Show the matches in progress that can be watched"));
+	}
+	if (buttonJoin)
+		s_joinButtonText = buttonJoin->winGetText();
 	buttonJoin->winEnable(FALSE);
 
 	buttonBuddyID = TheNameKeyGenerator->nameToKey("WOLCustomLobby.wnd:ButtonBuddy");
@@ -1506,6 +1592,15 @@ static void shutdownComplete( WindowLayout *layout )
 //-------------------------------------------------------------------------------------------------
 void WOLLobbyMenuShutdown( WindowLayout *layout, void *userData )
 {
+	// TheSuperHackers @feature bill-rich 24/09/2026 a live-stream watch that has not started playing yet is
+	// tied to this screen; leaving it (Back, hosting a game) drops the watch so playback cannot
+	// tear down whatever screen the user moved to.
+	{
+		NGMP_OnlineServices_LivestreamInterface* pLivestreams = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LivestreamInterface>();
+		if (pLivestreams != nullptr)
+			pLivestreams->CancelWatchIfNotStarted();
+	}
+
 	++s_lobbyMenuGeneration;
 
 	NGMP_OnlineServices_RoomsInterface* pRoomsInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_RoomsInterface>();
@@ -1552,6 +1647,8 @@ void WOLLobbyMenuShutdown( WindowLayout *layout, void *userData )
 	//TheGameSpyPeerMessageQueue->addRequest(req);
 
 	listboxLobbyChat = nullptr;
+	buttonLiveGames = nullptr;
+	s_liveGamesMode = FALSE;
 	listboxLobbyPlayers = nullptr;
 
 	isShuttingDown = true;
@@ -1639,6 +1736,57 @@ static const char* getMessageString(Int t)
 /** refreshGameList
 		The Bool is used to force refresh if the refresh button was hit.*/
 //-------------------------------------------------------------------------------------------------
+// TheSuperHackers @feature bill-rich 24/09/2026 Fill the game list with the matches being streamed for
+// spectating. Item data is the row's index into the livestream interface's last list, or -1
+// for an informational row so Join stays disabled on it.
+static void refreshLiveGamesList()
+{
+	GameWindow *win = GetGameListBox();
+	NGMP_OnlineServices_LivestreamInterface* pLivestreams = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LivestreamInterface>();
+	if (win == nullptr || pLivestreams == nullptr)
+		return;
+	const UnsignedInt generation = s_lobbyMenuGeneration;
+	pLivestreams->ListStreams([win, generation](bool bSuccess, std::vector<LivestreamEntry> streams)
+		{
+			if (generation != s_lobbyMenuGeneration || !s_liveGamesMode || GetGameListBox() != win)
+				return;
+			Int selected = -1;
+			GadgetListBoxGetSelected(win, &selected);
+			GadgetListBoxReset(win);
+			if (!bSuccess)
+			{
+				GadgetListBoxAddEntryText(win, TheGameText->FETCH_OR_SUBSTITUTE("GUI:LiveGamesUnavailable", L"Could not fetch the matches in progress"), GameMakeColor(255, 194, 15, 255), -1, 0);
+				GadgetListBoxSetItemData(win, (void*)-1, 0);
+				GadgetListBoxSetSelected(win, -1);
+				return;
+			}
+			if (streams.empty())
+			{
+				GadgetListBoxAddEntryText(win, TheGameText->FETCH_OR_SUBSTITUTE("GUI:LiveGamesNone", L"No matches are being streamed right now"), GameMakeColor(255, 194, 15, 255), -1, 0);
+				GadgetListBoxSetItemData(win, (void*)-1, 0);
+				GadgetListBoxSetSelected(win, -1);
+				return;
+			}
+			Int row = 0;
+			for (const LivestreamEntry& stream : streams)
+			{
+				const Color color = GameSpyColor[GSCOLOR_GAME];
+				UnicodeString name, map, players, elapsed;
+				name.translate(AsciiString(stream.name.c_str()));
+				map.translate(AsciiString(stream.map_name.c_str()));
+				players.format(L"%d", stream.players);
+				elapsed.format(L"%d:%02d", stream.seconds_live / 60, stream.seconds_live % 60);
+				Int index = GadgetListBoxAddEntryText(win, name, color, -1, 0);
+				GadgetListBoxSetItemData(win, (void*)(intptr_t)row, index);
+				GadgetListBoxAddEntryText(win, map, color, index, 1);
+				GadgetListBoxAddEntryText(win, players, color, index, 3);
+				GadgetListBoxAddEntryText(win, elapsed, color, index, 7);
+				++row;
+			}
+			GadgetListBoxSetSelected(win, (selected >= 0 && selected < (Int)streams.size()) ? selected : -1);
+		});
+}
+
 void refreshGameList( Bool forceRefresh )
 {
 	// TODO_NGMP: rate limit this like before
@@ -1649,6 +1797,12 @@ void refreshGameList( Bool forceRefresh )
 	if (forceRefresh || ((gameListRefreshTime == 0) || ((gameListRefreshTime + refreshInterval) <= timeGetTime())))
 	{
 #if defined(GENERALS_ONLINE)
+		if (s_liveGamesMode)
+		{
+			refreshLiveGamesList();
+			gameListRefreshTime = timeGetTime();
+			return;
+		}
 		RefreshGameListBoxes();
 		NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
 		if (pLobbyInterface != nullptr)
@@ -2385,6 +2539,47 @@ WindowMsgHandledType WOLLobbyMenuSystem( GameWindow *window, UnsignedInt msg,
 				{
 					ExitState();
 
+				}
+				else if ( controlID == buttonLiveGamesID && buttonLiveGames != nullptr )
+				{
+					s_liveGamesMode = !s_liveGamesMode;
+					buttonLiveGames->winSetText(s_liveGamesMode
+						? TheGameText->FETCH_OR_SUBSTITUTE("GUI:LiveGamesLobbies", L"Lobbies")
+						: TheGameText->FETCH_OR_SUBSTITUTE("GUI:LiveGames", L"Live"));
+					if (buttonJoin)
+					{
+						if (s_liveGamesMode)
+							buttonJoin->winSetText(TheGameText->FETCH_OR_SUBSTITUTE("GUI:WatchGame", L"Watch"));
+						else
+							buttonJoin->winSetText(s_joinButtonText);
+						buttonJoin->winEnable(FALSE);
+					}
+					GadgetListBoxReset(GetGameListBox());
+					refreshGameList(TRUE);
+				}
+				else if ( controlID == buttonJoinID && s_liveGamesMode )
+				{
+					// Watch the selected match in progress (same path as /watch <n>).
+					NGMP_OnlineServices_LivestreamInterface* pLivestreams = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LivestreamInterface>();
+					Int selected = -1;
+					GadgetListBoxGetSelected(GetGameListBox(), &selected);
+					const Int row = selected >= 0 ? (Int)(intptr_t)GadgetListBoxGetItemData(GetGameListBox(), selected, 0) : -1;
+					if (pLivestreams == nullptr || row < 0 || row >= (Int)pLivestreams->GetLastStreamList().size())
+					{
+						GSMessageBoxOk(TheGameText->fetch("GUI:Error"), TheGameText->fetch("GUI:NoGameSelected"), NULL);
+					}
+					else if (!pLivestreams->HasMapFor(pLivestreams->GetLastStreamList()[row]))
+					{
+						GSMessageBoxOk(TheGameText->fetch("GUI:Error"), TheGameText->FETCH_OR_SUBSTITUTE("GUI:LiveGamesNoMap", L"You do not have that match's map installed."), NULL);
+					}
+					else if (pLivestreams->StartWatching(pLivestreams->GetLastStreamList()[row]))
+					{
+						GadgetListBoxAddEntryText(listboxLobbyChat, TheGameText->FETCH_OR_SUBSTITUTE("GUI:LiveGamesJoining", L"Joining the stream. Playback starts as soon as the broadcast delay has passed."), GameSpyColor[GSCOLOR_CHAT_NORMAL], -1, -1);
+					}
+					else
+					{
+						GSMessageBoxOk(TheGameText->fetch("GUI:Error"), TheGameText->FETCH_OR_SUBSTITUTE("GUI:LiveGamesFailed", L"Could not start watching that match."), NULL);
+					}
 				}
 				else if ( controlID == buttonRefreshID )
 				{

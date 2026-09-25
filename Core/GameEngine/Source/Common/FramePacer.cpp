@@ -109,6 +109,11 @@ Bool FramePacer::isActualFramesPerSecondLimitEnabled() const
 #endif
 	}
 
+	// TheSuperHackers @feature bill-rich 15/09/2026 A live observer draining its snapshot runs one logic
+	// frame per render frame as fast as it can; the render cap gets out of the way.
+	if (m_uncappedForCatchup)
+		allowFpsLimit = false;
+
 	allowFpsLimit &= TheGlobalData->m_useFpsLimit;
 	allowFpsLimit &= isFramesPerSecondLimitEnabled();
 

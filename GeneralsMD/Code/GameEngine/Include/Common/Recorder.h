@@ -50,7 +50,8 @@ enum RecorderModeType CPP_11(: Int) {
 	RECORDERMODETYPE_RECORD,
 	RECORDERMODETYPE_PLAYBACK,
 	RECORDERMODETYPE_SIMULATION_PLAYBACK, // Play back replay without any graphics
-	RECORDERMODETYPE_NONE // this is a valid state to be in on the shell map, or in saved games
+	RECORDERMODETYPE_NONE, // this is a valid state to be in on the shell map, or in saved games
+	RECORDERMODETYPE_LIVE_OBSERVER // playback of a replay that is still being written: readNextFrame waits at EOF for more bytes instead of ending
 };
 
 class RecorderClass : public SubsystemInterface
@@ -137,7 +138,22 @@ public:
 	Bool readReplayHeader( ReplayHeader& header );
 
 	RecorderModeType getMode();												///< Returns the current operating mode.
-	Bool isPlaybackMode() const { return m_mode == RECORDERMODETYPE_PLAYBACK || m_mode == RECORDERMODETYPE_SIMULATION_PLAYBACK; }
+	Bool isPlaybackMode() const { return m_mode == RECORDERMODETYPE_PLAYBACK || m_mode == RECORDERMODETYPE_SIMULATION_PLAYBACK || m_mode == RECORDERMODETYPE_LIVE_OBSERVER; }
+
+	// TheSuperHackers @feature bill-rich 15/09/2026 Live observing: play back a replay file that a stream
+	// (any transport) keeps appending to while the match is still running. Identical
+	// to PLAYBACK except that end of file means "wait for more bytes", the initial
+	// snapshot is drained at a boosted frame rate, torn records are re-read once the
+	// rest of them arrives, and manual fast-forward is refused so the viewer cannot
+	// race past the live edge. The stream owner calls setLiveObserverStreamOpen().
+	Bool isLiveObserverMode() const { return m_mode == RECORDERMODETYPE_LIVE_OBSERVER; }
+	Bool isLiveObserverCatchup() const { return isLiveObserverMode() && m_liveObserverFpsBoosted; } ///< still draining the snapshot faster than realtime
+	Bool isLiveObserverWaitingForBytes() const { return m_liveObserverWaitingForBytes; }
+	void setLiveObserverStreamOpen(Bool open) { m_liveObserverStreamOpen = open; }
+	void noteLiveObserverBytes(Int fileLength); ///< the transport appended bytes; fileLength is the file's new size
+	void setLiveObserverEdgeMargin(Int bytes); ///< how far short of the live edge to stop draining, in bytes (a few seconds of stream)
+	Bool playbackFileLiveObserver(AsciiString filename); ///< playbackFile() that then flips the mode to LIVE_OBSERVER
+	void setLiveObserverBoost(Bool boost); ///< run the logic uncapped (draining a backlog) or at the user's rate
 	void initControls();															///< Show or Hide the Replay controls
 
 	static AsciiString getReplayDir();								///< Returns the directory that holds the replay files.
@@ -172,6 +188,8 @@ protected:
 	void appendNextCommand();													///< Read the next GameMessage and append it to TheCommandList.
 	void writeArgument(GameMessageArgumentDataType type, const GameMessageArgumentType arg);
 	void readArgument(GameMessageArgumentDataType type, GameMessage *msg);
+	Bool readReplayBytes(void *dst, Int size);				///< read exactly size bytes; on a short read set m_replayShortRead and return FALSE
+	void rollbackTornRecord(Int posBefore);						///< a record could not be read whole: rewind to its start for the live-observer retry
 
 	struct CullBadCommandsResult
 	{
@@ -198,6 +216,28 @@ protected:
 	Int m_originalGameMode; // valid in replays
 
 	UnsignedInt m_nextFrame;												///< The Frame that the next message is to be executed on.  This can be -1.
+
+	Bool m_replayShortRead;													///< set when a record could not be read in full
+	Int  m_replayReadPos;														///< bytes consumed from the replay so far; File::position() is not reliable on every file class
+
+	// live-observer state (see isLiveObserverMode). m_liveObserverStreamOpen is
+	// owned by the stream transport; m_liveObserverArming covers the open-time
+	// read inside playbackFile before the mode has flipped; the rest is the
+	// EOF-wait / retry machinery in readNextFrame and updatePlayback.
+	Bool        m_liveObserverStreamOpen;
+	Bool        m_liveObserverArming;
+	Bool        m_liveObserverWaitingForBytes;
+	Int         m_liveObserverRetryPos;
+	Bool        m_liveObserverFpsBoosted;
+	Int         m_liveObserverSavedFpsLimit;
+	Bool        m_liveObserverSavedUseFpsLimit;
+	Int         m_liveObserverKnownLength;		///< bytes the transport has written so far (backlog = this - m_replayReadPos)
+	Bool        m_liveObserverBytesArrived;		///< the transport appended since the last reopen attempt
+	Bool        m_liveObserverTruncated;		///< a torn record with the stream closed: the file ends here
+	UnsignedInt m_liveObserverLastReopenMs;
+	Int         m_liveObserverEdgeMarginBytes;
+	Bool        m_liveObserverPlayedAny;		///< at least one record of the live file has been consumed
+	UnsignedInt m_liveObserverStarvedSinceMs;	///< wall clock when the byte starvation began, 0 while fed
 };
 
 extern RecorderClass *TheRecorder;
