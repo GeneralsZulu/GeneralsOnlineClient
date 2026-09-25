@@ -125,12 +125,13 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 	//
 	// TheSuperHackers @feature bill-rich 15/09/2026
 	// observers and replay viewers see the owning player's UI but must never
-	// issue commands. Every context-sensitive button funnels through here
+	// issue commands, and a resume-from-replay catchup is inert until control
+	// is handed back. Every context-sensitive button funnels through here
 	// (control-bar hotkeys re-dispatch GBM_SELECTED into this path too), so
 	// bail out before any side effects. The recorder's cullBadCommands is the
 	// backstop should a command message slip into the stream some other way.
 	//
-	if( rts::isViewerOnlyClient() )
+	if( rts::isViewerOnlyClient() || (TheRecorder && TheRecorder->isResumeInputBlocked()) )
 		return CBC_COMMAND_NOT_USED;
 
 	// get the command pointer from the control user data we put in the button

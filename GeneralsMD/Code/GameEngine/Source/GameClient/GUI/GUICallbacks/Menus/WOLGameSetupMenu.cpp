@@ -52,6 +52,7 @@
 #include "GameClient/GadgetStaticText.h"
 #include "GameClient/GadgetCheckBox.h"
 #include "GameClient/MapUtil.h"
+#include "GameNetwork/ResumeFromReplay.h"
 #include "GameClient/EstablishConnectionsMenu.h"
 #include "GameClient/GameWindowTransitions.h"
 #include "GameNetwork/GameSpy/LobbyUtils.h"
@@ -968,8 +969,18 @@ static void WOLLockSettings()
 	}
 }
 
+static Bool wolArmedResumeStillMatches(NGMPGame *game);
+static void wolCheckResumeArmChange();
 static void StartPressed()
 {
+	// TheSuperHackers @feature bill-rich 15/09/2026 An armed resume-from-replay only works if the lobby still
+	// matches the recording and every human holds the resume source.
+	{
+		NGMP_OnlineServices_LobbyInterface* pResumeLobby = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+		NGMPGame *resumeGame = pResumeLobby ? pResumeLobby->GetCurrentGame() : nullptr;
+		if (resumeGame != nullptr && resumeGame->isResumeArmed() && !wolArmedResumeStillMatches(resumeGame))
+			return;
+	}
 	Bool isReady = TRUE;
 	Bool allHaveMap = TRUE;
 	Int playerCount = 0;
@@ -1496,9 +1507,264 @@ void WOLDisplaySlotList(void)
 //-------------------------------------------------------------------------------------------------
 /** Initialize the Gadgets Options Menu */
 //-------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// TheSuperHackers @feature bill-rich 15/09/2026 Resume-from-replay arming for online lobbies (host only).
+//
+// Same contract as the LAN lobby (LanGameOptionsMenu.cpp): /resume copies the host's last
+// recording to Resume.rep and aligns the lobby with it. Online the file is uploaded to the
+// service first and the arm (handoff frame plus the replay's seed) is sent only once the
+// upload finished; guests download the file when the arm reaches them, report in chat
+// whether it matches and flag themselves as holding it, and the host cannot start until
+// every human holds it. Slot order is owned by the service, so the lobby must already
+// match the replay's slot order; the host is told what differs instead of the lobby
+// being reordered.
+// -----------------------------------------------------------------------------
+
+static UnsignedInt s_wolLastSeenResumeHandoff = 0;      ///< the arm the last lobby update carried, to notice changes
+static Bool s_wolResumeArmInProgress = FALSE;           ///< an upload plus arm is under way (host)
+static uint32_t s_wolResumeDownloadedGeneration = 0;    ///< the service's upload generation this client last downloaded (guest)
+static Bool s_wolResumeDownloadInProgress = FALSE;      ///< a download is under way (guest)
+
+static void wolLocalSystemChat(const UnicodeString &text)
+{
+	if (listboxGameSetupChat)
+		GadgetListBoxAddEntryText(listboxGameSetupChat, text, GameSpyColor[GSCOLOR_DEFAULT], -1, -1);
+}
+
+// Roster problems go to the whole lobby: the player who has to fix something is
+// usually not the host.
+static void wolLobbySystemChat(const UnicodeString &text)
+{
+	NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+	UnicodeString msg = text;
+	if (pLobbyInterface != nullptr)
+		pLobbyInterface->SendAnnouncementMessageToCurrentLobby(msg, true);
+	else
+		wolLocalSystemChat(text);
+}
+
+// Called on the host's start while a resume is armed: refuse when the lobby has drifted
+// from the recording since arming, or when a human does not hold the resume source yet.
+static Bool wolArmedResumeStillMatches(NGMPGame *game)
+{
+	ResumeFromReplay::SourceReplay replay;
+	UnicodeString why;
+	if (!ResumeFromReplay::readSource(replay, why)
+		|| !ResumeFromReplay::sourceMatchesGame(replay, game, game->getResumeHandoffFrame(), why))
+	{
+		wolLobbySystemChat(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ResumeStartRefused",
+			L"Resume is armed and the lobby no longer matches the recording (%ls). Fix it, or type /resume off to start a fresh game.", why.str()));
+		return FALSE;
+	}
+
+	NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+	if (pLobbyInterface != nullptr)
+	{
+		for (const LobbyMemberEntry &member : pLobbyInterface->GetCurrentLobby().members)
+		{
+			if (member.IsHuman() && !member.has_resume_replay)
+			{
+				UnicodeString name(from_utf8(member.display_name).c_str());
+				wolLobbySystemChat(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ResumeWaitingForDownload",
+					L"Resume: waiting for %ls to download the replay", name.str()));
+				return FALSE;
+			}
+		}
+	}
+	return TRUE;
+}
+
+static void wolTryArmResumeFromReplay(Bool disarm)
+{
+	NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+	if (pLobbyInterface == nullptr || pLobbyInterface->GetCurrentGame() == nullptr)
+		return;
+	if (!pLobbyInterface->IsHost())
+	{
+		wolLocalSystemChat(TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeHostOnly", L"Only the host can resume a game"));
+		return;
+	}
+	NGMPGame *game = pLobbyInterface->GetCurrentGame();
+
+	if (disarm)
+	{
+		pLobbyInterface->UpdateCurrentLobby_ArmResume(0, game->getSeed(), [](bool bSuccess)
+		{
+			if (bSuccess)
+				wolLobbySystemChat(TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeDisarmed", L"Resume disarmed: the next start is a fresh game"));
+			else
+				wolLocalSystemChat(TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeArmRefused", L"Resume: the service refused the request"));
+		});
+		return;
+	}
+	if (s_wolResumeArmInProgress)
+	{
+		wolLocalSystemChat(TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeUploadInProgress", L"Resume: the replay is still being uploaded"));
+		return;
+	}
+
+	ResumeFromReplay::SourceReplay replay;
+	UnsignedInt handoff = 0;
+	UnicodeString why;
+	if (!ResumeFromReplay::prepareHostSource(replay, handoff, why))
+	{
+		wolLocalSystemChat(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ResumeRefused", L"Resume: %ls", why.str()));
+		return;
+	}
+	const ReplayGameInfo &rg = replay.game;
+
+	// The service owns the map, cash and superweapon settings (and clears an arm when they
+	// change), so they must already match the recording rather than be set here.
+	if (game->getMap().compareNoCase(rg.getMap()) != 0)
+	{
+		wolLocalSystemChat(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ResumeMapMismatchOnline",
+			L"Resume: select the replay's map first (%hs)", rg.getMap().str()));
+		return;
+	}
+	if (game->getStartingCash().countMoney() != rg.getStartingCash().countMoney())
+	{
+		wolLocalSystemChat(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ResumeCashMismatchOnline",
+			L"Resume: set the starting cash to %u first", rg.getStartingCash().countMoney()));
+		return;
+	}
+	if (game->getSuperweaponRestriction() != rg.getSuperweaponRestriction())
+	{
+		wolLocalSystemChat(TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeSuperweaponMismatchOnline",
+			L"Resume: set the superweapon limit to match the recording first"));
+		return;
+	}
+
+	// Every human must be present under the recorded name; slot order is the service's, so
+	// the lobby is told the first difference instead of being reordered.
+	if (!ResumeFromReplay::validateRoster(rg, game, why))
+	{
+		wolLobbySystemChat(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ResumeRefused", L"Resume: %ls", why.str()));
+		return;
+	}
+
+	// Restore the recorded faction, color, start position and team on every occupied slot whose
+	// kind (human, or AI at the recorded difficulty) already matches, then check every slot in
+	// full; whatever is left (a player in the wrong slot, a missing or wrong AI) is for the host
+	// to fix. The local slots are re-synced from the service on the next lobby update either way.
+	std::vector<RandomSlotAssignment> resumeSlotChanges;
+	for (Int i = 0; i < MAX_SLOTS; ++i)
+	{
+		const GameSlot *rs = rg.getConstSlot(i);
+		GameSlot *ls = game->getSlot(i);
+		if (!rs || !rs->isOccupied() || !ls || !ls->isOccupied() || rs->getState() != ls->getState())
+			continue;
+		// Collect what actually differs, so the service is told about those slots only.
+		RandomSlotAssignment change;
+		change.slotIndex = i;
+		if (ls->getPlayerTemplate() != rs->getPlayerTemplate())
+			change.side = rs->getPlayerTemplate();
+		if (ls->getColor() != rs->getColor())
+			change.color = rs->getColor();
+		if (ls->getStartPos() != rs->getStartPos())
+			change.startPos = rs->getStartPos();
+		if (ls->getTeamNumber() != rs->getTeamNumber())
+			change.team = rs->getTeamNumber();
+		if (change.side != -1 || change.color != -1 || change.startPos != -1 || change.team != -1)
+			resumeSlotChanges.push_back(change);
+
+		ls->setColor(rs->getColor());
+		ls->setPlayerTemplate(rs->getPlayerTemplate());
+		ls->setStartPos(rs->getStartPos());
+		ls->setTeamNumber(rs->getTeamNumber());
+	}
+	if (!ResumeFromReplay::slotsMatch(rg, game, why))
+	{
+		WOLDisplaySlotList();
+		wolLobbySystemChat(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ResumeRefused", L"Resume: %ls", why.str()));
+		return;
+	}
+	if (!resumeSlotChanges.empty())
+		pLobbyInterface->UpdateCurrentLobby_BulkSlotUpdate(resumeSlotChanges, nullptr);
+	WOLDisplaySlotList();
+
+	// Upload the source, then arm; the arm is announced only once the service accepted it.
+	const UnsignedInt handoffFrame = handoff;
+	const Int seed = rg.getSeed();
+	s_wolResumeArmInProgress = TRUE;
+	wolLocalSystemChat(TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeUploading", L"Resume: uploading the replay to the service..."));
+	pLobbyInterface->UploadResumeReplay(ResumeFromReplay::getSourceFilePath(), [handoffFrame, seed](bool bUploaded)
+	{
+		NGMP_OnlineServices_LobbyInterface* pLobby = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+		if (!bUploaded || pLobby == nullptr)
+		{
+			s_wolResumeArmInProgress = FALSE;
+			wolLocalSystemChat(TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeUploadFailed", L"Resume: the replay upload failed, not armed"));
+			return;
+		}
+		pLobby->UpdateCurrentLobby_ArmResume(handoffFrame, seed, [handoffFrame](bool bArmed)
+		{
+			s_wolResumeArmInProgress = FALSE;
+			NGMP_OnlineServices_LobbyInterface* pLobby2 = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+			if (!bArmed || pLobby2 == nullptr)
+			{
+				wolLocalSystemChat(TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeArmRefused", L"Resume: the service refused the request"));
+				return;
+			}
+			s_wolLastSeenResumeHandoff = handoffFrame;
+			pLobby2->UpdateCurrentLobby_HasResumeReplay(true); // the host holds the source by definition
+			wolLobbySystemChat(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ResumeArmed",
+				L"Resume armed: the next start replays the last match to %ls, then hands control back", ResumeFromReplay::formatGameTime(handoffFrame).str()));
+		});
+	});
+}
+
+// Every lobby update: a guest downloads the source whenever the lobby is armed with an upload
+// it has not fetched yet (the service bumps ResumeReplayGeneration on every arm, so a re-arm
+// with the same handoff frame is fetched again), tells the lobby whether its copy matches and
+// flags itself; everyone notes an arm or a disarm.
+static void wolCheckResumeArmChange()
+{
+	NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+	NGMPGame *game = pLobbyInterface == nullptr ? nullptr : pLobbyInterface->GetCurrentGame();
+	if (game == nullptr)
+		return;
+	const UnsignedInt handoff = game->getResumeHandoffFrame();
+	if (handoff != s_wolLastSeenResumeHandoff)
+	{
+		s_wolLastSeenResumeHandoff = handoff;
+		if (handoff == 0)
+			wolLocalSystemChat(TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeDisarmed", L"Resume disarmed: the next start is a fresh game"));
+	}
+	if (handoff == 0 || pLobbyInterface->IsHost())
+		return; // nothing armed, or the host: it announced the arm and holds the source
+
+	const uint32_t generation = pLobbyInterface->GetCurrentLobby().resume_replay_generation;
+	if (generation == s_wolResumeDownloadedGeneration || s_wolResumeDownloadInProgress)
+		return;
+	s_wolResumeDownloadedGeneration = generation;
+	s_wolResumeDownloadInProgress = TRUE;
+
+	wolLocalSystemChat(TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeDownloading", L"Resume: downloading the replay from the service..."));
+	pLobbyInterface->DownloadResumeReplay(ResumeFromReplay::getSourceFilePath(), [](bool bDownloaded)
+	{
+		s_wolResumeDownloadInProgress = FALSE;
+		NGMP_OnlineServices_LobbyInterface* pLobby = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+		NGMPGame *lobbyGame = pLobby == nullptr ? nullptr : pLobby->GetCurrentGame();
+		if (pLobby == nullptr || lobbyGame == nullptr)
+			return;
+		UnicodeString report;
+		Bool usable = FALSE;
+		if (!bDownloaded)
+			report = TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeDownloadFailed", L"Resume: the replay download failed");
+		else
+			usable = ResumeFromReplay::guestSourceReport(lobbyGame, report);
+		pLobby->SendChatMessageToCurrentLobby(report, false);
+		pLobby->UpdateCurrentLobby_HasResumeReplay(usable);
+	});
+}
+
 void InitWOLGameGadgets()
 {
 	ClearGSMessageBoxes();
+	s_wolLastSeenResumeHandoff = 0;
+	s_wolResumeArmInProgress = FALSE;
+	s_wolResumeDownloadedGeneration = 0;
+	s_wolResumeDownloadInProgress = FALSE;
 
 	NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
 	NGMPGame* theGameInfo = pLobbyInterface == nullptr ? nullptr : pLobbyInterface->GetCurrentGame();
@@ -1919,6 +2185,7 @@ void WOLGameSetupMenuInit( WindowLayout *layout, void *userData )
 		{
 			WOLDisplaySlotList();
 			WOLDisplayGameOptions();
+			wolCheckResumeArmChange(); // TheSuperHackers @feature bill-rich 24/09/2026 resume-from-replay arm arrived or left
 		});
 
 	pLobbyInterface->RegisterForGameStartPacket([]()
@@ -3540,10 +3807,20 @@ Bool handleGameSetupSlashCommands(UnicodeString uText)
 	}
 
 #if defined(GENERALS_ONLINE)
+	else if (token == "resume")
+	{
+		// TheSuperHackers @feature bill-rich 15/09/2026 resume-from-replay arming lives behind a chat command so no layout change is needed
+		AsciiString arg;
+		remainder.nextToken(&arg);
+		arg.toLower();
+		wolTryArmResumeFromReplay(arg == "off");
+		return TRUE; // was a slash command
+	}
 	else if (token == "help" || token == "commands")
 	{
 		const Color helpColor = GameMakeColor(127, 127, 127, 255);
 		GadgetListBoxAddEntryText(listboxGameSetupChat, UnicodeString(L"/me <message> - Send an emote."), helpColor, -1, -1);
+		GadgetListBoxAddEntryText(listboxGameSetupChat, UnicodeString(L"/resume - Resume the last recorded match from its replay; /resume off disarms (host only)."), helpColor, -1, -1);
 		GadgetListBoxAddEntryText(listboxGameSetupChat, UnicodeString(L"/friendsonly - Let only friends join (host only)."), helpColor, -1, -1);
 		GadgetListBoxAddEntryText(listboxGameSetupChat, UnicodeString(L"/public - Let anyone join (host only)."), helpColor, -1, -1);
 		GadgetListBoxAddEntryText(listboxGameSetupChat, UnicodeString(L"/setpassword <password> - Set a lobby password (host only)."), helpColor, -1, -1);

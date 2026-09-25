@@ -529,6 +529,7 @@ set(GAMEENGINE_SRC
 #    Include/GameNetwork/GameSpyOverlay.h
 #    Include/GameNetwork/GameSpyThread.h
     Include/GameNetwork/GUIUtil.h
+    Include/GameNetwork/ResumeFromReplay.h
 #    Include/GameNetwork/IPEnumeration.h
 #    Include/GameNetwork/LANAPI.h
 #    Include/GameNetwork/LANAPICallbacks.h
@@ -1116,6 +1117,7 @@ set(GAMEENGINE_SRC
 #    Source/GameNetwork/GameSpyOverlay.cpp
     Source/GameNetwork/GUIUtil.cpp
     Source/GameNetwork/RandomAssign.cpp
+    Source/GameNetwork/ResumeFromReplay.cpp
 #    Source/GameNetwork/IPEnumeration.cpp
 #    Source/GameNetwork/LANAPI.cpp
 #    Source/GameNetwork/LANAPICallbacks.cpp

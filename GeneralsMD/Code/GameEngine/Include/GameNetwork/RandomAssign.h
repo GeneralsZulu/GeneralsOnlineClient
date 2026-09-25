@@ -35,6 +35,7 @@ struct RandomSlotAssignment
 	Int side = -1;
 	Int color = -1;
 	Int startPos = -1;
+	Int team = -1;   // only resume-from-replay restores teams; a roll never changes them
 };
 
 // Resolve random factions, colors and start positions on every occupied player

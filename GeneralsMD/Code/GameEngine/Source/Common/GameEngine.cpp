@@ -932,11 +932,14 @@ Bool GameEngine::canUpdateRegularGameLogic(UnsignedInt logicTimeQueryFlags)
 	const Bool useFastMode = TheGlobalData->m_TiVOFastMode && TheGameLogic->isInReplayGame();
 #endif
 
-	// TheSuperHackers @feature bill-rich 15/09/2026 a live observer draining its snapshot must not be
-	// throttled to realtime by the logic time scale
+	// TheSuperHackers @feature bill-rich 15/09/2026 A live observer draining its snapshot, and a
+	// resume-from-replay catchup before its lead-in, both run one logic frame per render frame;
+	// neither may be throttled to realtime by the logic time scale.
 	const Bool inLiveObserverCatchup = TheRecorder && TheRecorder->isLiveObserverCatchup();
+	const Bool inResumeCatchup = TheRecorder && TheRecorder->isResumeCatchupMode()
+		&& !TheRecorder->isResumeCatchupLeadIn();
 
-	if (useFastMode || inLiveObserverCatchup || logicTimeScaleFps >= maxRenderFps)
+	if (useFastMode || inLiveObserverCatchup || inResumeCatchup || logicTimeScaleFps >= maxRenderFps)
 	{
 		// Logic time scale is uncapped or larger equal Render FPS. Update straight away.
 		return true;
@@ -962,6 +965,10 @@ Bool GameEngine::canUpdateRegularGameLogic(UnsignedInt logicTimeQueryFlags)
 extern NGMPGame* TheNGMPGame;
 #endif
 
+// TheSuperHackers @feature bill-rich 15/09/2026 Wall-clock cadence of the render passes during
+// resume-from-replay catchup (about 30 fps), see GameEngine::update.
+static constexpr const UnsignedInt CATCHUP_RENDER_INTERVAL_MS = 33;
+
 /// -----------------------------------------------------------------------------------------------
 DECLARE_PERF_TIMER(GameEngine_update)
 
@@ -982,6 +989,27 @@ void GameEngine::update()
 			TheWritableGlobalData->m_liveReplayFile.clear();
 			TheRecorder->setLiveObserverStreamOpen(TRUE);
 			TheRecorder->playbackFileLiveObserver(liveFile);
+		}
+
+		// TheSuperHackers @feature bill-rich 15/09/2026 During resume-from-replay catchup, render on a
+		// wall-clock cadence rather than once per logic frame: logic is fast-forwarding
+		// at many times realtime, so drawing every logic frame would burn the CPU on
+		// frames no one can perceive, while drawing at ~30 fps keeps the catchup
+		// watchable. Render rate is not what bounds catchup (lockstep is, see
+		// ConnectionManager::updateRunAhead) and FrameMetrics stops sampling display
+		// FPS during catchup, which is what makes it safe to throttle here. The lead-in
+		// renders every frame for a realtime preview before control is handed back.
+		Bool catchupSkipRender = TheRecorder && TheRecorder->isResumeCatchupMode()
+			&& !TheRecorder->isResumeCatchupLeadIn();
+		if (catchupSkipRender)
+		{
+			static UnsignedInt s_lastCatchupRenderMs = 0;
+			const UnsignedInt nowMs = timeGetTime();
+			if (nowMs - s_lastCatchupRenderMs >= CATCHUP_RENDER_INTERVAL_MS)
+			{
+				s_lastCatchupRenderMs = nowMs;
+				catchupSkipRender = FALSE;
+			}
 		}
 
 		{
@@ -1006,7 +1034,18 @@ void GameEngine::update()
 			/// @todo Move audio init, update, etc, into GameClient update
 
 			TheAudio->UPDATE();
-			TheGameClient->UPDATE();
+			if (catchupSkipRender)
+			{
+				TheParticleSystemManager->update(); // let particles finish instead of piling up while frames are skipped
+
+				// The frame tick is the client update's first act (GameClient::update) and the
+				// network relies on one per logic frame: Network::processCommand drives the
+				// per-frame command counts off it and switches PREGAME to INGAME on frame 1.
+				GameMessage *frameMsg = TheMessageStream->appendMessage( GameMessage::MSG_FRAME_TICK );
+				frameMsg->appendTimestampArgument( TheGameClient->getFrame() );
+			}
+			else
+				TheGameClient->UPDATE();
 			TheMessageStream->propagateMessages();
 
             if (TheNetwork != nullptr)

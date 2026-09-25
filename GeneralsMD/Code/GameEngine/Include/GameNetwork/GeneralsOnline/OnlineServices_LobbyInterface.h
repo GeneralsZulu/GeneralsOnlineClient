@@ -11,6 +11,8 @@
 #include "GameClient/InGameUI.h"
 #include "GameLogic/VictoryConditions.h"
 #include <atomic>
+#include <memory>
+#include <vector>
 
 extern NGMPGame* TheNGMPGame;
 
@@ -25,6 +27,7 @@ struct LobbyMemberEntry : public NetworkMemberBase
 	int team = -1;
 	int startpos = -1;
 	bool has_map = false;
+	bool has_resume_replay = false; // TheSuperHackers @feature bill-rich 24/09/2026 holds a usable copy of the resume-from-replay source
 
 	uint16_t m_SlotIndex = 999999;
 	uint16_t m_SlotState = SlotState::SLOT_OPEN;
@@ -72,6 +75,11 @@ struct LobbyEntry
 	ELobbyType lobby_type = ELobbyType::UNKNOWN;
 
 	int rng_seed = -1;
+
+	// TheSuperHackers @feature bill-rich 15/09/2026 resume-from-replay arming (0 when not armed); see ResumeFromReplay.
+	// The generation counts the service's arms, so a guest can tell a fresh upload from the one it already holds.
+	uint32_t resume_handoff_frame = 0;
+	uint32_t resume_replay_generation = 0;
 
 	bool passworded = false;
 	std::string password;
@@ -229,6 +237,14 @@ public:
 	// TheSuperHackers @feature bill-rich 15/09/2026 Randomize: send the slots a roll changed (only the fields it
 	// changed, with the occupant's user id so the service can skip a slot that changed hands) and report the outcome.
 	void UpdateCurrentLobby_BulkSlotUpdate(const std::vector<RandomSlotAssignment>& changes, std::function<void(bool bSuccess)> onDone);
+
+	// TheSuperHackers @feature bill-rich 15/09/2026 Resume-from-replay (see ResumeFromReplay). The host uploads
+	// the resume source, then arms with the handoff frame and the replay's seed (handoff 0 disarms);
+	// guests download the source when the arm reaches them and flag themselves as holding it.
+	void UpdateCurrentLobby_ArmResume(uint32_t handoffFrame, int rngSeed, std::function<void(bool bSuccess)> onComplete);
+	void UpdateCurrentLobby_HasResumeReplay(bool bHasResumeReplay);
+	void UploadResumeReplay(const AsciiString& path, std::function<void(bool bSuccess)> onComplete);
+	void DownloadResumeReplay(const AsciiString& path, std::function<void(bool bSuccess)> onComplete);
 
 	void UpdateCurrentLobbyMaxCameraHeight(uint16_t maxCameraHeight);
 
@@ -497,6 +513,9 @@ public:
 	}
 
 private:
+	void SendResumeReplayChunk(int64_t lobbyID, std::shared_ptr<std::vector<uint8_t>> data, size_t offset, int conflictRetries, std::function<void(bool bSuccess)> onComplete);
+	void FetchResumeReplayChunk(int64_t lobbyID, AsciiString path, std::shared_ptr<std::vector<uint8_t>> data, std::function<void(bool bSuccess)> onComplete);
+
 	std::function<void(bool)> m_cb_CreateLobbyPendingCallback = nullptr;
 
 	std::function<void(EJoinLobbyResult)> m_callbackJoinedLobby = nullptr;

@@ -3295,7 +3295,8 @@ Coord2D InGameUI::getScrollAmount()
 	//-------------------------------------------------------------------------------------------------
 void InGameUI::setGUICommand(const CommandButton* command)
 {
-	if (TheRecorder->getMode() == RECORDERMODETYPE_PLAYBACK)
+	// TheSuperHackers @feature bill-rich 15/09/2026 resume-from-replay catchup: no GUI commands until control is handed back
+	if (TheRecorder->getMode() == RECORDERMODETYPE_PLAYBACK || TheRecorder->isResumeInputBlocked())
 		return;
 
 	// sanity

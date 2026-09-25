@@ -24,6 +24,7 @@
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/ScriptEngine.h"
 
+#include "Common/Recorder.h"
 #include "GameNetwork/NetworkDefs.h"
 #include "GameNetwork/NetworkInterface.h"
 
@@ -109,10 +110,15 @@ Bool FramePacer::isActualFramesPerSecondLimitEnabled() const
 #endif
 	}
 
-	// TheSuperHackers @feature bill-rich 15/09/2026 A live observer draining its snapshot runs one logic
-	// frame per render frame as fast as it can; the render cap gets out of the way.
+	// TheSuperHackers @feature bill-rich 15/09/2026 A live observer draining its snapshot, and a
+	// resume-from-replay catchup before its lead-in, both run one logic frame per render frame
+	// as fast as they can; the render cap gets out of the way for either.
 	if (m_uncappedForCatchup)
 		allowFpsLimit = false;
+	if (TheRecorder != nullptr && TheRecorder->isResumeCatchupMode() && !TheRecorder->isResumeCatchupLeadIn())
+	{
+		allowFpsLimit = false;
+	}
 
 	allowFpsLimit &= TheGlobalData->m_useFpsLimit;
 	allowFpsLimit &= isFramesPerSecondLimitEnabled();
