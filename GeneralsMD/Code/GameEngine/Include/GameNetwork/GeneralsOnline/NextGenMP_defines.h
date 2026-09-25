@@ -125,3 +125,31 @@ static int FRAME_GROUPING_CAP = 64;
 #define GENERALS_ONLINE_ALLOW_ALL_SETTINGS_FOR_STATS_MATCHES 1
 
 #define GENERALS_ONLINE_DISABLE_STD_FROM_CHARS_PARSING 1
+
+// TheSuperHackers @feature bill-rich 24/09/2026 Don't upload the finished
+// replay to GeneralsOnline's S3 bucket; this fork ships it to radarvan instead
+// (RecorderClass::stopRecording -> StartMatchTelemetryUpload). Sending the same
+// .rep to both is pure duplication: the GO service does not need the file for
+// anything it computes, and reading the whole replay into memory on the main
+// thread at teardown is the most expensive thing stopRecording does.
+//
+// This is deliberately narrow. Everything the GO service itself depends on is
+// untouched and must stay that way:
+//   - POST Lobby/Outcome (NGMP_OnlineServices_StatsInterface::CommitMyOutcome)
+//     still fires. It completes the match on the service, feeds match history
+//     and whatever ranking is computed server-side, and its response is what
+//     hands back the presigned S3 URIs.
+//   - PUT PlayerStats (UpdateMyStats) still fires. It is the player's career
+//     record - wins, streaks, battle honors, rank - which the lobby shows to
+//     everyone. Suppressing it would freeze every player's displayed rank.
+//   - The load-screen and score-screen screenshots still upload. They are not
+//     part of the stats or replay channel.
+//   - The livestream chunk POSTs still fire. That is GO's live spectating,
+//     a different feature that happens to read the same file.
+//
+// Comment this out to restore GO's replay upload. The disable is enforced in
+// exactly one place, NGMP_OnlineServicesManager::CommitReplay: with no bytes
+// cached, the pairing block in Tick() never finds anything to PUT, so no other
+// site needs a guard. Note that the service also has its own runtime kill
+// switch for this, ServiceConfig::do_replay_upload, which is independent.
+#define GENERALS_ONLINE_DISABLE_REPLAY_UPLOAD 1

@@ -243,6 +243,18 @@ void NGMP_OnlineServicesManager::AttemptLoadSteam()
 
 void NGMP_OnlineServicesManager::CommitReplay(AsciiString absoluteReplayPath)
 {
+#if defined(GENERALS_ONLINE_DISABLE_REPLAY_UPLOAD)
+	// This fork uploads the replay to radarvan from RecorderClass::stopRecording
+	// instead, so caching it for GO's S3 bucket would ship the same file twice.
+	// Returning here is the whole disable: Tick()'s pairing block only PUTs when
+	// m_cachedReplayUpload holds bytes, and nothing else fills it. The Outcome
+	// POST still runs and still caches the presigned URI it returns; that URI is
+	// simply never used. See GENERALS_ONLINE_DISABLE_REPLAY_UPLOAD in
+	// NextGenMP_defines.h for the rationale and how to undo this.
+	NetworkLog(ELogVerbosity::LOG_RELEASE,
+		"[MediaUpload] Replay upload to GeneralsOnline is disabled; the replay ships to radarvan instead");
+	return;
+#else
 	NGMP_OnlineServicesManager* pOnlineServicesMgr = NGMP_OnlineServicesManager::GetInstance();
 	if (pOnlineServicesMgr != nullptr)
 	{
@@ -277,6 +289,7 @@ void NGMP_OnlineServicesManager::CommitReplay(AsciiString absoluteReplayPath)
 			NGMP_OnlineServicesManager::GetInstance()->CacheReplayBytes(matchID, std::move(replayData));
 		}
 	}
+#endif
 }
 
 void NGMP_OnlineServicesManager::CacheMatchUploadBytes(CachedMatchUpload& upload, uint64_t matchID, std::vector<uint8_t> data)

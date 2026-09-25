@@ -1149,7 +1149,11 @@ void RecorderClass::stopRecording() {
 
 		if (m_archiveReplays)
 			archiveReplay(m_fileName);
-		// upload
+		// GeneralsOnline's own replay upload. Compiled out by default in this
+		// fork - see GENERALS_ONLINE_DISABLE_REPLAY_UPLOAD in
+		// NextGenMP_defines.h - because the telemetry block below ships the
+		// same file to radarvan. The call is left in place so the GO path is
+		// one #define away.
 #if defined(GENERALS_ONLINE)
 		if (TheNGMPGame != nullptr)
 		{
