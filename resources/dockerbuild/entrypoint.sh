@@ -2,7 +2,33 @@
 set -euo pipefail
 cd /build/cnc
 wineboot
-if [ "${FORCE_CMAKE:-}" = "true" ] || [ ! -f  build/docker/build.ninja  ]; then
+# Optional version override forwarded from `make installer`. Empty values
+# fall through to the cmake-side defaults in
+# GeneralsMD/Code/Main/CMakeLists.txt so plain `cmake ..` builds still
+# work outside the Make pipeline.
+ZULU_VERSION_FLAGS=()
+if [ -n "${ZULU_VERSION_MAJOR:-}" ]; then
+    ZULU_VERSION_FLAGS+=("-DZULU_VERSION_MAJOR=${ZULU_VERSION_MAJOR}")
+fi
+if [ -n "${ZULU_VERSION_MINOR:-}" ]; then
+    ZULU_VERSION_FLAGS+=("-DZULU_VERSION_MINOR=${ZULU_VERSION_MINOR}")
+fi
+if [ -n "${ZULU_VERSION_BUILDNUM:-}" ]; then
+    ZULU_VERSION_FLAGS+=("-DZULU_VERSION_BUILDNUM=${ZULU_VERSION_BUILDNUM}")
+fi
+if [ -n "${ZULU_BUILD_VARIANT:-}" ]; then
+    ZULU_VERSION_FLAGS+=("-DZULU_BUILD_VARIANT=${ZULU_BUILD_VARIANT}")
+fi
+
+# One build directory per preset, supplied by scripts/docker-build.sh. Each
+# preset gets its own cmake cache so a `vc6` configure cannot inherit the
+# RTS_DEBUG_* flags left behind by a `vc6-releaselog` configure, and neither
+# preset invalidates the other's ninja state. Defaults keep a bare
+# `docker run zerohour-build` working.
+PRESET="${PRESET:-vc6}"
+BUILD_SUBDIR="${BUILD_SUBDIR:-build/docker-$PRESET}"
+
+if [ "${FORCE_CMAKE:-}" = "true" ] || [ ! -f "$BUILD_SUBDIR/build.ninja" ]; then
    wine /build/tools/cmake/bin/cmake.exe \
          --preset ${PRESET} \
         -DCMAKE_SYSTEM="Windows" \
@@ -19,10 +45,13 @@ if [ "${FORCE_CMAKE:-}" = "true" ] || [ ! -f  build/docker/build.ninja  ]; then
         -DCMAKE_DISABLE_PRECOMPILE_HEADERS=1 \
         -DCMAKE_C_COMPILER_WORKS=1 \
         -DCMAKE_CXX_COMPILER_WORKS=1 \
-        -B /build/cnc/build/docker
+        -DZULU_CLIENT_KEY="${ZULU_CLIENT_KEY:-}" \
+        -DCNCSTATS_ZULU_CLIENT_KEY="${CNCSTATS_ZULU_CLIENT_KEY:-}" \
+        "${ZULU_VERSION_FLAGS[@]}" \
+        -B "/build/cnc/$BUILD_SUBDIR"
 fi
 
-cd /build/cnc/build/docker 
+cd "/build/cnc/$BUILD_SUBDIR"
 wine cmd /c "set TMP=Z:\build\tmp& set TEMP=Z:\build\tmp& Z:\build\tools\ninja.exe $MAKE_TARGET"
 
 
