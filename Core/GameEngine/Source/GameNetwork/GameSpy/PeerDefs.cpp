@@ -240,6 +240,9 @@ void GameSpyInfo::setGameOptions()
 				case SLOT_BRUTAL_AI:
 					playerName = "CH";
 					break;
+				case SLOT_TACTICAL_AI:
+					playerName = "CT";
+					break;
 				}
 				req.gameOptsPlayerNames[i] = playerName.str(); // name is unused - we go off of the profileID
 				req.gameOptions.wins[req.gameOptions.numObservers+req.gameOptions.numPlayers] = 0;
@@ -527,7 +530,7 @@ void GameSpyInfo::markAsStagingRoomHost()
 
   m_localStagingRoom.reset();
 	m_localStagingRoom.enterGame();
-	m_localStagingRoom.setSeed(GetTickCount());
+	m_localStagingRoom.setSeed(GenerateGameSeed());
 
   m_localStagingRoom.setUseStats( useStats );
   m_localStagingRoom.setOldFactionsOnly( oldFactionsOnly );

@@ -40,7 +40,11 @@ enum SlotState CPP_11(: Int)
 	SLOT_EASY_AI,
 	SLOT_MED_AI,
 	SLOT_BRUTAL_AI,
-	SLOT_PLAYER
+	SLOT_PLAYER,
+	// Zulu addition: combat strength matches Brutal but the AI also runs the
+	// idle-army-commit sweep (and any future smart-AI features). Added at the
+	// end so existing serialized SlotState values continue to deserialize.
+	SLOT_TACTICAL_AI
 };
 
 enum
@@ -114,6 +118,7 @@ public:
 	Bool isHuman() const;															///< Is this slot occupied by a human player?
 	Bool isOccupied() const;													///< Is this slot occupied (by a human or an AI)?
 	Bool isAI() const;																///< Is this slot occupied by an AI?
+	Bool isTacticalAI() const { return m_state == SLOT_TACTICAL_AI; }	///< Is this slot a Tactical (smart) AI?
 	Bool isPlayer( AsciiString userName ) const;						///< Does this slot contain the given user?
 	Bool isPlayer( UnicodeString userName ) const;					///< Does this slot contain the given user?
 	Bool isPlayer( UnsignedInt ip ) const;									///< Is this slot at this IP?
@@ -192,6 +197,9 @@ public:
 	inline UnsignedInt getMapCRC() const;							///< Get the map CRC
 	inline UnsignedInt getMapSize() const;						///< Get the map size
 	inline Int getMapContentsMask() const;						///< Get the map contents mask
+	// NOTE: the seed doubles as the match id on both stats servers. Anything
+	// assigning one should call GenerateGameSeed() below rather than reaching
+	// for GetTickCount().
 	void setSeed( Int seed );													///< Set the random seed for the game
 	inline Int getSeed() const;												///< Get the game seed
 	inline Int getUseStats() const;		///< Does this game count towards gamespy stats?
@@ -288,6 +296,13 @@ void        GameInfo::setOldFactionsOnly( Bool oldFactionsOnly ) { m_oldFactions
 
 AsciiString GameInfoToAsciiString( const GameInfo *game );
 Bool ParseAsciiStringToGameInfo( GameInfo *game, AsciiString options );
+
+/// Pick a seed for a new game. Always use this rather than GetTickCount():
+/// the seed is also the match id on both stats servers, and a raw tick count
+/// is millisecond-since-boot, which collides between freshly booted machines
+/// often enough to merge unrelated matches. Always positive, so every
+/// consumer that formats it signed or unsigned gets the same key.
+Int GenerateGameSeed(void);
 
 
 /**

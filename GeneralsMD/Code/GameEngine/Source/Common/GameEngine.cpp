@@ -569,6 +569,17 @@ void GameEngine::init()
 		initSubsystem(TheDeepCRCSanityCheck, "TheDeepCRCSanityCheck", MSGNEW("GameEngineSubystem") DeepCRCSanityCheck, nullptr);
 #endif // DEBUG_CRC
 		initSubsystem(TheGameText, "TheGameText", CreateGameTextInterface(), nullptr);
+
+		// Load mod-supplied additional GUI strings, if present. These augment
+		// (never override) Generals.csf and survive map reset. Must run after
+		// TheGameText is constructed (its init parses the primary CSF) and
+		// after loadMods so the file can be shipped inside a mod BIG.
+		{
+			AsciiString extraStr;
+			extraStr.format("Data\\%s\\GeneralsExtras.str", GetRegistryLanguage().str());
+			TheGameText->initAdditionalStringFile(extraStr);
+		}
+
 		updateWindowTitle();
 
 #ifdef DUMP_PERF_STATS///////////////////////////////////////////////////////////////////////////

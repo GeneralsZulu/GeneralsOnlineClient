@@ -69,7 +69,6 @@
 #include "GameNetwork/IPEnumeration.h"
 #include "WWDownload/Registry.h"
 
-UnsignedInt GetTeamUiColor(Int teamNumber);
 
 SkirmishGameInfo *TheSkirmishGameInfo = nullptr;
 
@@ -859,7 +858,7 @@ void updateMapStartSpots( GameInfo *myGame, GameWindow *buttonMapStartPositions[
 			displayNumber.format("NUMBER:%d", i + 1);
 			GadgetButtonSetText(btn, TheGameText->fetch(displayNumber));
 
-			UnsignedInt col = (gs->getTeamNumber() >= 0)
+			Color col = (gs->getTeamNumber() >= 0)
 				? GetTeamUiColor(gs->getTeamNumber())
 				: GameMakeColor(255, 255, 255, 255);
 
@@ -887,7 +886,7 @@ void updateMapStartSpots( GameInfo *myGame, GameWindow *buttonMapStartPositions[
 				btn->winSetTooltip(temp);
 
 				Int team = gs->getTeamNumber();
-				UnsignedInt col;
+				Color col;
 				if (team >= 0)
 				{
 					col = GetTeamUiColor(team);
@@ -1149,12 +1148,14 @@ void InitSkirmishGameGadgets()
       GadgetComboBoxSetItemData(comboBoxPlayer[i], 0, (void *)SLOT_OPEN);
 			GadgetComboBoxAddEntry(comboBoxPlayer[i],TheGameText->fetch("GUI:Closed"),white);  // leave this first
       GadgetComboBoxSetItemData(comboBoxPlayer[i], 1, (void *)SLOT_CLOSED);
+			GadgetComboBoxAddEntry(comboBoxPlayer[i],TheGameText->fetch("GUI:TacticalAI"),white);
+      GadgetComboBoxSetItemData(comboBoxPlayer[i], 2, (void *)SLOT_TACTICAL_AI);
 			GadgetComboBoxAddEntry(comboBoxPlayer[i],TheGameText->fetch("GUI:HardAI"),white);
-      GadgetComboBoxSetItemData(comboBoxPlayer[i], 2, (void *)SLOT_BRUTAL_AI);
+      GadgetComboBoxSetItemData(comboBoxPlayer[i], 3, (void *)SLOT_BRUTAL_AI);
 			GadgetComboBoxAddEntry(comboBoxPlayer[i],TheGameText->fetch("GUI:MediumAI"),white);
-      GadgetComboBoxSetItemData(comboBoxPlayer[i], 3, (void *)SLOT_MED_AI);
+      GadgetComboBoxSetItemData(comboBoxPlayer[i], 4, (void *)SLOT_MED_AI);
 			GadgetComboBoxAddEntry(comboBoxPlayer[i],TheGameText->fetch("GUI:EasyAI"),white);
-      GadgetComboBoxSetItemData(comboBoxPlayer[i], 4, (void *)SLOT_EASY_AI);
+      GadgetComboBoxSetItemData(comboBoxPlayer[i], 5, (void *)SLOT_EASY_AI);
 			GadgetComboBoxSetSelectedPos(comboBoxPlayer[i],0);
 
 		}
@@ -1366,7 +1367,7 @@ void SkirmishGameOptionsMenuInit( WindowLayout *layout, void *userData )
 	TheSkirmishGameInfo->setSlot(1, gSlot);
 
 	ParseAsciiStringToGameInfo(TheSkirmishGameInfo, prefs.getSlotList());
-	TheSkirmishGameInfo->setSeed(GetTickCount());
+	TheSkirmishGameInfo->setSeed(GenerateGameSeed());
 
 	UnsignedInt isPreorder = 0;
 	GetUnsignedIntFromRegistry("", "Preorder", isPreorder);
