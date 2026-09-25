@@ -48,20 +48,36 @@ if(NOT _zulu_generated_version_existing STREQUAL _zulu_generated_version_content
     file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/GeneratedVersion.h "${_zulu_generated_version_content}")
 endif()
 
-# Defaults match the original retail binary's reported values. `make installer`
-# overrides these via -DZULU_VERSION_* (parsed out of APPVERSION in
-# installer/Zulu.nsi by the top-level Makefile) so the binary's TheVersion
-# matches the installer version, which in turn flows into every replay
-# header recorded by that binary (Recorder.cpp:608-615). Plain `cmake`
-# builds outside the Make pipeline keep the retail-style defaults.
+# `make installer` overrides these via -DZULU_VERSION_* (parsed out of
+# APPVERSION in installer/Zulu.nsi by the top-level Makefile) so the binary's
+# TheVersion matches the installer version, which in turn flows into every
+# replay header recorded by that binary.
+#
+# The defaults matter because the recorded version string is what
+# deriveReplayEpochFromHeader() maps to a replay determinism epoch on
+# playback. The old retail-style default (1.4.601) maps to REPLAY_EPOCH_V130,
+# so a plain `cmake` build recorded a replay under the CURRENT gates and then
+# replayed it with the newer ones switched off -- guaranteed divergence
+# against its own recordings. Defaulting to the current release version
+# instead makes a bare cmake build self-consistent and identical to what
+# `make installer` produces from the same tree.
+#
+# Note that in a GENERALS_ONLINE build WinMain passes GENERALS_ONLINE_VERSION
+# as the build number, so only MAJOR and MINOR reach the recorded version
+# string (it renders as "1.6.<GENERALS_ONLINE_VERSION>"). MINOR is therefore
+# the component that decides the epoch; BUILDNUM is kept in step with
+# APPVERSION for the non-GO path and for RTS.RC's VERSIONINFO.
+#
+# Keep this in step with APPVERSION in installer/Zulu.nsi, and re-check it
+# whenever a new epoch is added to RecorderClass::ReplayEpoch.
 if(NOT DEFINED ZULU_VERSION_MAJOR)
     set(ZULU_VERSION_MAJOR 1)
 endif()
 if(NOT DEFINED ZULU_VERSION_MINOR)
-    set(ZULU_VERSION_MINOR 4)
+    set(ZULU_VERSION_MINOR 6)
 endif()
 if(NOT DEFINED ZULU_VERSION_BUILDNUM)
-    set(ZULU_VERSION_BUILDNUM 601)
+    set(ZULU_VERSION_BUILDNUM 3)
 endif()
 
 # VERSION_STRING is consumed by RTS.RC's VERSIONINFO block (and any C/C++
