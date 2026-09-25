@@ -26,6 +26,10 @@
 #include "Common/Energy.h"
 #include "Common/ThingTemplate.h"
 #include "Common/RandomValue.h"
+#include "Common/AcademyStats.h"
+#include "Common/IncomeType.h"
+#include "Common/ScoreKeeper.h"
+#include "GameClient/ControlBar.h"
 #include "GameLogic/Damage.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Object.h"
@@ -101,6 +105,25 @@ static Bool isGamePlayer(Player *player)
 	return TRUE;
 }
 
+bool StatsExporterHasMinHumansForUpload()
+{
+	if (ThePlayerList == nullptr)
+		return false;
+
+	Int humans = 0;
+	const Int totalPlayers = ThePlayerList->getPlayerCount();
+	Int i;
+	for (i = 0; i < totalPlayers; ++i)
+	{
+		Player *player = ThePlayerList->getNthPlayer(i);
+		if (player == nullptr || !isGamePlayer(player))
+			continue;
+		if (player->getPlayerType() == PLAYER_HUMAN)
+			++humans;
+	}
+	return humans >= 2;
+}
+
 //-----------------------------------------------------------------------------
 
 struct PlayerSnapshotData
@@ -109,6 +132,23 @@ struct PlayerSnapshotData
 	UnsignedInt money;
 	Int moneyEarned;
 	Int moneySpent;
+	Int incomeByType[INCOME_COUNT];	///< cumulative income per source as of this snapshot
+};
+
+// JSON key for each IncomeType, indexed by the enum value. Keep in sync with
+// the IncomeType enum in Common/IncomeType.h.
+static const char *const TheIncomeTypeJsonKeys[INCOME_COUNT] =
+{
+	"other",		// INCOME_OTHER
+	"supply",		// INCOME_SUPPLY
+	"hacker",		// INCOME_HACKER
+	"blackMarket",	// INCOME_BLACK_MARKET
+	"supplyDrop",	// INCOME_SUPPLY_DROP
+	"oilDerrick",	// INCOME_OIL_DERRICK
+	"bounty",		// INCOME_BOUNTY
+	"salvage",		// INCOME_SALVAGE
+	"crate",		// INCOME_CRATE
+	"theft",		// INCOME_THEFT
 };
 
 struct PlayerStateData
@@ -120,6 +160,7 @@ struct PlayerStateData
 	Int sciencePurchasePoints;
 	Bool hasRadar;
 	Bool isDead;
+	Bool isHunted;
 	Int bombardment;
 	Int holdTheLine;
 	Int searchAndDestroy;
@@ -137,6 +178,7 @@ struct SkillPointsEvent : StateChangeEvent { Int skillPoints; };
 struct SciencePointsEvent : StateChangeEvent { Int sciencePurchasePoints; };
 struct RadarEvent : StateChangeEvent { Bool hasRadar; };
 struct DeathEvent : StateChangeEvent {};
+struct HuntedEvent : StateChangeEvent { Bool hunted; };
 struct BattlePlanEvent : StateChangeEvent { Int bombardment; Int holdTheLine; Int searchAndDestroy; };
 
 struct FrameSnapshotData
@@ -199,6 +241,7 @@ struct StatsExporterState
 	std::vector<SciencePointsEvent> sciencePointsEvents;
 	std::vector<RadarEvent> radarEvents;
 	std::vector<DeathEvent> deathEvents;
+	std::vector<HuntedEvent> huntedEvents;
 	std::vector<BattlePlanEvent> battlePlanEvents;
 
 	void resetData()
@@ -218,6 +261,7 @@ struct StatsExporterState
 		sciencePointsEvents.clear();
 		radarEvents.clear();
 		deathEvents.clear();
+		huntedEvents.clear();
 		battlePlanEvents.clear();
 	}
 };
@@ -263,8 +307,93 @@ static void initPlayerMapping()
 
 //-----------------------------------------------------------------------------
 
+//-----------------------------------------------------------------------------
+// "Hunted" detection: a player is hunted once they have lost the ability to
+// rebuild: no dozer/worker unit alive, and no completed structure whose
+// command set can produce one (command centers for every faction, plus the
+// GLA supply stash). Capability is checked from command sets rather than
+// faction lists so captured cross-faction structures and stolen dozers
+// count naturally (and can make a player un-hunted again).
+//
+// TheSuperHackers @info The observer UI keeps its own copy of this walk in
+// InGameUI.cpp (InGameUI::updateHuntedPlayers). This one serves the stats
+// export, which runs on the GameLogic side and also during -simulateReplay
+// where no InGameUI exists.
+//-----------------------------------------------------------------------------
+
+struct HuntedCheckData
+{
+	Bool hasBuilder;
+};
+
+static void huntedCheckObjectFn(Object *obj, void *userData)
+{
+	HuntedCheckData *data = (HuntedCheckData *)userData;
+	if (data->hasBuilder || obj == nullptr)
+		return;
+	if (obj->isEffectivelyDead())
+		return;
+
+	if (obj->isKindOf(KINDOF_DOZER))
+	{
+		data->hasBuilder = TRUE;
+		return;
+	}
+
+	// A GLA hole regrows its structure with a worker of its own, so the player is
+	// not out of builders while one stands.
+	if (obj->isKindOf(KINDOF_REBUILD_HOLE))
+	{
+		data->hasBuilder = TRUE;
+		return;
+	}
+
+	// A structure only counts if it is finished, not being sold, and can
+	// queue a dozer-kind unit from its command set. Units never can.
+	if (!obj->isKindOf(KINDOF_STRUCTURE))
+		return;
+	if (obj->getStatusBits().test(OBJECT_STATUS_UNDER_CONSTRUCTION))
+		return;
+	if (obj->getStatusBits().test(OBJECT_STATUS_SOLD))
+		return;
+	if (TheControlBar == nullptr)
+		return;
+	const CommandSet *commandSet = TheControlBar->findCommandSet(obj->getCommandSetString());
+	if (commandSet == nullptr)
+		return;
+	for (Int j = 0; j < MAX_COMMANDS_PER_SET; ++j)
+	{
+		const CommandButton *button = commandSet->getCommandButton(j);
+		if (button == nullptr)
+			continue;
+		if (button->getCommandType() != GUI_COMMAND_UNIT_BUILD)
+			continue;
+		const ThingTemplate *thing = button->getThingTemplate();
+		if (thing != nullptr && thing->isKindOf(KINDOF_DOZER))
+		{
+			data->hasBuilder = TRUE;
+			return;
+		}
+	}
+}
+
+Bool StatsExporterComputePlayerIsHunted(const Player *player)
+{
+	if (player == nullptr)
+		return FALSE;
+
+	HuntedCheckData data;
+	data.hasBuilder = FALSE;
+	player->iterateObjects(huntedCheckObjectFn, &data);
+	return !data.hasBuilder;
+}
+
+//-----------------------------------------------------------------------------
+
 void StatsExporterCollectSnapshot()
 {
+	if (!s_state.exportingActive)
+		return;
 	if (ThePlayerList == nullptr || TheGameLogic == nullptr)
 		return;
 
@@ -302,6 +431,8 @@ void StatsExporterCollectSnapshot()
 		pd.money = player->getMoney()->countMoney();
 		pd.moneyEarned = sk->getTotalMoneyEarned();
 		pd.moneySpent = sk->getTotalMoneySpent();
+		for (Int t = 0; t < INCOME_COUNT; ++t)
+			pd.incomeByType[t] = sk->getIncomeByType((IncomeType)t);
 
 		// Detect state changes and emit events
 		{
@@ -383,6 +514,24 @@ void StatsExporterCollectSnapshot()
 				last.isDead = curBool;
 			}
 
+			// Skip hunted evaluation once the player is dead: elimination
+			// destroys their objects and would emit a meaningless hunted
+			// event alongside the death event.
+			if (!player->isPlayerDead())
+			{
+				curBool = StatsExporterComputePlayerIsHunted(player);
+				if (curBool != last.isHunted)
+				{
+					HuntedEvent hev;
+					memset(&hev, 0, sizeof(hev));
+					hev.frame = currentFrame;
+					hev.playerIndex = i;
+					hev.hunted = curBool;
+					s_state.huntedEvents.push_back(hev);
+					last.isHunted = curBool;
+				}
+			}
+
 			curVal = player->getBattlePlansActiveSpecific(PLANSTATUS_BOMBARDMENT);
 			curVal2 = player->getBattlePlansActiveSpecific(PLANSTATUS_HOLDTHELINE);
 			curVal3 = player->getBattlePlansActiveSpecific(PLANSTATUS_SEARCHANDDESTROY);
@@ -414,6 +563,11 @@ void StatsExporterBeginRecording()
 {
 	s_state.exportingActive = TRUE;
 	s_state.resetData();
+}
+
+bool StatsExporterIsActive()
+{
+	return s_state.exportingActive ? true : false;
 }
 
 //-----------------------------------------------------------------------------
@@ -661,6 +815,17 @@ static void buildStateChangeEventsJson(ordered_json &root)
 	}
 	root["deathEvents"] = deathArr;
 
+	ordered_json huntedArr = ordered_json::array();
+	for (i = 0; i < s_state.huntedEvents.size(); ++i)
+	{
+		const HuntedEvent &ev = s_state.huntedEvents[i];
+		huntedArr.push_back(ordered_json{
+			{"frame", ev.frame}, {"player", remapPlayerIndex(ev.playerIndex)},
+			{"hunted", static_cast<bool>(ev.hunted)}
+		});
+	}
+	root["huntedEvents"] = huntedArr;
+
 	ordered_json bpArr = ordered_json::array();
 	for (i = 0; i < s_state.battlePlanEvents.size(); ++i)
 	{
@@ -689,17 +854,29 @@ static ordered_json buildTimeSeriesJson()
 		ordered_json money = ordered_json::array();
 		ordered_json moneyEarned = ordered_json::array();
 		ordered_json moneySpent = ordered_json::array();
+		ordered_json incomeBySource;
 
-		for (size_t s = 0; s < s_state.snapshots.size(); ++s)
+		size_t sn;
+		for (sn = 0; sn < s_state.snapshots.size(); ++sn)
 		{
-			money.push_back(s_state.snapshots[s].players[pi].money);
-			moneyEarned.push_back(s_state.snapshots[s].players[pi].moneyEarned);
-			moneySpent.push_back(s_state.snapshots[s].players[pi].moneySpent);
+			money.push_back(s_state.snapshots[sn].players[pi].money);
+			moneyEarned.push_back(s_state.snapshots[sn].players[pi].moneyEarned);
+			moneySpent.push_back(s_state.snapshots[sn].players[pi].moneySpent);
+		}
+
+		// Per-source cumulative income series, one array per source.
+		for (Int t = 0; t < INCOME_COUNT; ++t)
+		{
+			ordered_json series = ordered_json::array();
+			for (sn = 0; sn < s_state.snapshots.size(); ++sn)
+				series.push_back(s_state.snapshots[sn].players[pi].incomeByType[t]);
+			incomeBySource[TheIncomeTypeJsonKeys[t]] = series;
 		}
 
 		p["money"] = money;
 		p["moneyEarned"] = moneyEarned;
 		p["moneySpent"] = moneySpent;
+		p["incomeBySource"] = incomeBySource;
 		playersArr.push_back(p);
 	}
 
@@ -709,10 +886,20 @@ static ordered_json buildTimeSeriesJson()
 
 //-----------------------------------------------------------------------------
 
-void ExportGameStatsJSON(const AsciiString& replayDir, const AsciiString& replayFileName)
+AsciiString ExportGameStatsJSON(const AsciiString& replayDir, const AsciiString& replayFileName,
+                                Bool uploadInline)
 {
+	// No-op if collection wasn't started for this game (e.g. non-host peers,
+	// replay viewing). Lets callers invoke this unconditionally.
+	if (!StatsExporterIsActive())
+		return AsciiString();
+
 	if (ThePlayerList == nullptr || TheGameLogic == nullptr || TheGlobalData == nullptr)
-		return;
+	{
+		s_state.resetData();
+		s_state.exportingActive = FALSE;
+		return AsciiString();
+	}
 
 	// Strip any directory components from the replay filename
 	const char *replayBase = replayFileName.str();
@@ -738,7 +925,7 @@ void ExportGameStatsJSON(const AsciiString& replayDir, const AsciiString& replay
 
 	// Build JSON document
 	ordered_json root;
-	root["version"] = 1;
+	root["version"] = 3;
 
 	// Game info
 	root["game"] = ordered_json{
@@ -781,6 +968,13 @@ void ExportGameStatsJSON(const AsciiString& replayDir, const AsciiString& replay
 		p["moneyEarned"] = sk->getTotalMoneyEarned();
 		p["moneySpent"] = sk->getTotalMoneySpent();
 		p["score"] = sk->calculateScore();
+
+		// Per-source income breakdown. Sum may differ from moneyEarned: it also
+		// counts sources historically excluded from "earned" (bounty, theft).
+		ordered_json incomeBySource;
+		for (Int t = 0; t < INCOME_COUNT; ++t)
+			incomeBySource[TheIncomeTypeJsonKeys[t]] = sk->getIncomeByType((IncomeType)t);
+		p["incomeBySource"] = incomeBySource;
 
 		p["academy"] = ordered_json{
 			{"supplyCentersBuilt", academy->getSupplyCentersBuilt()},
@@ -828,10 +1022,20 @@ void ExportGameStatsJSON(const AsciiString& replayDir, const AsciiString& replay
 	{
 		printf("[stats] ERROR: Failed to open %s for writing\n", statsPath.str());
 		fflush(stdout);
+		s_state.resetData();
+		s_state.exportingActive = FALSE;
+		return AsciiString();
 	}
 
-	// Upload gzip file to server if URL configured
-	if (!TheGlobalData->m_statsUrl.isEmpty())
+	// Upload gzip file to server if a URL is configured. Skip uploads for games
+	// with fewer than two human players: solo skirmishes / campaign missions /
+	// replay watches don't represent humans-vs-humans data and would just
+	// pollute the cncstats dataset.
+	//
+	// When uploadInline is FALSE the caller takes ownership of shipping this
+	// file (via the background telemetry worker), so we only write it here and
+	// hand back the path.
+	if (uploadInline && !TheGlobalData->m_statsUrl.isEmpty() && StatsExporterHasMinHumansForUpload())
 	{
 		FILE *f = fopen(statsPath.str(), "rb");
 		if (f != nullptr)
@@ -864,4 +1068,5 @@ void ExportGameStatsJSON(const AsciiString& replayDir, const AsciiString& replay
 
 	s_state.resetData();
 	s_state.exportingActive = FALSE;
+	return statsPath;
 }

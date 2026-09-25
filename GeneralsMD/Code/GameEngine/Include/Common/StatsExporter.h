@@ -17,15 +17,24 @@
 
 #pragma once
 
-class AsciiString;
+#include "Common/AsciiString.h"
+
 class Object;
 class Player;
 class DamageInfo;
 
-/// Export game statistics as a JSON file alongside the replay file.
+/// Export game statistics as a gzipped JSON file alongside the replay file.
 /// @param replayDir Directory containing replays (e.g. "[UserDataPath]/Replays/")
 /// @param replayFileName Replay filename with extension (e.g. "LastReplay.rep")
-void ExportGameStatsJSON(const AsciiString& replayDir, const AsciiString& replayFileName);
+/// @param uploadInline When TRUE (the default) the written file is also POSTed
+///        to the cncstats stats endpoint synchronously, as before. Callers that
+///        hand the upload to the background telemetry worker pass FALSE so
+///        nothing blocks the main thread at end-of-match.
+/// @return The path of the .gamestats.json.gz that was written, or an empty
+///         AsciiString if nothing was written (collection inactive, missing
+///         globals, or the file couldn't be opened).
+AsciiString ExportGameStatsJSON(const AsciiString& replayDir, const AsciiString& replayFileName,
+                                Bool uploadInline = TRUE);
 
 /// Collect a time-series snapshot of all players' stats (called every game logic frame).
 /// Snapshots are taken every 30 frames (~1 second) and stored in memory.
@@ -33,6 +42,26 @@ void StatsExporterCollectSnapshot();
 
 /// Begin recording stats for a new replay. Activates recording and resets all stored data.
 void StatsExporterBeginRecording();
+
+/// Returns true between StatsExporterBeginRecording() and ExportGameStatsJSON().
+/// Used to decide whether the end-of-match uploads should run at all (we only
+/// upload if we were collecting for this game - i.e., host of a
+/// multiplayer/skirmish match).
+bool StatsExporterIsActive();
+
+/// Returns true if the current game has at least two human game-players.
+/// Used to gate the end-of-game telemetry uploads (cncstats stats, replay, map)
+/// so we don't ship data for solo skirmishes, campaign missions, or
+/// replay-watch sessions where humans-vs-humans isn't actually happening.
+bool StatsExporterHasMinHumansForUpload();
+
+/// TRUE when the player has lost the ability to rebuild: no living dozer/worker
+/// and no finished, unsold structure whose command set can produce one. Walks
+/// every object the player owns, so callers that run per frame should cache the
+/// result rather than call it each time. Callers must skip dead players
+/// themselves; elimination destroys their objects and would otherwise read as
+/// "hunted".
+Bool StatsExporterComputePlayerIsHunted(const Player *player);
 
 /// Record a kill event with full context (called from Object::scoreTheKill).
 void StatsExporterRecordKill(const Object *killer, const Object *victim, const DamageInfo *damageInfo);
