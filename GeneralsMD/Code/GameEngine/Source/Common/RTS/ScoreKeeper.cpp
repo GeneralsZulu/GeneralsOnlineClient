@@ -100,6 +100,8 @@ void ScoreKeeper::reset( Int playerIdx )
 	scoringBuildingDestroyMask.set(KINDOF_SCORE_DESTROY);
 
 	m_totalMoneyEarned = m_totalMoneySpent = 0;
+	for(int t = 0; t < INCOME_COUNT; ++t)
+		m_incomeByType[t] = 0;
 	m_totalUnitsLost = m_totalUnitsBuilt = 0;
 	m_totalBuildingsLost = m_totalBuildingsBuilt = 0;
 	m_totalFactionBuildingsCaptured = m_totalTechBuildingsCaptured = 0;
@@ -333,6 +335,17 @@ void ScoreKeeper::addObjectLost( const Object *o )
 	}
 }
 
+// Accumulate income into its source bucket. Kept independent of
+// m_totalMoneyEarned (and therefore of calculateScore) so adding source
+// tracking to deposit sites that historically were not counted as "earned"
+// (kill bounty, theft) does not change the displayed score.
+void ScoreKeeper::recordIncome( Int money, IncomeType type )
+{
+	if( type < 0 || type >= INCOME_COUNT )
+		type = INCOME_OTHER;
+	m_incomeByType[type] += money;
+}
+
 Int ScoreKeeper::calculateScore()
 {
 	Int score = 0;
@@ -388,6 +401,64 @@ Int ScoreKeeper::getTotalUnitsDestroyed()
 //		}
 	}
 	return count;
+}
+
+// Sum (count * buildCost) across a map, filtered by KINDOF_STRUCTURE so
+// we can distinguish unit value from building value. Entries already
+// passed addObjectBuilt/Lost/Destroyed's scoring gates, so non-structure
+// entries are guaranteed to be score-worthy units. const-iterates a
+// non-const map by passing the map address through the function param.
+static Int sumBuildCost(const ScoreKeeper::ObjectCountMap *map, Bool wantStructures)
+{
+	Int total = 0;
+	if (map == nullptr)
+		return 0;
+	for (ScoreKeeper::ObjectCountMap::const_iterator it = map->begin(); it != map->end(); ++it)
+	{
+		const ThingTemplate *t = it->first;
+		if (t == nullptr)
+			continue;
+		const Bool isStructure = t->isKindOf(KINDOF_STRUCTURE);
+		if (isStructure == wantStructures)
+			total += it->second * (Int)t->friend_getBuildCost();
+	}
+	return total;
+}
+
+Int ScoreKeeper::getTotalUnitsBuiltValue() const
+{
+	return sumBuildCost(&m_objectsBuilt, FALSE);
+}
+
+Int ScoreKeeper::getTotalUnitsLostValue() const
+{
+	return sumBuildCost(&m_objectsLost, FALSE);
+}
+
+Int ScoreKeeper::getTotalUnitsDestroyedValue() const
+{
+	Int total = 0;
+	for (Int i = 0; i < MAX_PLAYER_COUNT; ++i)
+		total += sumBuildCost(&m_objectsDestroyed[i], FALSE);
+	return total;
+}
+
+Int ScoreKeeper::getTotalBuildingsBuiltValue() const
+{
+	return sumBuildCost(&m_objectsBuilt, TRUE);
+}
+
+Int ScoreKeeper::getTotalBuildingsLostValue() const
+{
+	return sumBuildCost(&m_objectsLost, TRUE);
+}
+
+Int ScoreKeeper::getTotalBuildingsDestroyedValue() const
+{
+	Int total = 0;
+	for (Int i = 0; i < MAX_PLAYER_COUNT; ++i)
+		total += sumBuildCost(&m_objectsDestroyed[i], TRUE);
+	return total;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -481,13 +552,18 @@ void ScoreKeeper::xferObjectCountMap( Xfer *xfer, ObjectCountMap *map )
 // ------------------------------------------------------------------------------------------------
 /** Xfer method
 	* Version Info:
-	* 1: Initial version */
+	* 1: Initial version
+	* 2: TheSuperHackers @tweak Serialize per-source income breakdown */
 // ------------------------------------------------------------------------------------------------
 void ScoreKeeper::xfer( Xfer *xfer )
 {
 
 	// version
+#if RETAIL_COMPATIBLE_XFER_SAVE
 	XferVersion currentVersion = 1;
+#else
+	XferVersion currentVersion = 2;
+#endif
 	XferVersion version = currentVersion;
 	xfer->xferVersion( &version, currentVersion );
 
@@ -496,6 +572,12 @@ void ScoreKeeper::xfer( Xfer *xfer )
 
 	// money spent
 	xfer->xferInt( &m_totalMoneySpent );
+
+	// per-source income breakdown
+	if( version >= 2 )
+	{
+		xfer->xferUser( m_incomeByType, sizeof( m_incomeByType ) );
+	}
 
 	// units destroyed
 	xfer->xferUser( m_totalUnitsDestroyed, sizeof( Int ) * MAX_PLAYER_COUNT );

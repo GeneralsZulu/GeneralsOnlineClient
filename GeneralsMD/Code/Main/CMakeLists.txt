@@ -26,24 +26,65 @@ target_link_libraries(z_generals PRIVATE
 )
 
 # TODO Originally referred to build host and user, replace with git info perhaps?
-file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/GeneratedVersion.h
+#
+# Compare-and-write, same as BuildVersion.h below. An unconditional file(WRITE)
+# bumps this header's mtime on every configure, and because WinMain.cpp declares
+# an OBJECT_DEPENDS on it (see below), every `--cmake` pass forced a WinMain.cpp
+# recompile plus a full relink of the ~7.5 MB generalszh.exe even when nothing
+# had changed. Every Make-driven build passes `--cmake` (make installer,
+# installer-dev, zulu-exe, zulu-exe-log, zulu-launcher), so that was every build.
+set(_zulu_generated_version_content
 "#pragma once
 
 #define VERSION_LOCALBUILDNUM 0
 #define VERSION_BUILDUSER \"\"
 #define VERSION_BUILDLOC \"\"
-"
-)
+")
+set(_zulu_generated_version_existing "")
+if(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/GeneratedVersion.h")
+    file(READ "${CMAKE_CURRENT_BINARY_DIR}/GeneratedVersion.h" _zulu_generated_version_existing)
+endif()
+if(NOT _zulu_generated_version_existing STREQUAL _zulu_generated_version_content)
+    file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/GeneratedVersion.h "${_zulu_generated_version_content}")
+endif()
 
-# Based on original binary values for these variables.
-file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/BuildVersion.h
+# Defaults match the original retail binary's reported values. `make installer`
+# overrides these via -DZULU_VERSION_* (parsed out of APPVERSION in
+# installer/Zulu.nsi by the top-level Makefile) so the binary's TheVersion
+# matches the installer version, which in turn flows into every replay
+# header recorded by that binary (Recorder.cpp:608-615). Plain `cmake`
+# builds outside the Make pipeline keep the retail-style defaults.
+if(NOT DEFINED ZULU_VERSION_MAJOR)
+    set(ZULU_VERSION_MAJOR 1)
+endif()
+if(NOT DEFINED ZULU_VERSION_MINOR)
+    set(ZULU_VERSION_MINOR 4)
+endif()
+if(NOT DEFINED ZULU_VERSION_BUILDNUM)
+    set(ZULU_VERSION_BUILDNUM 601)
+endif()
+
+# VERSION_STRING is consumed by RTS.RC's VERSIONINFO block (and any C/C++
+# code that wants a string form). Kept alongside the numeric macros so both
+# the game and the launcher read versions from one source of truth.
+# Compare-and-write so the file's mtime only bumps when the version actually
+# changes; otherwise every `--cmake` reconfigure would force a WinMain.cpp
+# recompile via OBJECT_DEPENDS below.
+set(_zulu_build_version_content
 "#pragma once
 
-#define VERSION_MAJOR 1
-#define VERSION_MINOR 4
-#define VERSION_BUILDNUM 601
-"
-)
+#define VERSION_MAJOR ${ZULU_VERSION_MAJOR}
+#define VERSION_MINOR ${ZULU_VERSION_MINOR}
+#define VERSION_BUILDNUM ${ZULU_VERSION_BUILDNUM}
+#define VERSION_STRING \"${ZULU_VERSION_MAJOR}.${ZULU_VERSION_MINOR}.${ZULU_VERSION_BUILDNUM}\"
+")
+set(_zulu_build_version_existing "")
+if(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/BuildVersion.h")
+    file(READ "${CMAKE_CURRENT_BINARY_DIR}/BuildVersion.h" _zulu_build_version_existing)
+endif()
+if(NOT _zulu_build_version_existing STREQUAL _zulu_build_version_content)
+    file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/BuildVersion.h "${_zulu_build_version_content}")
+endif()
 
 if(MSVC)
     target_link_options(z_generals PRIVATE "/NODEFAULTLIB:libci.lib")
@@ -73,6 +114,14 @@ if(WIN32)
 	)
 
 endif()
+# WinMain.cpp #include's BuildVersion.h and GeneratedVersion.h. VC6's cl.exe
+# rejects /showIncludes, so the top-level CMakeLists.txt disables ninja's
+# header-dependency scanning. Without this explicit OBJECT_DEPENDS, bumping
+# APPVERSION regenerates BuildVersion.h but ninja never recompiles
+# WinMain.cpp, so TheVersion->setVersion() keeps reporting whatever VERSION_*
+# macros were live the last time WinMain.obj was actually built.
+set_source_files_properties(WinMain.cpp PROPERTIES
+    OBJECT_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/BuildVersion.h;${CMAKE_CURRENT_BINARY_DIR}/GeneratedVersion.h")
 
 # RC files optional for MinGW builds
 # Icon: LoadIcon() handles missing resource gracefully (uses default system icon)
@@ -88,6 +137,13 @@ if(MSVC)
     target_sources(z_generals PRIVATE
         RTS.RC
     )
+
+    # RTS.RC #include's BuildVersion.h; same ninja header-tracking problem
+    # as WinMain.cpp above. Without this, bumping APPVERSION leaves the .res
+    # unmodified and the exe ships with the stale FILEVERSION. The launcher
+    # avoids this entirely because its .rc.in goes through configure_file().
+    set_source_files_properties(RTS.RC PROPERTIES
+        OBJECT_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/BuildVersion.h")
 endif()
 
 # Strip debug symbols to separate file for MinGW Release builds

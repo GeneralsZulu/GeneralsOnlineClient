@@ -1233,7 +1233,7 @@ Bool SpecialAbilityUpdate::continuePreparation()
             myHouseColor.setFromInt( getObject()->getIndicatorColor() );
 
             Real saturation = TheGlobalData->m_selectionFlashSaturationFactor;
-            targetDraw->saturateRGB( myHouseColor, saturation );
+            targetDraw->saturateRGBForFlash( myHouseColor, saturation );
 
             targetDraw->flashAsSelected( &myHouseColor ); //In MY house color, not his!
 
@@ -1508,7 +1508,7 @@ void SpecialAbilityUpdate::triggerAbilityEffect()
         {
           //Steal the cash
           targetMoney->withdraw( cash );
-          objectMoney->deposit( cash );
+          objectMoney->deposit( cash, TRUE, TRUE, INCOME_THEFT );
           Player* controller = object->getControllingPlayer();
           if (controller)
             controller->getScoreKeeper()->addMoneyEarned( cash );

@@ -450,6 +450,9 @@ public:
 	/// Is this player a skirmish ai player?
 	Bool isSkirmishAIPlayer();
 
+	/// Is this player a TacticalAI (lobby slot was SLOT_TACTICAL_AI)?
+	Bool isTacticalAIPlayer() const;
+
 	/// Have the ai check for bridges.
 	virtual Bool checkBridges(Object *unit, Waypoint *way);
 
@@ -621,6 +624,11 @@ public:
 	Bool isPlayerObserver() const; // Favor !isPlayerActive() - this is used for Observer GUI mostly, not in-game stuff
 	Bool isPlayerDead() const; // Favor !isPlayerActive() - this is used so OCLs don't give us stuff after death.
 	Bool isPlayerActive() const; // Player is alive and not observer. !isPlayerActive() is synonymous with observing.
+
+	// Surrender consent: human-driven "!surrender" / "!unsurrender" chat directive that
+	// authorizes AI allies to give up once every human on this team is out of the game.
+	void setSurrenderConsented(Bool consented) { m_surrenderConsented = consented; }
+	Bool getSurrenderConsented() const { return m_surrenderConsented; }
 
 	Bool didPlayerPreorder() const { return m_isPreorder; }
 
@@ -829,4 +837,5 @@ private:
 
 	Bool									m_isPlayerDead;
 	Bool									m_logicalRetaliationModeEnabled;
+	Bool									m_surrenderConsented;	///< latched by "!surrender" chat; cleared by "!unsurrender"
 };

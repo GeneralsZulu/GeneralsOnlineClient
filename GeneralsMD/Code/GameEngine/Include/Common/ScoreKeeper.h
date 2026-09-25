@@ -52,6 +52,7 @@
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
+#include "Common/IncomeType.h"
 #include "Common/Snapshot.h"
 
 //-----------------------------------------------------------------------------
@@ -73,6 +74,7 @@ public:
 
 	void addMoneySpent( Int money );								///< Adds money to the amount spent
 	void addMoneyEarned( Int money );								///< Adds money to the earned amount
+	void recordIncome( Int money, IncomeType type );	///< Attribute income to a source for the per-source breakdown
 
 	void addObjectBuilt( const Object *o );
 	void addObjectDestroyed( const Object *o );
@@ -83,12 +85,30 @@ public:
 
 	Int getTotalMoneyEarned() { return m_totalMoneyEarned; }
 	Int getTotalMoneySpent() { return m_totalMoneySpent; }
+	Int getIncomeByType( IncomeType type ) const { return (type >= 0 && type < INCOME_COUNT) ? m_incomeByType[type] : 0; }
 	Int getTotalUnitsDestroyed();
 	Int getTotalUnitsBuilt() { return m_totalUnitsBuilt; }
 	Int getTotalUnitsLost() { return m_totalUnitsLost; }
 	Int getTotalBuildingsDestroyed();
 	Int getTotalBuildingsBuilt() { return m_totalBuildingsBuilt; }
 	Int getTotalBuildingsLost() { return m_totalBuildingsLost; }
+
+	// Value (sum of buildCost) versions of the count accessors above.
+	// Built/lost iterate this scorekeeper's own object maps; destroyed
+	// iterates the per-target-player destroyed maps and counts ALL
+	// kills (including friendly fire) to match getTotalUnitsDestroyed()
+	// / getTotalBuildingsDestroyed() behavior. Each helper walks the
+	// underlying ObjectCountMap once and filters entries by
+	// KINDOF_STRUCTURE: structures count toward "buildings", everything
+	// else (units that made it into the map already pass the scoring
+	// kind-of gate in addObjectBuilt/addObjectDestroyed/addObjectLost)
+	// counts toward "units".
+	Int getTotalUnitsBuiltValue() const;
+	Int getTotalUnitsLostValue() const;
+	Int getTotalUnitsDestroyedValue() const;
+	Int getTotalBuildingsBuiltValue() const;
+	Int getTotalBuildingsLostValue() const;
+	Int getTotalBuildingsDestroyedValue() const;
 	Int getTotalTechBuildingsCaptured() { return m_totalTechBuildingsCaptured; }
 	Int getTotalFactionBuildingsCaptured() { return m_totalFactionBuildingsCaptured; }
 	Int getTotalObjectsBuilt( const ThingTemplate *pTemplate ); // get a count of objects built matching a specific thing template
@@ -103,10 +123,15 @@ protected:
 	virtual void xfer( Xfer *xfer ) override;
 	virtual void loadPostProcess() override;
 
+public:
+	typedef std::map<const ThingTemplate *, Int> ObjectCountMap;
+	typedef ObjectCountMap::iterator ObjectCountMapIt;
+
 private:
 
 	Int m_totalMoneyEarned;						///< The total money that was harvested, refined, received in crates
 	Int m_totalMoneySpent;						///< The total money spent on units, buildings, repairs
+	Int m_incomeByType[INCOME_COUNT];	///< Income accumulated per source (see IncomeType); for the stats breakdown only, independent of m_totalMoneyEarned/score
 	Int m_totalUnitsDestroyed[MAX_PLAYER_COUNT];				///< The total number of enemies that we've killed
 	Int m_totalUnitsBuilt;						///< The total number of units we've created (created meaning that we built from a building)
 	Int m_totalUnitsLost;							///< The total number of our units lost
@@ -119,8 +144,6 @@ private:
 
 	Int m_myPlayerIdx;								///< We need to not score kills on ourselves... so we need to know who we are
 
-	typedef std::map<const ThingTemplate *, Int> ObjectCountMap;
-	typedef ObjectCountMap::iterator ObjectCountMapIt;
 	ObjectCountMap m_objectsBuilt;			///< How many and what kinds of objects did we build
 	ObjectCountMap m_objectsDestroyed[MAX_PLAYER_COUNT];		///< How many and what kinds and who's did we kill
 	ObjectCountMap m_objectsLost;				///< how many and what kinds of objects did we loose

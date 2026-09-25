@@ -407,7 +407,7 @@ void setFPSTextBox( Int sliderPos )
 		GadgetStaticTextSetText(staticTextGameSpeed, text);
 		return;
 	}
-	else if( sliderPos == TheGlobalData->m_framesPerSecondLimit )
+	else if( sliderPos == LOGICFRAMES_PER_SECOND )
 	{
 		// set different color
 		staticTextGameSpeed->winEnable(FALSE);
@@ -614,6 +614,8 @@ void positionAdditionalImages( MapMetaData *mmd, GameWindow *mapWindow, Bool for
 {
 	TheSupplyAndTechImageLocations.m_supplyPosList.clear();
 	TheSupplyAndTechImageLocations.m_techPosList.clear();
+	TheSupplyAndTechImageLocations.m_cratePosList.clear();
+	TheSupplyAndTechImageLocations.m_derrickPosList.clear();
 
 	if( !mmd || !mapWindow || mapWindow->winIsHidden())
 		return;
@@ -665,6 +667,32 @@ void positionAdditionalImages( MapMetaData *mmd, GameWindow *mapWindow, Bool for
 		position = (it->y - mmd->m_extent.lo.y) / (mmd->m_extent.hi.y - mmd->m_extent.lo.y);
 		markerPos.y = ((1- position) * smallHeight) - SUPPLY_TECH_SIZE /2 + ul.y;// + winMapPos.y;
 		TheSupplyAndTechImageLocations.m_techPosList.push_front(markerPos);
+		it++;
+	}
+
+	it = mmd->m_cratePositions.begin();
+	while (it != mmd->m_cratePositions.end())
+	{
+		ICoord2D markerPos;
+		Real position;
+		position = (it->x - mmd->m_extent.lo.x) / (mmd->m_extent.hi.x - mmd->m_extent.lo.x);
+		markerPos.x = (position * smallWidth) - SUPPLY_TECH_SIZE / 2 + ul.x;
+		position = (it->y - mmd->m_extent.lo.y) / (mmd->m_extent.hi.y - mmd->m_extent.lo.y);
+		markerPos.y = ((1 - position) * smallHeight) - SUPPLY_TECH_SIZE / 2 + ul.y;
+		TheSupplyAndTechImageLocations.m_cratePosList.push_front(markerPos);
+		it++;
+	}
+
+	it = mmd->m_techDerrickPositions.begin();
+	while (it != mmd->m_techDerrickPositions.end())
+	{
+		ICoord2D markerPos;
+		Real position;
+		position = (it->x - mmd->m_extent.lo.x) / (mmd->m_extent.hi.x - mmd->m_extent.lo.x);
+		markerPos.x = (position * smallWidth) - SUPPLY_TECH_SIZE / 2 + ul.x;
+		position = (it->y - mmd->m_extent.lo.y) / (mmd->m_extent.hi.y - mmd->m_extent.lo.y);
+		markerPos.y = ((1 - position) * smallHeight) - SUPPLY_TECH_SIZE / 2 + ul.y;
+		TheSupplyAndTechImageLocations.m_derrickPosList.push_front(markerPos);
 		it++;
 	}
 
@@ -851,6 +879,8 @@ void updateMapStartSpots( GameInfo *myGame, GameWindow *buttonMapStartPositions[
 				AsciiString displayNumber;
 				displayNumber.format("NUMBER:%d", i + 1);
 				GadgetButtonSetText(btn, TheGameText->fetch(displayNumber));
+				//added start position tooltip
+				//Fixed again to show the right number , ie "i + 1"
 
 				UnicodeString temp;
 				temp.format(TheGameText->fetch("TOOLTIP:StartPositionN"), i + 1);
@@ -1119,12 +1149,12 @@ void InitSkirmishGameGadgets()
       GadgetComboBoxSetItemData(comboBoxPlayer[i], 0, (void *)SLOT_OPEN);
 			GadgetComboBoxAddEntry(comboBoxPlayer[i],TheGameText->fetch("GUI:Closed"),white);  // leave this first
       GadgetComboBoxSetItemData(comboBoxPlayer[i], 1, (void *)SLOT_CLOSED);
-			GadgetComboBoxAddEntry(comboBoxPlayer[i],TheGameText->fetch("GUI:EasyAI"),white);
-      GadgetComboBoxSetItemData(comboBoxPlayer[i], 2, (void *)SLOT_EASY_AI);
+			GadgetComboBoxAddEntry(comboBoxPlayer[i],TheGameText->fetch("GUI:HardAI"),white);
+      GadgetComboBoxSetItemData(comboBoxPlayer[i], 2, (void *)SLOT_BRUTAL_AI);
 			GadgetComboBoxAddEntry(comboBoxPlayer[i],TheGameText->fetch("GUI:MediumAI"),white);
       GadgetComboBoxSetItemData(comboBoxPlayer[i], 3, (void *)SLOT_MED_AI);
-			GadgetComboBoxAddEntry(comboBoxPlayer[i],TheGameText->fetch("GUI:HardAI"),white);
-      GadgetComboBoxSetItemData(comboBoxPlayer[i], 4, (void *)SLOT_BRUTAL_AI);
+			GadgetComboBoxAddEntry(comboBoxPlayer[i],TheGameText->fetch("GUI:EasyAI"),white);
+      GadgetComboBoxSetItemData(comboBoxPlayer[i], 4, (void *)SLOT_EASY_AI);
 			GadgetComboBoxSetSelectedPos(comboBoxPlayer[i],0);
 
 		}
@@ -1376,7 +1406,7 @@ void SkirmishGameOptionsMenuInit( WindowLayout *layout, void *userData )
 	// set up the game speed slider
 //	NameKeyType sliderGameSpeedID = TheNameKeyGenerator->nameToKey( "SkirmishGameOptionsMenu.wnd:SliderGameSpeed" );
 	GameWindow *sliderGameSpeed = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions, sliderGameSpeedID );
-	Int sliderPos = max(15,min(61,prefs.getInt("FPS", TheGlobalData->m_framesPerSecondLimit)));
+	Int sliderPos = max(15,min(61,prefs.getInt("FPS", LOGICFRAMES_PER_SECOND)));
 	GadgetSliderSetPosition( sliderGameSpeed, sliderPos );
 	setFPSTextBox(sliderPos);
 	buttonStart->winSetText(TheGameText->fetch("GUI:Start"));

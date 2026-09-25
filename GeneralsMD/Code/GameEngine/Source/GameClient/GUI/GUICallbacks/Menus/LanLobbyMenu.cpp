@@ -34,12 +34,15 @@
 #include "Lib/BaseType.h"
 #include "Common/crc.h"
 #include "Common/GameEngine.h"
+#include "Common/version.h"
 #include "Common/GlobalData.h"
 #include "Common/MultiplayerSettings.h"
 #include "Common/NameKeyGenerator.h"
 #include "Common/Player.h"
 #include "Common/PlayerTemplate.h"
 #include "Common/QuotedPrintable.h"
+#include "Common/ReleaseLog.h"
+#include "Common/StatsUploader.h"
 #include "Common/OptionPreferences.h"
 #include "GameClient/AnimateWindowManager.h"
 #include "GameClient/ClientInstance.h"
@@ -176,13 +179,26 @@ Bool LANPreferences::usesSystemMapDir()
 	return FALSE;
 }
 
+// When no (valid) map preference exists, prefer the first OFFICIAL
+// multiplayer map. getDefaultMap(TRUE) returns the alphabetically first
+// multiplayer map of any kind, and with user maps installed that tends to be
+// something like "(3 Letter names required).map" (punctuation sorts before
+// letters), which is a terrible first impression for a fresh lobby.
+static AsciiString getDefaultLanMap()
+{
+	AsciiString ret = getDefaultOfficialMap();
+	if (ret.isEmpty())
+		ret = getDefaultMap(TRUE);
+	return ret;
+}
+
 AsciiString LANPreferences::getPreferredMap()
 {
 	AsciiString ret;
 	LANPreferences::const_iterator it = find("Map");
 	if (it == end())
 	{
-		ret = getDefaultMap(TRUE);
+		ret = getDefaultLanMap();
 		return ret;
 	}
 
@@ -190,7 +206,7 @@ AsciiString LANPreferences::getPreferredMap()
 	ret.trim();
 	if (ret.isEmpty() || !isValidMap(ret, TRUE))
 	{
-		ret = getDefaultMap(TRUE);
+		ret = getDefaultLanMap();
 		return ret;
 	}
 
@@ -345,6 +361,8 @@ static void playerTooltip(GameWindow *window,
 	}
 
 	UnsignedInt playerIP = (UnsignedInt)GadgetListBoxGetItemData( window, row, col );
+	if (!TheLAN)
+		return;
 	LANPlayer *player = TheLAN->LookupPlayer(playerIP);
 	if (!player)
 	{
@@ -814,14 +832,17 @@ WindowMsgHandledType LanLobbyMenuSystem( GameWindow *window, UnsignedInt msg,
 					// Clean up the text (remove leading/trailing chars, etc)
 					txtInput.trim();
 					// Echo the user's input to the chat window
-					if (!txtInput.isEmpty()) {
+					if (!txtInput.isEmpty() && TheLAN) {
 //						TheLAN->RequestChat(txtInput, LANAPIInterface::LANCHAT_EMOTE);
 						TheLAN->RequestChat(txtInput, LANAPIInterface::LANCHAT_NORMAL);
 					}
 				}
 				else if (controlID == buttonDirectConnectID)
 				{
-					TheLAN->RequestLobbyLeave( false );
+					if (TheLAN)
+					{
+						TheLAN->RequestLobbyLeave( false );
+					}
 					TheShell->push("Menus/NetworkDirectConnect.wnd");
 				}
 
@@ -896,7 +917,7 @@ WindowMsgHandledType LanLobbyMenuSystem( GameWindow *window, UnsignedInt msg,
 						txtInput = UnicodeString(txtInput.str()+1);
 
 					// Echo the user's input to the chat window
-					if (!txtInput.isEmpty())
+					if (!txtInput.isEmpty() && TheLAN)
 						TheLAN->RequestChat(txtInput, LANAPIInterface::LANCHAT_NORMAL);
 
 				}

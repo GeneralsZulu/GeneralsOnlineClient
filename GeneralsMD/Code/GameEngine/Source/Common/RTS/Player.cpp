@@ -300,6 +300,7 @@ Player::Player( Int playerIndex )
 {
 	m_isPreorder = FALSE;
 	m_isPlayerDead = FALSE;
+	m_surrenderConsented = FALSE;
 
 	m_playerIndex = playerIndex;
 
@@ -359,6 +360,7 @@ void Player::init(const PlayerTemplate* pt)
 
 	m_isPreorder = FALSE;
 	m_isPlayerDead = FALSE;
+	m_surrenderConsented = FALSE;
 
 	m_radarCount = 0;
 	m_disableProofRadarCount = 0;
@@ -886,9 +888,13 @@ void Player::initFromDict(const Dict* d)
 		{
 			difficulty = (GameDifficulty) diffInt;
 		}
+		Bool isTacticalAI = d->getBool(TheKey_playerIsTacticalAI, &exists);
+		if (!exists)
+			isTacticalAI = FALSE;
 		if (m_ai)
 		{
 			m_ai->setAIDifficulty(difficulty);
+			m_ai->setIsTacticalAI(isTacticalAI);
 		}
 
 		if (!found)
@@ -1152,6 +1158,14 @@ void Player::becomingLocalPlayer(Bool yes)
 Bool Player::isSkirmishAIPlayer()
 {
 	return m_ai ? m_ai->isSkirmishAI() : false;
+}
+
+//-------------------------------------------------------------------------------------------------
+/** Is this player a TacticalAI? */
+//-------------------------------------------------------------------------------------------------
+Bool Player::isTacticalAIPlayer() const
+{
+	return m_ai ? m_ai->isTacticalAI() : false;
 }
 
 
@@ -2483,7 +2497,7 @@ void Player::doBountyForKill(const Object* killer, const Object* victim)
 	if( bounty )
 	{
 
-		getMoney()->deposit( bounty );
+		getMoney()->deposit( bounty, TRUE, TRUE, INCOME_BOUNTY );
 		m_scoreKeeper.addMoneyEarned( bounty );
 
 		//Display cash income floating over the recipient.

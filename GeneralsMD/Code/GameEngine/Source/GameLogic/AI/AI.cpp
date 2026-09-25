@@ -199,6 +199,19 @@ static const FieldParse TheAIFieldParseTable[] =
  	{ "MaxRetaliationDistance",	INI::parseReal,nullptr,			offsetof( TAiData, m_maxRetaliateDistance ) },
  	{ "RetaliationFriendsRadius",	INI::parseReal,nullptr,			offsetof( TAiData, m_retaliateFriendsRadius ) },
 
+	// TacticalAI per-object upgrade purchasing. Relative weights of each faction's
+	// upgrade mix, and the cash floor the AI keeps free after such a purchase.
+ 	{ "TacticalAIUsaBattleDroneWeight",		INI::parseInt,nullptr,	offsetof( TAiData, m_taiUsaBattleDroneWeight ) },
+ 	{ "TacticalAIUsaScoutDroneWeight",		INI::parseInt,nullptr,	offsetof( TAiData, m_taiUsaScoutDroneWeight ) },
+ 	{ "TacticalAIUsaHellfireDroneWeight",	INI::parseInt,nullptr,	offsetof( TAiData, m_taiUsaHellfireDroneWeight ) },
+ 	{ "TacticalAIUsaDroneCashReserve",		INI::parseInt,nullptr,	offsetof( TAiData, m_taiUsaDroneCashReserve ) },
+ 	{ "TacticalAIChinaOverlordGattlingWeight",		INI::parseInt,nullptr,	offsetof( TAiData, m_taiChinaOverlordGattlingWeight ) },
+ 	{ "TacticalAIChinaOverlordPropagandaWeight",	INI::parseInt,nullptr,	offsetof( TAiData, m_taiChinaOverlordPropagandaWeight ) },
+ 	{ "TacticalAIChinaOverlordCashReserve",			INI::parseInt,nullptr,	offsetof( TAiData, m_taiChinaOverlordCashReserve ) },
+
+	// TacticalAI USA Missile Defender laser lock.
+ 	{ "TacticalAIUsaLaserLockIntervalFrames",	INI::parseInt,nullptr,	offsetof( TAiData, m_taiUsaLaserLockIntervalFrames ) },
+ 	{ "TacticalAIUsaLaserLockMaxPerSweep",		INI::parseInt,nullptr,	offsetof( TAiData, m_taiUsaLaserLockMaxPerSweep ) },
 
 	{ nullptr,					nullptr,						nullptr,						0 }
 
@@ -963,7 +976,27 @@ m_teamWealthyMod(0.0f),
 m_aiDozerBoredRadiusModifier(2.0),
 m_aiCrushesInfantry(true),
 m_maxRetaliateDistance(210.0f),
-m_retaliateFriendsRadius(120.0f)
+m_retaliateFriendsRadius(120.0f),
+// TacticalAI USA drone mix. Defaults to "always Battle Drone": it repairs its
+// host vehicle and adds a gun, which is what a human USA player defaults to.
+// Override in AIData.ini to change the mix (e.g. 60/20/20).
+m_taiUsaBattleDroneWeight(100),
+m_taiUsaScoutDroneWeight(0),
+m_taiUsaHellfireDroneWeight(0),
+// Roughly a War Factory tank; the AI will not dip below this to buy a drone.
+m_taiUsaDroneCashReserve(1500),
+// China Overlord mix: ~3 Gattling Cannons (1200) per Propaganda Tower (500).
+// A bare Overlord has no anti-air at all, so the Gattling is the common case.
+m_taiChinaOverlordGattlingWeight(75),
+m_taiChinaOverlordPropagandaWeight(25),
+// Same idea as the drone reserve: Overlord upgrades come out of surplus only.
+// This is the knob to tune if the AI upgrades too eagerly or too rarely.
+m_taiChinaOverlordCashReserve(1500),
+// Missile Defender laser lock: look once a second (it is reactive -- it can only fire at a
+// vehicle the Missile Defender is ALREADY shooting), and start at most a handful of locks per
+// look so a big engagement spreads its locks over a couple of seconds rather than all at once.
+m_taiUsaLaserLockIntervalFrames(15),
+m_taiUsaLaserLockMaxPerSweep(4)
 {
 }
 

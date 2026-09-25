@@ -17,11 +17,444 @@
 
 #pragma once
 
-class AsciiString;
+#include "Common/AsciiString.h"
+#include "GameNetwork/MapDownloadHook.h"
+
+#include <vector>
+
+/// All inputs needed to ship one match's telemetry (stats JSON, replay,
+/// per-client logs, and map assets) at end-of-match. Every field is read on the
+/// calling (main) thread only; see StartMatchTelemetryUpload.
+struct MatchTelemetryUpload
+{
+	unsigned int seed;              ///< X-Game-Seed correlation for every channel
+
+	// Stats: the gzipped game-stats JSON already written to disk by
+	// ExportGameStatsJSON(..., uploadInline=FALSE).
+	AsciiString statsUrl;           ///< empty disables the stats upload
+	AsciiString statsFilePath;      ///< path to the .gamestats.json.gz to upload
+
+	// Replay.
+	AsciiString replayUrl;          ///< empty disables the replay upload
+	AsciiString replayFilePath;     ///< on-disk .rep to snapshot and ZUTG-tag
+	AsciiString replayFileName;     ///< filename advertised in the multipart part
+	AsciiString playerNameUtf8;     ///< uploader's in-game name (UTF-8); empty to omit
+
+	// Per-client logs (debug + observer). Absent files are skipped.
+	AsciiString logsUrl;            ///< empty disables the log upload
+	AsciiString playerId;           ///< X-Player grouping id
+	std::vector<AsciiString> logFilePaths;
+
+	// Map assets (the .map plus whatever sidecars contentsMask flags).
+	AsciiString mapCheckUrl;        ///< empty disables the map check + upload
+	AsciiString mapAssetsUrl;       ///< empty falls back to mapCheckUrl alone
+	AsciiString mapUploadUrl;
+	unsigned int mapCRC;            ///< 0 disables the map check + upload
+	AsciiString mapFilePath;
+	unsigned int mapContentsMask;
+};
+
+/// Snapshot everything in `p` that a subsequent game could overwrite (the
+/// replay and log files are read into memory here; the ZUTG replay trailer is
+/// applied here too), then perform all its uploads on a detached background
+/// thread. Returns immediately - the game never blocks on end-of-match HTTP.
+///
+/// Best-effort: if no channel is configured or the worker thread can't be
+/// spawned, the whole upload is silently dropped. Map assets are static on
+/// disk, so the worker reads them lazily rather than snapshotting here.
+///
+/// Threading: mirrors the RadarvanIntel worker - the worker rebuilds its own
+/// AsciiStrings from plain char buffers, so no AsciiStringData is shared across
+/// threads (AsciiString's refCount is non-atomic).
+void StartMatchTelemetryUpload(const MatchTelemetryUpload& p);
+
+/// Ship this client's diagnostic logs when there is no match to attach them
+/// to - specifically when an online host/join attempt fails, which is the one
+/// failure mode that never reaches the end-of-match telemetry above (no game
+/// ever starts, so nothing is ever uploaded and the evidence dies with the
+/// player's next launch).
+///
+/// Same worker, same /logs endpoint, same per-file gzip; only the key differs.
+/// `seedLabel` replaces the numeric game seed in the X-Game-Seed header, so
+/// pick something a human can ask the server for later (the lobby uses one
+/// bucket per day, "connfail-YYYYMMDD", and puts the attempt's timestamp in
+/// `playerId` so repeated failures don't overwrite each other).
+///
+/// Non-blocking and best-effort: files that don't exist are skipped, and the
+/// whole upload is dropped rather than reported if nothing can be read or the
+/// worker can't start. Safe to call from the main thread mid-menu.
+/// @param logsUrl Full URL of the /logs endpoint (empty disables)
+/// @param seedLabel X-Game-Seed value; header/path-sanitized internally
+/// @param playerId X-Player grouping id, sanitized the same way
+/// @param logFilePaths On-disk log files to ship (up to 4 are taken)
+void StartDiagnosticLogUpload(const AsciiString& logsUrl,
+                              const AsciiString& seedLabel,
+                              const AsciiString& playerId,
+                              const std::vector<AsciiString>& logFilePaths);
 
 /// Upload gzip-compressed stats data to a REST endpoint via HTTP POST.
+/// Sends Content-Type: application/gzip with the X-Game-Seed header.
 /// @param url Full URL including path (e.g. "http://server:8080/stats")
 /// @param data Pointer to gzip-compressed data
 /// @param dataLen Length of compressed data in bytes
 /// @param seed Game seed for the X-Game-Seed header
 void UploadStatsToServer(const AsciiString& url, const void *data, unsigned int dataLen, unsigned int seed);
+
+/// Upload one or more client log files (e.g. the debug log and the observer
+/// log) to the cncstats /logs endpoint via HTTP POST as multipart/form-data.
+/// Each file is read from disk, gzip-compressed in memory, and sent as its own
+/// file part named "<basename>.gz". Sends the X-Game-Seed header (match id) and
+/// the X-Player header (which client the logs belong to); the server groups
+/// stored logs under <seed>/<player>/. Missing or empty source files are
+/// skipped. Best-effort and blocking; logs status to stdout.
+/// @param url Full URL of the /logs endpoint (empty disables)
+/// @param seed Game seed for the X-Game-Seed header
+/// @param player Identifier for the X-Player header (uploading client). Header-
+///        sanitized internally; the call no-ops if it reduces to empty.
+/// @param filePaths Array of on-disk log file paths to upload
+/// @param fileCount Number of entries in filePaths
+void UploadLogsToServer(const AsciiString& url, unsigned int seed,
+                        const AsciiString& player,
+                        const AsciiString *filePaths, unsigned int fileCount);
+
+/// Upload a replay file to a REST endpoint via HTTP POST as
+/// multipart/form-data. Sends the binary replay as the "file" part and
+/// up to four optional identifier fields the radarvan server stores on
+/// the ReplayFile row: mac_id (MAC of the adapter whose IPv4 matches
+/// the user's LAN-IP option, falling back to the first enumerated
+/// adapter when none matches), board_id (SMBIOS system UUID), the
+/// supplied player_name (UTF-8 encoded), and client_version (from
+/// TheVersion). Fields whose values cannot be determined are simply
+/// omitted from the form.
+/// @param url Full URL including path (e.g. "https://www.radarvan.com/api/upload_replay")
+/// @param data Pointer to the replay file's raw bytes
+/// @param dataLen Length of replay data in bytes
+/// @param filename Filename to advertise in the multipart part (e.g. "00000000.rep")
+/// @param seed Game seed for the X-Game-Seed header
+/// @param playerName In-game name the uploader played under (UTF-8). Empty to omit.
+void UploadReplayToServer(const AsciiString& url, const void *data, unsigned int dataLen,
+                          const AsciiString& filename, unsigned int seed,
+                          const AsciiString& playerName);
+
+/// Allocate a new buffer that is the on-disk replay bytes followed by a
+/// fixed "ZUTG" trailer (magic + version + payload length) used to mark
+/// uploads sourced from the Zulu client. The on-disk file itself is
+/// never touched; this only exists to tag the upload-buffer copy so the
+/// server can distinguish Zulu uploads from third-party (e.g. gentool)
+/// uploads of the same file. Caller frees the returned buffer with free().
+/// Trailer layout (little-endian, 8 bytes total):
+///   [0..3] magic            "ZUTG"
+///   [4..5] version          0x0001
+///   [6..7] payload length   0x0000 (v1 has no payload)
+/// @param fileData Pointer to the raw on-disk replay bytes
+/// @param fileLen Length of fileData in bytes
+/// @param outLen On success, receives the length of the returned buffer
+/// @return Newly malloc'd buffer of length fileLen + 8, or nullptr on failure
+void *AppendZuluUploadTag(const void *fileData, unsigned int fileLen,
+                          unsigned int *outLen);
+
+/// Ask the server whether it already has the map identified by mapCRC.
+/// Issues an HTTP GET to "<checkUrl>?crc=<hex>" and inspects the response
+/// body. Returns true only if the server explicitly returns "false"
+/// (case-insensitive, leading/trailing whitespace ignored). Network errors,
+/// non-2xx responses, "true" responses, and an empty checkUrl all return
+/// false (i.e. "don't bother uploading").
+/// @param checkUrl Full URL of the existence-check endpoint
+/// @param mapCRC The map's stored CRC (from MapMetaData::m_CRC)
+bool MapMissingFromServer(const AsciiString& checkUrl, unsigned int mapCRC);
+
+/// Ask the server which asset kinds it already holds for mapCRC. Issues an
+/// HTTP GET to "<listUrl>?crc=<dec>" and reads the {"kinds":[...]} array out
+/// of the JSON response, returning it as a contentsMask-style bitfield in
+/// *outMask: bit 1 = the .map itself, 2 = preview, 4 = map.ini, 8 = map.str,
+/// 16 = solo.ini, 32 = assetusage.txt, 64 = readme.txt.
+///
+/// This is the finer-grained sibling of MapMissingFromServer: that one can
+/// only say whether the .map is there at all, which means a map first
+/// uploaded without its sidecars could never have them filled in afterwards.
+///
+/// @return false if the server could not be asked (empty listUrl, network
+///         error, non-2xx, unparseable body), in which case *outMask is not
+///         written and the caller should fall back to MapMissingFromServer.
+///         A successful call for an unknown CRC returns true with *outMask 0.
+bool MapAssetsOnServer(const AsciiString& listUrl, unsigned int mapCRC,
+                       unsigned int *outMask);
+
+/// Upload a single map asset (the .map file or its .tga preview) to a REST
+/// endpoint via HTTP POST. Sends Content-Type: application/octet-stream plus
+/// X-Map-CRC, X-Map-Name, X-Map-File, and X-Game-Seed headers. Both calls
+/// for the same map share the same X-Map-CRC so the server can group them.
+/// @param uploadUrl Full URL of the map-upload endpoint
+/// @param data Pointer to the raw asset bytes
+/// @param dataLen Length of the asset data in bytes
+/// @param mapCRC The map's CRC for the X-Map-CRC header
+/// @param mapName The map's path/name for the X-Map-Name header
+/// @param fileKind Identifier for X-Map-File ("map" or "preview")
+/// @param seed Game seed for the X-Game-Seed header
+void UploadMapToServer(const AsciiString& uploadUrl, const void *data, unsigned int dataLen,
+                       unsigned int mapCRC, const AsciiString& mapName,
+                       const char *fileKind, unsigned int seed);
+
+/// Upload whatever parts of a map install the server is missing: the .map
+/// itself and whichever of preview/.ini/.str/solo.ini/assetusage.txt/
+/// readme.txt the contentsMask says exist on disk here but the server does
+/// not already hold.
+///
+/// When listUrl is available the per-kind list decides what to send, so a
+/// map that was first uploaded without its sidecars gets them filled in on
+/// the next game played on it. Without listUrl this falls back to the older
+/// all-or-nothing behaviour: ask whether the .map exists, and upload
+/// everything or nothing.
+///
+/// Best-effort and blocking; intended for lobby map-select (host side) and
+/// end-of-match upload (recorder side). Silently no-ops if the upload URL is
+/// empty, the map path is empty, or the server cannot be asked at all.
+///
+/// @param checkUrl Full URL of the map_exists endpoint (the fallback probe)
+/// @param listUrl Full URL of the list_map_assets endpoint (empty falls back
+///        to checkUrl alone)
+/// @param uploadUrl Full URL of the add_map endpoint (empty disables)
+/// @param mapCRC The map's CRC for the server queries and the X-Map-CRC
+///        header on each upload
+/// @param mapPath The .map file path (typically MapMetaData::m_fileName)
+/// @param contentsMask GameInfo::getMapContentsMask() bitfield indicating
+///        which sidecars exist on disk: bit 2 = preview, 4 = map.ini,
+///        8 = map.str, 16 = solo.ini, 32 = assetusage.txt, 64 = readme.txt.
+///        Pass 0 to upload the .map only.
+/// @param seed Game seed for X-Game-Seed correlation
+void UploadAllMapAssetsIfMissing(const AsciiString& checkUrl,
+                                 const AsciiString& listUrl,
+                                 const AsciiString& uploadUrl,
+                                 unsigned int mapCRC,
+                                 const AsciiString& mapPath,
+                                 unsigned int contentsMask,
+                                 unsigned int seed);
+
+/// Download a single map asset (the .map file, its preview, or one sidecar)
+/// from a REST endpoint via HTTP GET. Issues "<downloadUrl>?crc=<dec>&kind=<X>"
+/// and returns the response body on HTTP 200. The caller takes ownership of
+/// *outData and must release it with free().
+///
+/// 404 responses are treated as "asset not present" and return false without
+/// allocating; this lets callers walk every kind they want and silently skip
+/// the ones the server doesn't have. Non-2xx other than 404, network failures,
+/// and empty bodies all return false.
+///
+/// @param downloadUrl Full URL of the get_map_file endpoint (empty disables)
+/// @param mapCRC The map's CRC for the ?crc= query param
+/// @param fileKind Identifier matching the server's X-Map-File kinds
+///        ("map", "preview", "ini", "str", "solo", "assets", "readme")
+/// @param maxBytes Hard cap on the response body size in bytes. Bodies that
+///        report a larger Content-Length, or that overrun the cap mid-read,
+///        return false. Set to 0 to use an internal default (16 MiB).
+/// @param outData On success, receives a newly malloc'd buffer of the
+///        response body. Untouched on failure.
+/// @param outLen On success, receives the length of the buffer in bytes.
+///        Untouched on failure.
+/// @return true if the asset was fetched, false otherwise.
+bool DownloadMapAssetFromServer(const AsciiString& downloadUrl,
+                                unsigned int mapCRC,
+                                const char *fileKind,
+                                unsigned int maxBytes,
+                                void **outData,
+                                unsigned int *outLen);
+
+/// Download a full map (the .map plus the sidecars listed in contentsMask)
+/// from the configured cncstats endpoint and install it on disk at
+/// localMapPath (with sidecars derived via the FileTransfer.h helpers).
+/// Verifies the downloaded .map's CRC against the expected mapCRC before
+/// committing it; rejects the entire install on CRC mismatch. On success,
+/// refreshes MapCache so the new map shows up immediately in the lobby UI.
+///
+/// This is the registered MapDownloadHook implementation; it matches the
+/// MapDownloadHookFn signature so it can be installed at engine init.
+///
+/// Returns true only on a CRC-verified .map write (sidecars are best-effort
+/// and their failures don't gate the return value). Returns false if the
+/// download URL is empty, the .map download fails, the CRC doesn't match,
+/// the file write fails, or any required parameter is invalid.
+Bool DownloadAndInstallMap(const AsciiString& localMapPath,
+                           UnsignedInt mapCRC,
+                           UnsignedInt contentsMask);
+
+/// Non-blocking form of DownloadAndInstallMap, for the lobby. Starts a worker
+/// thread that only does the HTTP (into malloc'd buffers) and returns at once;
+/// the caller polls MapDownloadPoll() from the main thread, which CRC-verifies
+/// the .map, writes everything to disk and refreshes MapCache. Nothing that
+/// touches TheFileSystem / TheMapCache runs on the worker.
+///
+/// This is the registered MapDownloadStartHook; it matches MapDownloadStartHookFn.
+///
+/// Returns false (nothing started) when a download is already in flight, when
+/// the download URL is unconfigured, or when mapCRC / localMapPath are invalid.
+/// @param localMapPath Where the .map will be written (sidecars derive from it)
+/// @param mapCRC CRC to fetch by and to verify the downloaded bytes against
+/// @param contentsMask Which sidecars to ask for (see UploadAllMapAssetsIfMissing)
+Bool MapDownloadStart(const AsciiString& localMapPath,
+                      UnsignedInt mapCRC,
+                      UnsignedInt contentsMask);
+
+/// Main-thread poll for the MapDownloadStart worker. Performs the disk install
+/// on the transition out of PENDING, so it must only be called from the main
+/// thread. Returns INSTALLED / FAILED exactly once per download (consuming the
+/// result); IDLE at every other time.
+///
+/// This is the registered MapDownloadPollHook; it matches MapDownloadPollHookFn.
+MapDownloadStatus MapDownloadPoll(void);
+
+/// Result of a balance_teams API call.
+struct BalanceTeamsResult
+{
+	bool success;
+	AsciiString errorMessage;            ///< populated when !success
+	std::vector<AsciiString> team1;      ///< populated when success: names assigned to team 1
+	std::vector<AsciiString> allKnown;   ///< populated when success: every canonical name appearing in the response (across all keys). Lets the caller distinguish "slot did not match team1" from "slot was not recognized by the server at all"
+};
+
+/// Query the team-balancing endpoint with a list of player names. The endpoint
+/// returns a JSON object whose keys are comma-separated player lists ranked
+/// by balance score; the first key is treated as the best-balanced team-1
+/// split. Players not in the first key become team 2.
+/// Best-effort, blocking; uses WinINet's default timeouts.
+/// @param url Full URL of the balance_teams endpoint
+/// @param playerNames Lobby player names to balance (URL-encoded internally)
+BalanceTeamsResult BalanceTeamsFromServer(const AsciiString& url,
+                                          const std::vector<AsciiString>& playerNames);
+
+/// One name + general (faction template index, as found in a replay header)
+/// + team (lobby team index from GameSlot::getTeamNumber(); -1 = no team).
+/// Note: MapSummaryFromServer emits team 1-based on the wire (team + 1).
+struct MapSummaryPlayer
+{
+	AsciiString name;
+	int general;
+	int team;
+};
+
+/// Result of a map_summary API call. `success` is true only when the server
+/// returned HTTP 2xx. The body, if any, is split on '\n' (empty lines
+/// dropped) and surfaced in `lines`.
+struct MapSummaryResult
+{
+	bool success;
+	std::vector<AsciiString> lines;
+};
+
+/// Ask the map_summary endpoint for a human-readable blurb describing recent
+/// history on the given map for the given roster. POSTs a JSON body of the
+/// form { "map_name": "...", "players": [{"name": "...", "general": <int>, "team": <int>}, ...] }.
+/// Best-effort, blocking; uses WinINet's default timeouts.
+/// @param url Full URL of the map_summary endpoint
+/// @param mapName Display name of the map
+/// @param players Roster (name + general index) to summarize
+MapSummaryResult MapSummaryFromServer(const AsciiString& url,
+                                      const AsciiString& mapName,
+                                      const std::vector<MapSummaryPlayer>& players);
+
+// ---------------------------------------------------------------------------
+// Multiplayer loading-screen "battlefield intel".
+//
+// A background worker calls radarvan's predict / team_stats / synergy
+// endpoints and composes a short, display-ready blurb for the multiplayer
+// load screen (shown in place of the general-features text). Everything here
+// is best-effort and non-blocking: the worker runs on its own thread, writes
+// its result under a lock, and the load screen polls each frame. If nothing
+// comes back before loading finishes, the caller simply shows a themed
+// fallback note - the game never waits on radarvan.
+// ---------------------------------------------------------------------------
+
+/// Kick off the intel worker for one game. Copies its arguments and returns
+/// immediately; the actual HTTP happens on a detached thread. Safe to call
+/// with empty URLs (it just resets to the "no intel" state and starts
+/// nothing). Any in-flight state from a previous game is cleared.
+///
+/// @param predictUrl    POST /api/predict endpoint (the anchor call; if this
+///                      URL is empty or the request fails, no intel is shown)
+/// @param teamStatsUrl  GET /api/team_stats/ endpoint ("" to skip)
+/// @param synergyUrl    GET /api/player_ratings/synergy/ endpoint ("" to skip)
+/// @param mapName       Display name of the map being loaded
+/// @param localTeam     Local player's 1-based team (0 = observer/none; the
+///                      panel then uses neutral "Team 1/Team 2" labels)
+/// @param players       Roster; MapSummaryPlayer::team must be 1-based here
+///                      (predict rejects team 0), MapSummaryPlayer::general is
+///                      the faction/general template index
+void RadarvanIntelStart(const AsciiString& predictUrl,
+                        const AsciiString& teamStatsUrl,
+                        const AsciiString& synergyUrl,
+                        const AsciiString& mapName,
+                        int localTeam,
+                        const std::vector<MapSummaryPlayer>& players);
+
+/// Clear all intel state (no pending request, no result). Used to make sure a
+/// fresh game never shows a previous game's blurb.
+void RadarvanIntelReset(void);
+
+/// True once the worker has produced a non-empty blurb; copies it into
+/// outText. Non-blocking; returns false while still pending or on failure.
+bool RadarvanIntelReady(AsciiString& outText);
+
+/// True while a request is in flight (worker started, not yet finished).
+/// When this is false and RadarvanIntelReady() is also false, the worker
+/// either was never started or finished without data -> show the fallback.
+bool RadarvanIntelPending(void);
+
+/// The raw numbers behind the intel blurb, for the load-screen graphic.
+/// Teams A/B here are predict's team_a (lobby team 1) and team_b (team 2).
+struct RadarvanIntelData
+{
+	int   favoredTeam;     ///< 1 or 2; 0 if unknown
+	int   localTeam;       ///< local player's 1-based team; 0 = observer/none
+	float favoredWinProb;  ///< probability the favored team wins (0..1)
+	bool  aHasRecord; int aWins; int aLosses;
+	bool  bHasRecord; int bWins; int bLosses;
+	bool  aHasPair;   float aDelta; ///< team A standout-duo win_prob_delta
+	bool  bHasPair;   float bDelta; ///< team B standout-duo win_prob_delta
+};
+
+/// Copy the structured intel numbers for the current game into `out`.
+/// Returns true only when a result is ready (same gate as RadarvanIntelReady,
+/// which returns the formatted text). Non-blocking.
+bool RadarvanIntelReadyData(RadarvanIntelData& out);
+
+/// Result of a map_vote/<N>/choose API call.
+struct ChooseMapResult
+{
+	bool success;
+	AsciiString errorMessage;   ///< populated when !success
+	AsciiString chosenMap;      ///< populated when success: human-readable map name (e.g. "Hostile Dawn")
+	unsigned int mapCRC;        ///< populated when the server returns one; 0 means "not provided"
+	AsciiString mapFileName;    ///< populated when the server returns one (relative .map path); empty means "not provided"
+	unsigned int contentsMask;  ///< populated when the server returns one; 0 means "not provided"
+};
+
+/// Ask the map_vote/<playerCount>/choose endpoint to pick a map for the lobby.
+/// POSTs JSON {"players":[...]} and parses chosen_map from the response.
+/// The CRC / filename / contents_mask fields in the response are optional;
+/// when present they enable an automatic on-demand CDN download via
+/// DownloadAndInstallMap before the caller applies the map.
+/// Best-effort, blocking; uses WinINet's default timeouts.
+/// @param baseUrl Base URL of the map_vote endpoint, e.g.
+///        "https://www.radarvan.com/api/map_vote/". The handler appends
+///        "<playerCount>/choose" before sending.
+/// @param playerNames Lobby player names to send in the JSON body.
+/// @param playerCount Total occupied slots in the lobby (URL path segment).
+ChooseMapResult ChooseMapFromServer(const AsciiString& baseUrl,
+                                    const std::vector<AsciiString>& playerNames,
+                                    unsigned int playerCount);
+
+/// Refresh the cached map_match_counts table from the radarvan endpoint if
+/// the last successful fetch is older than maxAgeSec, or if no fetch has
+/// happened yet this session. Best-effort and blocking; uses WinINet's
+/// default timeouts. Silently no-ops on empty URL or HTTP failure (in which
+/// case the previously cached table, if any, stays in place).
+/// @param url Full URL of the map_match_counts endpoint
+/// @param maxAgeSec How recent a cached snapshot must be to skip refetching
+void FetchMapMatchCountsIfStale(const AsciiString& url, unsigned int maxAgeSec);
+
+/// Look up how many recorded matches the radarvan server has for the map
+/// identified by mapCacheKey (a MapCache iterator key, i.e. the full
+/// lowercased filename with backslashes). The cache key is normalized to
+/// the radarvan API's "maps/<folder>" or "userdata/maps/<folder>" form
+/// before lookup. Returns 0 when no entry exists (no fetch yet, key
+/// unrecognized, or simply zero plays).
+int GetMapMatchCount(const AsciiString& mapCacheKey);

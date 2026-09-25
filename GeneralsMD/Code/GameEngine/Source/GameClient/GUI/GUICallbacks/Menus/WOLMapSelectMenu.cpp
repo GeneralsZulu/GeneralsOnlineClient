@@ -32,7 +32,9 @@
 
 #include "Common/CustomMatchPreferences.h"
 #include "Common/GameEngine.h"
+#include "Common/GlobalData.h"
 #include "Common/MessageStream.h"
+#include "Common/StatsUploader.h"
 #include "GameClient/WindowLayout.h"
 #include "GameClient/Gadget.h"
 #include "GameClient/GadgetRadioButton.h"
