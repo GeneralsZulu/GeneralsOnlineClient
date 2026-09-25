@@ -2895,7 +2895,13 @@ void ConnectionManager::sendFrameDataToPlayer(UnsignedInt playerID, UnsignedInt 
 }
 
 void ConnectionManager::sendSingleFrameToPlayer(UnsignedInt playerID, UnsignedInt frame) {
-	if ((TheGameLogic->getFrame() - FRAMES_TO_KEEP) > frame) {
+	// TheSuperHackers @bugfix bill-rich 24/09/2026 Compare signed. getFrame() is
+	// UnsignedInt and FRAMES_TO_KEEP is 65, so for the first 65 frames of a match
+	// the subtraction wrapped to nearly 2^32 and every frame looked "too far in
+	// the past": every resend and every disconnect-screen re-serve was refused, so
+	// a game that stalled before frame 65 could never recover and died to the
+	// disconnect vote.
+	if (((Int)TheGameLogic->getFrame() - FRAMES_TO_KEEP) > (Int)frame) {
 		DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("ConnectionManager::sendSingleFrameToPlayer - player %d requested frame %d when we are on frame %d, this is too far in the past.", playerID, frame, TheGameLogic->getFrame()));
 		return;
 	}
