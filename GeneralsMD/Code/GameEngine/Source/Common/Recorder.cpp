@@ -813,6 +813,21 @@ void RecorderClass::stopPlayback() {
 	{
 		TheGameLogic->exitGame();
 	}
+
+	// A Replay Theater process is booted with some older release's data
+	// mounted purely to watch one replay, so there is nowhere sensible for it
+	// to go afterwards: dropping to the shell would let the player start a
+	// live game on rules nobody else has. Quit instead and let ZuluLauncher
+	// bring the picker back up.
+	//
+	// This covers the ways playback ends inside the recorder: the last frame,
+	// a short read, the upload trailer. Quitting out from the in-game menu
+	// never reaches here -- it returns to the shell instead, which is why
+	// Shell::showShell carries the same guard.
+	if (TheGlobalData->m_replayTheater && TheGameEngine != nullptr)
+	{
+		TheGameEngine->setQuitting(TRUE);
+	}
 }
 
 /**
