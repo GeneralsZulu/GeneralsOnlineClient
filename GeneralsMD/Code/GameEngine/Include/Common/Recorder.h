@@ -112,6 +112,14 @@ public:
 #endif
 	Bool isPlaybackInProgress() const;
 
+	// TheSuperHackers @feature Playback-fidelity signal: replayed commands whose object IDs
+	// did not resolve in our re-simulated world. The recording client only issued commands
+	// against objects that existed for it, so anything beyond the occasional
+	// clicked-a-dying-unit race points at a diverged simulation. Used by the replay verdict
+	// for retail-epoch replays, whose recorded checksums are unusable (see handleCRCMessage).
+	UnsignedInt getPlaybackStaleObjectRefs() const { return m_playbackStaleObjectRefs; }
+	void notePlaybackStaleObjectRef() { ++m_playbackStaleObjectRefs; }
+
 public:
 	void handleCRCMessage(UnsignedInt newCRC, Int playerIndex, Bool fromPlayback);
 
@@ -192,6 +200,65 @@ public:
 
 	Bool isMultiplayer();												///< is this a multiplayer game (record OR playback)?
 
+	// Zulu replay extension. Replay-affecting AI features added by the Zulu
+	// mod are tagged with a monotonic feature-version. New binaries playing
+	// older replays disable any feature whose version exceeds what the replay
+	// declares, so older replays remain deterministically replayable. Old
+	// binaries cannot play new replays - that is by design.
+	enum
+	{
+		ZULU_AI_FEATURE_NONE        = 0,
+		ZULU_AI_FEATURE_IDLE_COMMIT = 1, ///< AISkirmishPlayer::commitIdleArmy()
+		ZULU_AI_FEATURE_SPOT_SOLVER = 2, ///< global start-position solver in populateRandomStartPosition(), incl. teammate spot shuffle
+		ZULU_AI_FEATURE_USA_DRONES  = 3, ///< TacticalAI USA vehicle drones (AISkirmishPlayer::buyObjectUpgrades)
+		ZULU_AI_FEATURE_CHINA_OVERLORD = 4, ///< TacticalAI China Overlord gattling/propaganda (AISkirmishPlayer::buyObjectUpgrades)
+		ZULU_AI_FEATURE_MD_LASER_LOCK = 5, ///< TacticalAI USA Missile Defender laser lock (AISkirmishPlayer::laserLockMissileDefenders)
+		ZULU_AI_FEATURE_CURRENT     = 5
+	};
+	// True if the AI feature at the given version should run this frame.
+	// Always true during live games / recording. During playback / resume-catchup
+	// / simulation-playback, true only if the loaded replay declared support
+	// for that feature version.
+	Bool isAIFeatureEnabled(UnsignedInt featureVersion) const;
+
+	// TheSuperHackers @feature Replay determinism epochs. Some sim behaviors
+	// changed across versions WITHOUT being gated by the AI-feature block
+	// above (they shipped ungated), so old replays don't carry a flag to
+	// disable them. To re-simulate an old replay bit-exactly on a newer binary,
+	// we derive a monotonic "epoch" from the replay's recorded version (header
+	// version string, or the -replayEpoch override) and gate each divergent
+	// path on it. Higher = newer behavior; CURRENT during live play/recording.
+	enum ReplayEpoch
+	{
+		REPLAY_EPOCH_RETAIL = 0, ///< retail 1.04 / Zulu <= 1.2.0
+		REPLAY_EPOCH_V121   = 1, ///< 1.2.1+: create-team processed at network frame for all players
+		REPLAY_EPOCH_V128   = 2, ///< 1.2.8+: poison/flame XP source, crate multi-pickup guard, scaffold-resume-on-dead-builder
+		REPLAY_EPOCH_V130   = 3, ///< 1.3.0+: AISkirmishPlayer surrender directive
+		REPLAY_EPOCH_V155   = 4, ///< 1.5.5+: upgrade commands carry the stable upgrade id (mask bit) instead of a raw namekey; community patch sim fixes (battle bus lethal damage, empty stinger snipe, stealth during repair, reliable firestorms)
+		REPLAY_EPOCH_CURRENT = REPLAY_EPOCH_V155
+	};
+	// The epoch to simulate. CURRENT during live play/recording; during playback
+	// it is the recorded version's epoch (override or auto-detected).
+	ReplayEpoch getReplayEpoch() const;
+	// True if the behavior introduced at 'epoch' should run this frame.
+	Bool isReplayEpochAtLeast(ReplayEpoch epoch) const { return getReplayEpoch() >= epoch; }
+	// Command-line override (-replayEpoch); <0 means "auto-detect from header".
+	static void setReplayEpochOverride(Int epoch) { s_replayEpochOverride = epoch; }
+	static Int getReplayEpochOverride() { return s_replayEpochOverride; }
+
+	// Pre-V155 replays recorded upgrade purchases as raw NameKeyType values.
+	// Those are dealt at runtime in first-use order, so the numbering belongs to
+	// the RECORDING environment: the binary's early registrations plus every name
+	// registered by data parsed before Upgrade.ini (mods shift it too). Playback
+	// loads the recording's data package, so the data-driven registrations cancel
+	// out and the only asymmetry is the binary's own: one extra FunctionLexicon
+	// name registered at init from 1.5.2 on, which is how 1.5.2 came to misresolve
+	// every upgrade in every older replay (the v1.5.2 staleRefs regression). During
+	// playback of a pre-V155 replay this returns (our binary's early registrations -
+	// the recording binary's): add it to a recorded upgrade key to get the same
+	// upgrade under our numbering.
+	Int getReplayLegacyUpgradeKeyDelta() const;
+
 	Int getGameMode() { return m_originalGameMode; }
 
 	void logPlayerDisconnect(UnicodeString player, Int slot);
@@ -204,6 +271,11 @@ public:
 protected:
 	void startRecording(GameDifficulty diff, Int originalGameMode, Int rankPoints, Int maxFPS);					///< Start recording to m_file.
 	void writeToFile(GameMessage *msg);								///< Write this GameMessage to m_file.
+
+	// Zulu replay extension block. Written immediately after maxFPS in the
+	// header and consumed at the same point on read.
+	void writeZuluReplayExtension();
+	void readZuluReplayExtension();
 	void archiveReplay(AsciiString fileName);					///< Move the specified replay file to the archive directory.
 
 	void logGameStart(AsciiString options);
@@ -242,6 +314,12 @@ protected:
 	Bool m_archiveReplays;														///< if true, each replay is archived to the replay archive folder after recording
 
 	Int m_originalGameMode; // valid in replays
+
+	UnsignedInt m_replayAIFeatureVersion;						///< CURRENT for live games; loaded from the replay's extension block during playback.
+	ReplayEpoch m_replayEpoch;											///< CURRENT for live games; derived from the replay's recorded version during playback.
+	Int m_replayLegacyUpgradeKeyDelta;							///< Our binary's early-namekey count minus the recording binary's; see getReplayLegacyUpgradeKeyDelta().
+	static Int s_replayEpochOverride;								///< -replayEpoch command-line override; <0 = auto-detect from header.
+	UnsignedInt m_playbackStaleObjectRefs;					///< Replayed commands referencing objects missing from our world; see getPlaybackStaleObjectRefs().
 
 	UnsignedInt m_nextFrame;												///< The Frame that the next message is to be executed on.  This can be -1.
 

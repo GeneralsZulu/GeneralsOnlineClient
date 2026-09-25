@@ -369,6 +369,10 @@ RecorderClass::RecorderClass()
 	m_archiveReplays = FALSE;
 	m_nextFrame = 0;
 	m_wasDesync = FALSE;
+	m_replayAIFeatureVersion = ZULU_AI_FEATURE_CURRENT;
+	m_replayEpoch = REPLAY_EPOCH_CURRENT;
+	m_replayLegacyUpgradeKeyDelta = 0;
+	m_playbackStaleObjectRefs = 0;
 	init(); // just for the heck of it.
 }
 
@@ -376,6 +380,156 @@ RecorderClass::RecorderClass()
  * Destructor
  */
 RecorderClass::~RecorderClass() {
+}
+
+//----------------------------------------------------------------------------------------------------------
+// Zulu replay extension block helpers.
+//----------------------------------------------------------------------------------------------------------
+void RecorderClass::writeZuluReplayExtension()
+{
+	const char zuluMagic[4] = {'Z','U','L','U'};
+	m_file->write(zuluMagic, sizeof(zuluMagic));
+	UnsignedInt version = ZULU_AI_FEATURE_CURRENT;
+	m_file->write(&version, sizeof(version));
+	m_replayAIFeatureVersion = version;
+}
+
+void RecorderClass::readZuluReplayExtension()
+{
+	// Try to consume the extension block. Vanilla / pre-Zulu replays will
+	// fail the magic check; rewind so the bytes we peeked at are interpreted
+	// as the start of the command stream, as before.
+	char magic[4] = {0,0,0,0};
+	Int pos = m_file->position();
+	Int got = m_file->read(magic, sizeof(magic));
+	if (got == (Int)sizeof(magic)
+		&& magic[0] == 'Z' && magic[1] == 'U' && magic[2] == 'L' && magic[3] == 'U')
+	{
+		UnsignedInt version = 0;
+		m_file->read(&version, sizeof(version));
+		m_replayAIFeatureVersion = version;
+		DEBUG_LOG(("RecorderClass: Zulu replay extension version %u", version));
+	}
+	else
+	{
+		m_file->seek(pos, File::START);
+		m_replayAIFeatureVersion = ZULU_AI_FEATURE_NONE;
+		DEBUG_LOG(("RecorderClass: vanilla replay; Zulu AI features disabled for playback"));
+	}
+}
+
+Bool RecorderClass::isAIFeatureEnabled(UnsignedInt featureVersion) const
+{
+	if (m_mode == RECORDERMODETYPE_PLAYBACK
+		|| m_mode == RECORDERMODETYPE_SIMULATION_PLAYBACK
+		|| m_mode == RECORDERMODETYPE_LIVE_OBSERVER
+		|| m_mode == RECORDERMODETYPE_RESUME_CATCHUP)
+	{
+		return m_replayAIFeatureVersion >= featureVersion;
+	}
+	return TRUE;
+}
+
+//----------------------------------------------------------------------------------------------------------
+// Replay determinism epoch.
+//----------------------------------------------------------------------------------------------------------
+Int RecorderClass::s_replayEpochOverride = -1;
+
+// Map a semantic version to its determinism epoch. Only builds after the
+// version-string switch render "major.minor.patch" (e.g. "1.2.8"); retail and
+// pre-switch builds render "Version 1.04" and are handled by the caller as
+// REPLAY_EPOCH_RETAIL.
+static RecorderClass::ReplayEpoch epochFromSemanticVersion(Int major, Int minor, Int patch)
+{
+	if (major != 1)
+		return RecorderClass::REPLAY_EPOCH_CURRENT;
+	if (minor < 2)
+		return RecorderClass::REPLAY_EPOCH_RETAIL;   // 1.0.x, 1.1.x
+	if (minor == 2)
+	{
+		if (patch <= 0) return RecorderClass::REPLAY_EPOCH_RETAIL;  // 1.2.0
+		if (patch <= 7) return RecorderClass::REPLAY_EPOCH_V121;    // 1.2.1 - 1.2.7
+		return RecorderClass::REPLAY_EPOCH_V128;                    // 1.2.8, 1.2.9
+	}
+	// 1.5.3 is the odd one out. It was never a release: it is a dev build from
+	// Jul 23 2026, handed out before 1.5.4, and it already carried community
+	// patch sim fixes that mainline only shipped (and only then epoch-gated)
+	// in 1.5.5 -- the empty-Stinger snipe fix landed upstream that same day.
+	// So its replays re-simulate closer under the V155 gates than under V130,
+	// measured over six of them against 1.5.2 data: every one survives longer
+	// (0:10 -> 3:34 in the worst case, one clean to the end), none worse.
+	if (minor == 5 && patch == 3)
+		return RecorderClass::REPLAY_EPOCH_V155;
+	// 1.5.4 carries none of the stable-upgrade-id / community-patch sim
+	// changes -- those landed after it and first shipped in 1.5.5.
+	if (minor < 5 || (minor == 5 && patch <= 4))
+		return RecorderClass::REPLAY_EPOCH_V130;      // 1.3.0 - 1.5.4
+	return RecorderClass::REPLAY_EPOCH_V155;          // 1.5.5+
+}
+
+// Pre-V155 replays carry upgrade purchases as raw NameKeyType values. The
+// numbering belongs to the RECORDING environment (binary registrations + all
+// names registered by data parsed before Upgrade.ini). Playback loads the
+// recording's data package, so the data half cancels out; what remains is the
+// binary difference: one extra early FunctionLexicon registration from 1.5.2
+// on, shifting every later namekey by one -- the cause of the v1.5.2
+// replay-fidelity regression. This returns OUR binary's early-registration
+// count minus the recording binary's: add it to a recorded upgrade key to get
+// the same upgrade under our numbering. If a future change ever adds/removes
+// another pre-Upgrade.ini registration, gate it here the same way (older
+// recordings get a bigger delta).
+static Int legacyUpgradeKeyDeltaFromHeader(const RecorderClass::ReplayHeader& header)
+{
+	AsciiString vs;
+	vs.translate(header.versionString);
+	const char *s = vs.str();
+	Int a = 0, b = 0, c = 0;
+	if (s[0] >= '0' && s[0] <= '9' && sscanf(s, "%d.%d.%d", &a, &b, &c) == 3)
+	{
+		// 1.5.2 and later builds share our early-registration set.
+		if (a > 1 || (a == 1 && (b > 5 || (b == 5 && c >= 2))))
+			return 0;
+	}
+	return 1;   // retail and forks <= 1.5.1: one fewer early registration than us
+}
+
+static RecorderClass::ReplayEpoch deriveReplayEpochFromHeader(const RecorderClass::ReplayHeader& header)
+{
+	AsciiString vs;
+	vs.translate(header.versionString);
+	const char *s = vs.str();
+	Int a = 0, b = 0, c = 0;
+	// Treat as a semantic version only if it starts with a digit and has all
+	// three components; otherwise (retail "Version 1.04", dev builds) fall
+	// back to the retail epoch. The -replayEpoch override is authoritative for
+	// anything the header can't disambiguate.
+	if (s[0] >= '0' && s[0] <= '9' && sscanf(s, "%d.%d.%d", &a, &b, &c) == 3)
+		return epochFromSemanticVersion(a, b, c);
+	return RecorderClass::REPLAY_EPOCH_RETAIL;
+}
+
+RecorderClass::ReplayEpoch RecorderClass::getReplayEpoch() const
+{
+	if (m_mode == RECORDERMODETYPE_PLAYBACK
+		|| m_mode == RECORDERMODETYPE_SIMULATION_PLAYBACK
+		|| m_mode == RECORDERMODETYPE_LIVE_OBSERVER
+		|| m_mode == RECORDERMODETYPE_RESUME_CATCHUP)
+	{
+		return m_replayEpoch;
+	}
+	return REPLAY_EPOCH_CURRENT;
+}
+
+Int RecorderClass::getReplayLegacyUpgradeKeyDelta() const
+{
+	if (m_mode == RECORDERMODETYPE_PLAYBACK
+		|| m_mode == RECORDERMODETYPE_SIMULATION_PLAYBACK
+		|| m_mode == RECORDERMODETYPE_LIVE_OBSERVER
+		|| m_mode == RECORDERMODETYPE_RESUME_CATCHUP)
+	{
+		return m_replayLegacyUpgradeKeyDelta;
+	}
+	return 0;
 }
 
 /**
@@ -403,6 +557,10 @@ void RecorderClass::init() {
 	m_wasDesync = FALSE;
 	m_doingAnalysis = FALSE;
 	m_playbackFrameCount = 0;
+	m_replayAIFeatureVersion = ZULU_AI_FEATURE_CURRENT;
+	m_replayEpoch = REPLAY_EPOCH_CURRENT;
+	m_replayLegacyUpgradeKeyDelta = 0;
+	m_playbackStaleObjectRefs = 0;
 
 	m_replayShortRead             = FALSE;
 	m_replayReadPos               = 0;
@@ -899,6 +1057,11 @@ void RecorderClass::startRecording(GameDifficulty diff, Int originalGameMode, In
 	// Write maxFPS chosen
 	m_file->write(&maxFPS, sizeof(maxFPS));
 
+	// Zulu replay extension. Tags this replay with the AI feature version
+	// the recording binary supports, so older binaries reject the file via
+	// exeCRC mismatch and newer binaries can identify what features to run.
+	writeZuluReplayExtension();
+
 	DEBUG_LOG(("RecorderClass::startRecording() - diff=%d, mode=%d, FPS=%d", diff, originalGameMode, maxFPS));
 
 	/*
@@ -1285,6 +1448,18 @@ void RecorderClass::handleCRCMessage(UnsignedInt newCRC, Int playerIndex, Bool f
 		UnsignedInt playbackCRC = m_crcInfo.readCRC();
 		//DEBUG_LOG(("RecorderClass::handleCRCMessage() - Comparing CRCs of InGame:%8.8X Replay:%8.8X Frame:%d from Player %d",
 		//	playbackCRC, newCRC, TheGameLogic->getFrame()-m_crcInfo.GetQueueSize()-1, playerIndex));
+
+		// Replays recorded by retail-lineage clients ("Version 1.04"/"1.06" headers) carry
+		// Checksum values that never match a re-simulated CRC at any frame offset -- retail's
+		// own playback had the same permanent mismatch, which is why the warning below was
+		// disabled in 2003. A faithfully re-simulated retail game (verified by outcome) still
+		// mismatches 100% of its checkpoints, so for the retail epoch these values carry no
+		// information: drain the queue and leave the verdict to the completion and
+		// stale-reference checks in ReplaySimulation. Fork-recorded replays keep the full
+		// strict check below.
+		if (getReplayEpoch() == REPLAY_EPOCH_RETAIL)
+			return;
+
 		if (TheGameLogic->getFrame() > 0 && newCRC != playbackCRC && !m_crcInfo.sawCRCMismatch())
 		{
 			//Kris: Patch 1.01 November 10, 2003 (integrated changes from Matt Campbell)
@@ -1383,6 +1558,16 @@ Bool RecorderClass::playbackFile(AsciiString filename)
 		return FALSE;
 	}
 
+	// Select the determinism epoch to simulate: the -replayEpoch override wins,
+	// otherwise auto-detect from the recorded version string. Gated sim paths
+	// read this via getReplayEpoch() to reproduce older behavior bit-exactly.
+	m_replayEpoch = (s_replayEpochOverride >= 0)
+		? (ReplayEpoch)s_replayEpochOverride
+		: deriveReplayEpochFromHeader(header);
+	m_replayLegacyUpgradeKeyDelta = legacyUpgradeKeyDeltaFromHeader(header);
+	DEBUG_LOG(("RecorderClass::playbackFile - replay determinism epoch = %d (override=%d)",
+		(Int)m_replayEpoch, s_replayEpochOverride));
+
 #ifdef DEBUG_CRASHING
 	Bool versionStringDiff = header.versionString != TheVersion->getUnicodeVersion();
 	Bool versionTimeStringDiff = header.versionTimeString != TheVersion->getUnicodeBuildTime();
@@ -1451,6 +1636,11 @@ Bool RecorderClass::playbackFile(AsciiString filename)
 
     Int maxFPS = 0;
     m_file->read(&maxFPS, sizeof(maxFPS));
+
+    // Zulu replay extension. Vanilla / pre-Zulu replays don't have this block;
+    // readZuluReplayExtension peeks for the magic and rewinds if absent so the
+    // next read still sees the start of the command stream.
+    readZuluReplayExtension();
 
     Bool isMultiplayer = (m_originalGameMode == GAME_INTERNET || m_originalGameMode == GAME_LAN);
     m_crcInfo = CRCInfo(header.localPlayerIndex, isMultiplayer);
@@ -2230,6 +2420,17 @@ Bool RecorderClass::startResumeCatchup()
 		return FALSE;
 	}
 
+	// Mirror playbackFile's handling of the Zulu extension block, and pick the epoch the
+	// source was recorded under so the injected commands re-simulate the same way.
+	m_file = m_resumeSourceFile;
+	readZuluReplayExtension();
+	m_resumeSourceFile = m_file;
+	m_file = recordFile;
+	m_replayEpoch = (s_replayEpochOverride >= 0)
+		? (ReplayEpoch)s_replayEpochOverride
+		: deriveReplayEpochFromHeader(header);
+	m_replayLegacyUpgradeKeyDelta = legacyUpgradeKeyDeltaFromHeader(header);
+
 	m_mode = RECORDERMODETYPE_RESUME_CATCHUP;
 	m_resumeHandoffFrame = m_resumeArmedHandoffFrame;
 	m_resumeSourceLastFrame = m_resumeArmedSourceLastFrame;
@@ -2294,6 +2495,9 @@ UnsignedInt RecorderClass::scanReplayLastFrame(AsciiString filename)
 		m_file = nullptr;
 		return 0;
 	}
+
+	// ...then the Zulu extension block, or its magic would be read as a frame number.
+	readZuluReplayExtension();
 
 	const Bool savedAnalysis = m_doingAnalysis;
 	m_doingAnalysis = TRUE;
