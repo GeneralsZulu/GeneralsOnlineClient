@@ -50,6 +50,8 @@ class TechAndSupplyImages
 public:
 	ICoord2DList m_techPosList;
 	ICoord2DList m_supplyPosList;
+	ICoord2DList m_cratePosList;     ///< KINDOF_CRATE positions, drawn with the Zulu crate icon
+	ICoord2DList m_derrickPosList;   ///< Tech derricks, drawn with the Zulu derrick icon
 };
 
 struct WinTimeStamp
@@ -68,9 +70,31 @@ public:
 
 typedef std::list <Coord3D> Coord3DList;
 
+// A bridge span from the map's object list: world-space endpoints plus the
+// bridge template name (the map object's name) used for radar-color lookup
+// at draw time. Landmark bridges store their thing-template name, which
+// won't resolve via TheTerrainRoads; consumers fall back to a neutral color.
+struct MapBridgeSpan
+{
+	AsciiString m_templateName;
+	Coord3D m_from;
+	Coord3D m_to;
+};
+typedef std::list <MapBridgeSpan> MapBridgeSpanList;
+
+enum { MAX_MAP_START_SPOTS = 8 };	// mirrors MAX_SLOTS (GameNetwork/NetworkDefs.h)
+
 class MapMetaData
 {
 public:
+	MapMetaData()
+	{
+		Int i, j;
+		for (i = 0; i < MAX_MAP_START_SPOTS; ++i)
+			for (j = 0; j < MAX_MAP_START_SPOTS; ++j)
+				m_startSpotPathDist[i][j] = 0.0f;
+	}
+
 	UnicodeString m_displayName;
 	AsciiString m_nameLookupTag;
 	Region3D m_extent;
@@ -85,8 +109,22 @@ public:
 	WinTimeStamp m_timestamp;
 
 	WaypointMap m_waypoints;
-	Coord3DList m_supplyPositions;
-	Coord3DList m_techPositions;
+	Coord3DList m_supplyPositions;       ///< Supply docks (KINDOF_SUPPLY_SOURCE_ON_PREVIEW without KINDOF_CRATE)
+	Coord3DList m_techPositions;         ///< Generic tech buildings (not derricks)
+	Coord3DList m_cratePositions;        ///< KINDOF_CRATE objects
+	Coord3DList m_techDerrickPositions;  ///< Tech buildings whose template name contains "Derrick"
+	Coord3DList m_garrisonablePositions; ///< KINDOF_GARRISONABLE_UNTIL_DESTROYED civilian buildings
+	MapBridgeSpanList m_bridgeSpans;     ///< Bridge spans (sectional pairs + landmark approximations) for preview rendering
+
+	// Ground-path distance between start waypoints in world units, 0-based
+	// spot indices, symmetric. Computed at cache build by flood-filling the
+	// heightmap passability grid (cliff slope rule + water areas, with bridge
+	// spans stamped passable). 0 means "not computed" (missing spot, or cache
+	// entry from before this field existed); consumers must fall back to
+	// straight-line distance for such pairs. Unreachable pairs are stored as
+	// 1000000 + straight-line distance so they still order sensibly.
+	Real m_startSpotPathDist[MAX_MAP_START_SPOTS][MAX_MAP_START_SPOTS];
+
 	AsciiString m_fileName;
 };
 
@@ -106,6 +144,14 @@ public:
 
 	void updateCache();
 
+	// Re-scan only the user maps directory and pick up any .map files
+	// that appeared since startup (e.g. mid-lobby peer/CDN downloads).
+	// Cheaper than updateCache() because it skips the standard-maps
+	// rebuild and the one-shot startup INI loads. Already-cached maps
+	// short-circuit on CRC, so the cost is dominated by directory walk
+	// plus parsing any newly-added .map files.
+	void refreshUserMaps();
+
 	AsciiString getMapDir(bool bCustomMapDebug = false) const;
 	AsciiString getUserMapDir(bool bCustomMapDebug = false) const;
 	AsciiString getMapExtension() const;
@@ -124,6 +170,7 @@ private:
 	void writeCacheINI(const AsciiString &mapDir);
 
 	static const char *const m_mapCacheName;
+	static const char *const m_zuluMapCacheName;
 
 	MapNameSet m_allowedMaps;
 	Bool m_doCreateStandardMapCacheINI;
@@ -139,6 +186,13 @@ extern TechAndSupplyImages TheSupplyAndTechImageLocations;
 
 Int populateMapListbox( GameWindow *listbox, Bool useSystemMaps, Bool isMultiplayer, AsciiString mapToSelect = AsciiString::TheEmptyString );		/// Read a list of maps from the run directory and fill in the listbox.  Return the selected index
 Int populateMapListboxNoReset( GameWindow *listbox, Bool useSystemMaps, Bool isMultiplayer, AsciiString mapToSelect = AsciiString::TheEmptyString );		/// Read a list of maps from the run directory and fill in the listbox.  Return the selected index
+
+// Fills the listbox with every map (system and user dirs combined) whose
+// display name contains nameFilter as a case-insensitive substring AND whose
+// supported player count equals playerCountFilter. An empty nameFilter
+// matches every name; a playerCountFilter <= 0 matches every player count.
+// Used by the LAN map-select search box and player-count dropdown.
+Int populateMapListboxFiltered( GameWindow *listbox, Bool isMultiplayer, const UnicodeString& nameFilter, Int playerCountFilter = 0, AsciiString mapToSelect = AsciiString::TheEmptyString );
 Bool isValidMap( AsciiString mapName, Bool isMultiplayer );						/// Validate a map
 Image *getMapPreviewImage( AsciiString mapName );
 AsciiString getDefaultMap( Bool isMultiplayer );											/// Find a valid map

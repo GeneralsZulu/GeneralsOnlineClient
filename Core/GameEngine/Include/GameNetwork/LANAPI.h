@@ -28,11 +28,14 @@
 
 #pragma once
 
+#include <map>
+
 #include "GameNetwork/Transport.h"
 #include "GameNetwork/NetworkInterface.h"
 #include "GameNetwork/NetworkDefs.h"
 #include "GameNetwork/LANPlayer.h"
 #include "GameNetwork/LANGameInfo.h"
+#include "GameNetwork/LANObserverStream.h"
 
 //static const Int g_lanPlayerNameLength = 20;
 static const Int g_lanPlayerNameLength = 12; // reduced length because of game option length
@@ -43,7 +46,7 @@ static const Int g_lanHostNameLength = 1;
 //static const Int g_lanGameNameLength = 32;
 static const Int g_lanGameNameLength = 16; // reduced length because of game option length
 static const Int g_lanGameNameReservedLength = 16; // save N wchars for ID info
-static const Int g_lanMaxChatLength = 100;
+static const Int g_lanMaxChatLength = 200; // max ~201 before LANMessage exceeds MAX_LANAPI_PACKET_SIZE (see static_assert below)
 static const Int m_lanMaxOptionsLength = MAX_LANAPI_PACKET_SIZE - ( 8 + (g_lanGameNameLength+1)*2 + 4 + (g_lanPlayerNameLength+1)*2
 																														+ (g_lanLoginNameLength+1) + (g_lanHostNameLength+1) );
 static const Int g_maxSerialLength = 23; // including the trailing '\0'
@@ -169,6 +172,12 @@ struct LANMessage
 		MSG_INACTIVE,						///< I've alt-tabbed out.  Unaccept me cause I'm a poo-flinging monkey.
 
 		MSG_REQUEST_GAME_INFO,	///< For direct connect, get the game info from a specific IP Address
+
+		///< I gave up trying to reach your observer stream port. Appended last
+		///< on purpose: the wire values of everything above stay put, and an
+		///< older client that receives this falls into update()'s default case
+		///< and ignores it.
+		MSG_OBSERVE_UNREACHABLE,
 	} messageType;
 
 	WideChar name[g_lanPlayerNameLength + 1]; ///< My name, for convenience
@@ -176,7 +185,7 @@ struct LANMessage
 	char hostName[g_lanHostNameLength + 1];		///< machine name, for convenience
 
 	// No additional data is required for REQUEST_LOCATIONS, LOBBY_ANNOUNCE,
-	// REQUEST_LOBBY_LEAVE, GAME_START.
+	// REQUEST_LOBBY_LEAVE.
 	union
 	{
 		// StartTimer is sent with GAME_START_TIMER
@@ -184,6 +193,15 @@ struct LANMessage
 		{
 			Int seconds;
 		} StartTimer;
+
+		// StartGame is sent with GAME_START. The host embeds its final options
+		// string so joiners load from the authoritative slot state even if the
+		// last MSG_GAME_OPTIONS never arrived or was clobbered locally; a game
+		// that starts from divergent options desyncs on the first CRC check.
+		struct
+		{
+			char options[m_lanMaxOptionsLength+1];
+		} StartGame;
 
 		// GameJoined is sent with REQUEST_GAME_LEAVE
 		struct
@@ -232,6 +250,10 @@ struct LANMessage
 			UnsignedInt gameIP;
 			UnsignedInt playerIP;
 			LANAPIInterface::ReturnType reason;
+			// When reason == RET_GAME_STARTED, the host fills in the TCP
+			// port where it is streaming the live replay for observers.
+			// 0 means "no observer mode available" (legacy host).
+			UnsignedShort observerPort;
 		} GameNotJoined;
 
 		// Accept is sent with SET_ACCEPT
@@ -262,6 +284,19 @@ struct LANMessage
 		{
 			char options[m_lanMaxOptionsLength+1];
 		} GameOptions;
+
+		// ObserveFailure is sent with MSG_OBSERVE_UNREACHABLE. The would-be
+		// observer tells the host that its stream port never answered, which
+		// is a fact only the observer holds: the host's listen socket bound
+		// fine and simply never saw a connection. Carries the port so the
+		// host can name it, and how long we spent trying so the host's log
+		// shows this was a real timeout rather than one dropped packet.
+		struct
+		{
+			UnsignedInt   gameIP;
+			UnsignedShort observerPort;
+			UnsignedInt   attemptMs;
+		} ObserveFailure;
 
 	};
 };
@@ -332,6 +367,10 @@ public:
 	virtual LANPlayer * LookupPlayer( UnsignedInt playerIP );													///< return a pointer to a player we know about
 	virtual Bool SetLocalIP( UnsignedInt localIP ) override;																		///< For multiple NIC machines
 	virtual void SetLocalIP( AsciiString localIP ) override;																		///< For multiple NIC machines
+	/// Slot index for the peer whose message is currently being dispatched.
+	/// Matches (IP, source port) first so two players sharing one public IP
+	/// (same household/NAT) are told apart; falls back to IP-only. -1 if none.
+	Int findSlotForSender( UnsignedInt senderIP ) const;
 	virtual Bool AmIHost() override;																											///< Am I hosting a game?
 	virtual UnicodeString GetMyName() override { return m_name; }                 ///< What's my name?
 	virtual LANGameInfo* GetMyGame() override { return m_currentGame; }					      ///< What's my Game?
@@ -362,7 +401,19 @@ protected:
 	PendingActionType		m_pendingAction;	///< What action are we performing?
 	UnsignedInt					m_expiration;						///< When should we give up on our action?
 	UnsignedInt					m_actionTimeout;
+	// Join-request retransmit: MSG_REQUEST_GAME_INFO / MSG_REQUEST_JOIN are
+	// single UDP packets; over punched NAT paths either can be lost (e.g.
+	// while the host is mid-handoff creating its game), which used to surface
+	// as "Connection timed out" on the joiner. While ACT_JOIN or
+	// ACT_JOINDIRECTCONNECT is pending, update() re-sends the stashed request
+	// once a second until it is answered or m_expiration hits. The host
+	// answers re-joins idempotently (see handleRequestJoin).
+	LANMessage					m_pendingResendMsg;   ///< Verbatim copy of the last join-flow request
+	UnsignedInt					m_pendingResendIP;    ///< Destination passed to sendMessage for it
+	UnsignedInt					m_nextResendMs;       ///< When to fire the next retry (0 = disarmed)
 	UnsignedInt					m_directConnectRemoteIP;///< The IP address of the game we are direct connecting to.
+	UnsignedInt					m_dispatchSenderIP;  ///< Source IP of the LAN message currently being dispatched (transient).
+	UnsignedShort				m_dispatchSenderPort;///< Source port of the LAN message currently being dispatched. Lets reply-style handlers send back through NAT-translated mappings instead of hardcoded lobbyPort.
 
 	// Resend timer ---------------------------------------------------------------------------
 	UnsignedInt					m_lastResendTime; // in ms
@@ -382,8 +433,72 @@ protected:
 
 	Bool								m_isActive;			///< is the game currently active?
 
+	// Observer mode. m_observerHost is non-null on the host while a game is in
+	// progress; it accepts incoming TCP observer connections and streams the
+	// host's growing .rep file. m_observerClient is non-null on a joining
+	// player who chose to spectate; it pulls bytes into a local .rep file
+	// and signals the recorder when the snapshot is buffered and when the
+	// stream eventually closes.
+	LANObserverHost*			m_observerHost;
+	LANObserverClient*		m_observerClient;
+	Bool									m_observerClientPlaybackKicked; // we called playbackFileLiveObserver already
+	UnsignedInt						m_observerProgressLastMs;       // last time we posted a download-progress chat line
+	UnsignedInt						m_observerProgressLastBytes;    // bytes reported at the last progress post
+	// Host: whether we have already told the player that someone could not
+	// reach our observer port this game. Several blocked spectators, or one
+	// retrying from the menu, would otherwise each post their own line.
+	Bool									m_observeUnreachableReported;
+
+	// Non-blocking map download (peer side). When the host advertises a map CRC
+	// we don't have, OnGameOptions kicks off a background CDN fetch and
+	// updateMapDownload() finishes the job once the bytes are in. Downloading
+	// inline would block the same thread that services the LAN heartbeat.
+	Bool									m_mapDownloadPending;    // a fetch is in flight
+	UnsignedInt						m_mapDownloadCRC;        // CRC being fetched
+	UnsignedInt						m_mapDownloadFailedCRC;  // CRC we already failed on; don't retry it every OnGameOptions
+
+public:
+	// Observer mode entry points (called from UI / callbacks).
+
+	// Joining player accepted the "Watch as observer" prompt. Opens TCP to
+	// the host and starts buffering bytes into a scratch .rep file.
+	void RequestObserve(UnsignedInt hostIP, UnsignedShort observerPort);
+
+	// Host accessors used by chat notifications etc.
+	Int   getObserverCount() const { return m_observerHost ? m_observerHost->observerCount() : 0; }
+	Bool  isObservingClient() const { return m_observerClient != nullptr; }
+
+public:
+	// Observer state-machine pump. Normally invoked from update() at the LAN
+	// lobby's tick cadence, but also callable from the game loop while a
+	// LIVE_OBSERVER playback is running, since LANAPI::update() is only
+	// driven by the LAN lobby menu and stops once playback starts.
+	void updateObserver();
+
+	// Finish a peer-side background map download started in OnGameOptions:
+	// installs the map (on the main thread), flips our slot's map-availability
+	// bit and refreshes the lobby. Reports both outcomes as SYSTEM chat lines.
+	// No-op when nothing is in flight. Called from update().
+	void updateMapDownload();
+
 protected:
-	void sendMessage(LANMessage *msg, UnsignedInt ip = 0); // Convenience function
+	// Host-side hook: open the observer listen socket and arm streaming
+	// against the recorder's current file. Safe to call multiple times.
+	void startObserverHost();
+	void stopObserverHost();
+	// Client-side teardown.
+	void stopObserverClient();
+	// Ensure the map referenced by the buffered live-observer snapshot is
+	// available locally (downloading it from the cncstats CDN if missing)
+	// before playback starts. Returns FALSE only when the map is genuinely
+	// missing and could not be obtained.
+	Bool ensureObserverMapAvailable(AsciiString relReplayPath);
+
+protected:
+	/// ip=0 broadcasts. A non-zero port pins the destination exactly and
+	/// skips the IP-keyed port guesses (reply-to-sender, slot scan), which
+	/// pick the wrong player when two joiners share one public IP.
+	void sendMessage(LANMessage *msg, UnsignedInt ip = 0, UnsignedShort port = 0); // Convenience function
 	void removePlayer(LANPlayer *player);
 	void removeGame(LANGameInfo *game);
 	void addPlayer(LANPlayer *player);
@@ -407,5 +522,6 @@ protected:
 	void handleGameStartTimer( LANMessage *msg, UnsignedInt senderIP );
 	void handleGameOptions( LANMessage *msg, UnsignedInt senderIP );
 	void handleInActive( LANMessage *msg, UnsignedInt senderIP );
+	void handleObserveUnreachable( LANMessage *msg, UnsignedInt senderIP );
 
 };

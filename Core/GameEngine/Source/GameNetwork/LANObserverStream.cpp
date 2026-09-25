@@ -1,0 +1,806 @@
+/*
+**	Command & Conquer Generals Zero Hour(tm)
+**	Copyright 2025 Electronic Arts Inc.
+*/
+
+#include "PreRTS.h"
+#include "GameNetwork/LANObserverStream.h"
+
+#include "Common/GlobalData.h"
+
+#include <string.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <errno.h>
+#include <time.h>
+
+// Release-mode log so we can diagnose observer flow without rebuilding
+// with debug logging. fflush after every write so the file survives a
+// crash. Static FILE* opened on first call.
+static FILE* s_obsLogFile = NULL;
+
+// The log lives in the per-user data dir (same root as Replays\), not the
+// working directory: unelevated installs can have a read-only game dir, which
+// silently killed the log and left a stale copy to be re-uploaded forever.
+// Resolved lazily because TheGlobalData doesn't exist during early startup.
+static const char* const OBS_LOG_FILE_NAME = "ObserverLog.txt";
+// The previous run's log, kept alongside the current one. The file is opened
+// "w" once per process, so without this a relaunch destroyed the only record
+// of the session that just went wrong -- which is exactly the session worth
+// keeping, since "it broke, so I restarted the game" is how players react to
+// an observer failure. Both files ride up with the next telemetry upload.
+static const char* const OBS_PREV_LOG_FILE_NAME = "ObserverLog.prev.txt";
+// Ceiling on one session's log. Nothing should come close now that the
+// per-frame checkpoints are gone, so hitting it means a new logger is running
+// away; stop writing rather than fill the user's disk and let the upload
+// carry the evidence of where it stopped.
+static const UnsignedInt OBS_LOG_MAX_BYTES = 4 * 1024 * 1024;
+
+static char s_obsLogPath[512] = "";
+static char s_obsPrevLogPath[512] = "";
+static UnsignedInt s_obsLogBytes = 0;
+static Bool s_obsLogCapped = FALSE;
+
+// Build "<user data dir><leaf>" into `out`. FALSE when the user data dir is
+// not known yet (early startup) or the result would not fit.
+static Bool buildObsLogPath(char* out, UnsignedInt outSize, const char* leaf)
+{
+	if (TheGlobalData == NULL)
+		return FALSE;
+	const AsciiString& dir = TheGlobalData->getPath_UserData();
+	if (dir.isEmpty()
+	    || dir.getLength() + (Int)strlen(leaf) + 1 > (Int)outSize)
+		return FALSE;
+	strcpy(out, dir.str());
+	strcat(out, leaf);
+	return TRUE;
+}
+
+static const char* obsLogPath()
+{
+	if (s_obsLogPath[0] != '\0')
+		return s_obsLogPath;
+	if (!buildObsLogPath(s_obsLogPath, (UnsignedInt)sizeof(s_obsLogPath), OBS_LOG_FILE_NAME))
+		return NULL;
+	return s_obsLogPath;
+}
+
+static const char* obsPrevLogPath()
+{
+	if (s_obsPrevLogPath[0] != '\0')
+		return s_obsPrevLogPath;
+	if (!buildObsLogPath(s_obsPrevLogPath, (UnsignedInt)sizeof(s_obsPrevLogPath), OBS_PREV_LOG_FILE_NAME))
+		return NULL;
+	return s_obsPrevLogPath;
+}
+
+const char* LANObsGetLogFileName()
+{
+	const char* path = obsLogPath();
+	return path != NULL ? path : OBS_LOG_FILE_NAME;
+}
+
+const char* LANObsGetPrevLogFileName()
+{
+	const char* path = obsPrevLogPath();
+	return path != NULL ? path : OBS_PREV_LOG_FILE_NAME;
+}
+
+void LANObsLog(const char* fmt, ...)
+{
+	if (s_obsLogCapped)
+		return;
+
+	if (!s_obsLogFile)
+	{
+		const char* path = obsLogPath();
+		if (!path)
+			return;	// user data dir not known yet; try again on the next call
+
+		// Roll the previous session aside before truncating. Both failures are
+		// survivable: worst case we lose the older log and carry on with the
+		// current one, which is the behaviour we had before.
+		const char* prevPath = obsPrevLogPath();
+		if (prevPath != NULL)
+		{
+			remove(prevPath);
+			rename(path, prevPath);
+		}
+
+		s_obsLogFile = fopen(path, "w");
+		if (!s_obsLogFile)
+			return;
+	}
+
+	Int written = 0;
+	Int n;
+	time_t now = time(NULL);
+	struct tm* lt = localtime(&now);
+	if (lt)
+	{
+		n = fprintf(s_obsLogFile, "[%02d:%02d:%02d] ", lt->tm_hour, lt->tm_min, lt->tm_sec);
+		if (n > 0)
+			written += n;
+	}
+	va_list ap;
+	va_start(ap, fmt);
+	n = vfprintf(s_obsLogFile, fmt, ap);
+	va_end(ap);
+	if (n > 0)
+		written += n;
+	fputc('\n', s_obsLogFile);
+	++written;
+	fflush(s_obsLogFile);
+
+	s_obsLogBytes += (UnsignedInt)written;
+	if (s_obsLogBytes >= OBS_LOG_MAX_BYTES)
+	{
+		s_obsLogCapped = TRUE;
+		fprintf(s_obsLogFile,
+			"[observer log hit its %u byte ceiling; nothing further is recorded this session]\n",
+			OBS_LOG_MAX_BYTES);
+		fflush(s_obsLogFile);
+	}
+}
+
+#ifdef _WIN32
+#include <winsock.h>
+#include <io.h>
+#define CLOSE_SOCKET(fd) ::closesocket(fd)
+#define SOCK_ERR_LAST   WSAGetLastError()
+#define SOCK_ERR_WOULDBLOCK WSAEWOULDBLOCK
+#define SOCK_ERR_INPROGRESS WSAEINPROGRESS
+#define SOCK_ERR_ALREADY    WSAEALREADY
+#define SOCK_ERR_ISCONN     WSAEISCONN
+#else
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <fcntl.h>
+#define CLOSE_SOCKET(fd) ::close(fd)
+#define SOCK_ERR_LAST       errno
+#define SOCK_ERR_WOULDBLOCK EWOULDBLOCK
+#define SOCK_ERR_INPROGRESS EINPROGRESS
+#define SOCK_ERR_ALREADY    EALREADY
+#define SOCK_ERR_ISCONN     EISCONN
+#define SOCKET_ERROR        (-1)
+#endif
+
+// Helper to put a socket into non-blocking mode (mirrors UDP::SetBlocking).
+static Bool setNonBlocking(Int fd)
+{
+#ifdef _WIN32
+	unsigned long flag = 1;
+	return (ioctlsocket(fd, FIONBIO, &flag) != SOCKET_ERROR);
+#else
+	Int flags = fcntl(fd, F_GETFL, 0);
+	if (flags < 0)
+		return FALSE;
+	return (fcntl(fd, F_SETFL, flags | O_NONBLOCK) >= 0);
+#endif
+}
+
+// Max chunk to read from the source replay file per observer per tick.
+// Sized so that at the host's recorder tick rate (~30 Hz) the catch-up
+// transfer for a long-running game completes in seconds rather than
+// minutes. 256 KB * 30 Hz = ~7.5 MB/s per observer, well below any LAN
+// bandwidth ceiling and well above replay growth rate.
+static const UnsignedInt OBS_READ_CHUNK_BYTES = 256 * 1024;
+// Max bytes to push to a socket per tick (caps a single observer's bandwidth).
+static const UnsignedInt OBS_SEND_CHUNK_BYTES = 256 * 1024;
+// Soft cap on send-buffer growth before we throttle file reads. Allows a
+// few ticks of burst so a slow socket drain doesn't immediately starve
+// the next disk read.
+static const UnsignedInt OBS_SEND_BUF_HIGH_WATER = 4 * 1024 * 1024;
+// Max time to wait for a non-blocking connect to complete before giving up.
+// A LAN handshake completes in well under a millisecond; this generous ceiling
+// only trips when the host is genuinely unreachable or not listening.
+static const UnsignedInt OBS_CONNECT_TIMEOUT_MS = 8000;
+
+
+// =====================================================================
+// LANObserverHost
+// =====================================================================
+
+LANObserverHost::LANObserverHost()
+	: m_listenFd(-1)
+	, m_port(0)
+{
+}
+
+LANObserverHost::~LANObserverHost()
+{
+	stop();
+}
+
+Bool LANObserverHost::start(UnsignedShort port)
+{
+	if (m_listenFd != -1)
+		return TRUE; // already listening
+
+	Int fd = (Int)socket(AF_INET, SOCK_STREAM, 0);
+	if (fd < 0)
+	{
+		LANObsLog("LANObserverHost::start - socket() FAILED (err=%d)", SOCK_ERR_LAST);
+		DEBUG_LOG(("LANObserverHost::start - socket() failed (%d)", SOCK_ERR_LAST));
+		return FALSE;
+	}
+
+	// SO_REUSEADDR so we can rebind quickly across consecutive games.
+	Int yes = 1;
+	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
+
+	struct sockaddr_in addr;
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family      = AF_INET;
+	addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	addr.sin_port        = htons(port);
+
+	if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR)
+	{
+		LANObsLog("LANObserverHost::start - bind(%u) FAILED (err=%d) - port in use by another process/instance?", port, SOCK_ERR_LAST);
+		DEBUG_LOG(("LANObserverHost::start - bind(%u) failed (%d)", port, SOCK_ERR_LAST));
+		CLOSE_SOCKET(fd);
+		return FALSE;
+	}
+	if (listen(fd, 8) == SOCKET_ERROR)
+	{
+		LANObsLog("LANObserverHost::start - listen(%u) FAILED (err=%d)", port, SOCK_ERR_LAST);
+		DEBUG_LOG(("LANObserverHost::start - listen failed (%d)", SOCK_ERR_LAST));
+		CLOSE_SOCKET(fd);
+		return FALSE;
+	}
+	if (!setNonBlocking(fd))
+	{
+		LANObsLog("LANObserverHost::start - setNonBlocking FAILED (err=%d)", SOCK_ERR_LAST);
+		DEBUG_LOG(("LANObserverHost::start - setNonBlocking failed"));
+		CLOSE_SOCKET(fd);
+		return FALSE;
+	}
+
+	m_listenFd = fd;
+	m_port     = port;
+	LANObsLog("LANObserverHost::start - LISTENING on port %u (fd=%d)", port, fd);
+	DEBUG_LOG(("LANObserverHost::start - listening on port %u", port));
+	return TRUE;
+}
+
+void LANObserverHost::setReplayFile(const AsciiString& path)
+{
+	m_replayPath = path;
+}
+
+void LANObserverHost::stop()
+{
+	if (m_listenFd != -1 || !m_conns.empty())
+		LANObsLog("LANObserverHost::stop - closing listen socket (port=%u) and %u observer conn(s)",
+			m_port, (UnsignedInt)m_conns.size());
+	for (size_t i = 0; i < m_conns.size(); ++i)
+		closeConn(m_conns[i]);
+	m_conns.clear();
+	if (m_listenFd != -1)
+	{
+		CLOSE_SOCKET(m_listenFd);
+		m_listenFd = -1;
+	}
+}
+
+void LANObserverHost::closeConn(ObserverConn* conn)
+{
+	if (!conn) return;
+	if (conn->socketFd != -1) CLOSE_SOCKET(conn->socketFd);
+	if (conn->readHandle)     fclose(conn->readHandle);
+	delete conn;
+}
+
+Bool LANObserverHost::adoptObserverFd(Int fd, const UnicodeString& name)
+{
+	if (fd < 0)
+		return FALSE;
+	setNonBlocking(fd);
+
+	if (m_replayPath.isEmpty())
+	{
+		LANObsLog("LANObserverHost::adoptObserverFd - no replay path wired yet; dropping fd=%d", fd);
+		CLOSE_SOCKET(fd);
+		return FALSE;
+	}
+
+	ObserverConn* conn = new ObserverConn();
+	conn->socketFd     = fd;
+	conn->readHandle   = NULL;
+	conn->readOffset   = 0;
+	conn->snapshotSize = 0;
+	conn->sentHeader   = FALSE;
+	conn->connectedAt  = timeGetTime();
+	conn->name         = name;
+
+	conn->readHandle = fopen(m_replayPath.str(), "rb");
+	if (!conn->readHandle)
+	{
+		LANObsLog("LANObserverHost::adoptObserverFd - fopen('%s') FAILED (errno=%d); dropping fd=%d",
+			m_replayPath.str(), errno, fd);
+		closeConn(conn);
+		return FALSE;
+	}
+	// See acceptNew for why stdio buffering must be off on the read handle.
+	setvbuf(conn->readHandle, NULL, _IONBF, 0);
+	fseek(conn->readHandle, 0, SEEK_END);
+	long sz = ftell(conn->readHandle);
+	if (sz < 0) sz = 0;
+	conn->snapshotSize = (UnsignedInt)sz;
+	fseek(conn->readHandle, 0, SEEK_SET);
+
+	LANObserverStreamHeader hdr;
+	hdr.snapshotSize = conn->snapshotSize;
+	const unsigned char* p = (const unsigned char*)&hdr;
+	conn->sendBuf.insert(conn->sendBuf.end(), p, p + sizeof(hdr));
+
+	m_conns.push_back(conn);
+	LANObsLog("LANObserverHost: adopted relay observer fd=%d snapshot=%u", fd, conn->snapshotSize);
+	return TRUE;
+}
+
+void LANObserverHost::acceptNew(UnicodeString* outNames, Int outNamesCap, Int& outCount)
+{
+	if (m_listenFd == -1)
+		return;
+
+	for (;;)
+	{
+		struct sockaddr_in peer;
+		// socklen_t is missing in VC6 winsock; the int form works on both.
+		int                peerLen = sizeof(peer);
+		memset(&peer, 0, sizeof(peer));
+		Int newFd = (Int)accept(m_listenFd, (struct sockaddr*)&peer, &peerLen);
+		if (newFd < 0)
+		{
+			// Out of pending connections is the common case; bail quietly.
+			break;
+		}
+		setNonBlocking(newFd);
+
+		ObserverConn* conn = new ObserverConn();
+		conn->socketFd     = newFd;
+		conn->readHandle   = NULL;
+		conn->readOffset   = 0;
+		conn->snapshotSize = 0;
+		conn->sentHeader   = FALSE;
+		conn->connectedAt  = timeGetTime();
+
+		// Snapshot the file size NOW; this becomes the "catch-up" boundary.
+		// Everything else streams live. If we can't open the source replay
+		// there is nothing we can ever stream: close the connection so the
+		// observer sees a clean failure (and can retry) instead of waiting
+		// forever on a snapshot that will never arrive.
+		if (m_replayPath.isEmpty())
+		{
+			LANObsLog("LANObserverHost::acceptNew - no replay path wired yet; dropping observer fd=%d", newFd);
+			closeConn(conn);
+			continue;
+		}
+		{
+			conn->readHandle = fopen(m_replayPath.str(), "rb");
+			if (conn->readHandle)
+			{
+				// Disable stdio buffering on the read handle. With buffering on,
+				// once fread hits EOF at the live edge, fseek-to-current-position
+				// won't reliably invalidate the stale buffer and subsequent reads
+				// keep returning EOF even after the recorder appends and flushes
+				// new bytes. _IONBF bypasses the buffer and reads straight through
+				// to the OS file each call.
+				setvbuf(conn->readHandle, NULL, _IONBF, 0);
+				fseek(conn->readHandle, 0, SEEK_END);
+				long sz = ftell(conn->readHandle);
+				if (sz < 0) sz = 0;
+				conn->snapshotSize = (UnsignedInt)sz;
+				fseek(conn->readHandle, 0, SEEK_SET);
+			}
+			else
+			{
+				LANObsLog("LANObserverHost::acceptNew - fopen('%s') FAILED (errno=%d); dropping observer fd=%d",
+					m_replayPath.str(), errno, newFd);
+				DEBUG_LOG(("LANObserverHost::acceptNew - fopen('%s') failed", m_replayPath.str()));
+				closeConn(conn);
+				continue;
+			}
+		}
+
+		// Queue the 4-byte snapshot-size header into the send buffer; the
+		// observer reads it first to know when catch-up ends.
+		LANObserverStreamHeader hdr;
+		hdr.snapshotSize = conn->snapshotSize;
+		const unsigned char* p = (const unsigned char*)&hdr;
+		conn->sendBuf.insert(conn->sendBuf.end(), p, p + sizeof(hdr));
+
+		m_conns.push_back(conn);
+
+		// Report name slot for chat notification. We don't know the observer's
+		// display name (TCP connection carries no identity), so we use the IP
+		// string. The shell can replace this later via a separate hello msg.
+		if (outNames && outCount < outNamesCap)
+		{
+			char ipbuf[64];
+			UnsignedInt nbo = peer.sin_addr.s_addr; // network-order
+			snprintf(ipbuf, sizeof(ipbuf), "Observer@%u.%u.%u.%u",
+				(nbo) & 0xff, (nbo>>8) & 0xff, (nbo>>16) & 0xff, (nbo>>24) & 0xff);
+			UnicodeString u;
+			u.translate(AsciiString(ipbuf));
+			outNames[outCount++] = u;
+		}
+
+		LANObsLog("LANObserverHost: accepted observer TCP connection fd=%d from %u.%u.%u.%u snapshot=%u",
+			newFd,
+			(peer.sin_addr.s_addr) & 0xff, (peer.sin_addr.s_addr>>8) & 0xff,
+			(peer.sin_addr.s_addr>>16) & 0xff, (peer.sin_addr.s_addr>>24) & 0xff,
+			conn->snapshotSize);
+		DEBUG_LOG(("LANObserverHost - new observer fd=%d snapshot=%u",
+			newFd, conn->snapshotSize));
+	}
+}
+
+// Read new file bytes into conn->sendBuf, up to one OBS_READ_CHUNK_BYTES chunk
+// per call. Returns FALSE if the read encountered an unrecoverable error.
+Bool LANObserverHost::pumpReadFromFile(ObserverConn* conn)
+{
+	if (!conn->readHandle)
+		return TRUE; // nothing to read; harmless
+
+	// Throttle to avoid blowing memory if the observer is slow to drain.
+	if (conn->sendBuf.size() >= OBS_SEND_BUF_HIGH_WATER)
+		return TRUE;
+
+	// stdio buffer on the read handle won't see writes from the engine File
+	// handle (separate FILE*) until we nudge it. clearerr + fseek-to-current
+	// invalidates the read buffer reliably across platforms.
+	clearerr(conn->readHandle);
+	fseek(conn->readHandle, (long)conn->readOffset, SEEK_SET);
+
+	unsigned char buf[OBS_READ_CHUNK_BYTES];
+	size_t got = fread(buf, 1, sizeof(buf), conn->readHandle);
+	if (got > 0)
+	{
+		conn->sendBuf.insert(conn->sendBuf.end(), buf, buf + got);
+		conn->readOffset += (UnsignedInt)got;
+	}
+	return TRUE;
+}
+
+// Push as much of conn->sendBuf as the socket will accept this tick. Returns
+// FALSE if the socket has died and the connection should be dropped.
+Bool LANObserverHost::pumpSendToSocket(ObserverConn* conn)
+{
+	if (conn->sendBuf.empty())
+		return TRUE;
+
+	UnsignedInt remaining = (UnsignedInt)conn->sendBuf.size();
+	UnsignedInt toSend = remaining > OBS_SEND_CHUNK_BYTES ? OBS_SEND_CHUNK_BYTES : remaining;
+
+	Int sent = (Int)send(conn->socketFd, (const char*)&conn->sendBuf[0], toSend, 0);
+	if (sent < 0)
+	{
+		Int err = SOCK_ERR_LAST;
+		if (err == SOCK_ERR_WOULDBLOCK)
+			return TRUE; // try again next tick
+		LANObsLog("LANObserverHost - send error %d on fd=%d, dropping observer", err, conn->socketFd);
+		DEBUG_LOG(("LANObserverHost - send error %d on fd=%d, dropping", err, conn->socketFd));
+		return FALSE;
+	}
+	if (sent == 0)
+	{
+		// Peer closed cleanly.
+		return FALSE;
+	}
+	conn->sendBuf.erase(conn->sendBuf.begin(), conn->sendBuf.begin() + sent);
+	conn->sentHeader = TRUE;
+	return TRUE;
+}
+
+Int LANObserverHost::update(UnicodeString* outNewObserverNames, Int outNamesCap)
+{
+	// Adopted relay observers must be pumped even when the LAN listen
+	// socket is down (bind failure), so only gate the accept step.
+	if (m_listenFd == -1 && m_conns.empty())
+		return 0;
+
+	Int newCount = 0;
+	acceptNew(outNewObserverNames, outNamesCap, newCount);
+
+	for (size_t i = 0; i < m_conns.size(); )
+	{
+		ObserverConn* conn = m_conns[i];
+		Bool ok = TRUE;
+		if (ok) ok = pumpReadFromFile(conn);
+		if (ok) ok = pumpSendToSocket(conn);
+		if (!ok)
+		{
+			closeConn(conn);
+			m_conns.erase(m_conns.begin() + i);
+			continue;
+		}
+		++i;
+	}
+	return newCount;
+}
+
+
+// =====================================================================
+// LANObserverClient
+// =====================================================================
+
+LANObserverClient::LANObserverClient()
+	: m_state(STATE_IDLE)
+	, m_socketFd(-1)
+	, m_writeHandle(NULL)
+	, m_bytesWritten(0)
+	, m_connectStartedAt(0)
+	// Deliberately not reset by close(): the retry loop closes and reconnects
+	// the same object, and the question this answers spans the whole observe
+	// attempt. A fresh attempt gets a fresh object (stopObserverClient deletes
+	// this one), so it starts FALSE again.
+	, m_everConnected(FALSE)
+	, m_headerBytesRead(0)
+	, m_snapshotSize(0)
+	, m_snapshotBytesRead(0)
+{
+}
+
+LANObserverClient::~LANObserverClient()
+{
+	close();
+}
+
+Bool LANObserverClient::connect(UnsignedInt ipNetworkOrder, UnsignedShort port, const AsciiString& localPath)
+{
+	close();
+
+	Int fd = (Int)socket(AF_INET, SOCK_STREAM, 0);
+	if (fd < 0)
+	{
+		DEBUG_LOG(("LANObserverClient::connect - socket() failed (%d)", SOCK_ERR_LAST));
+		return FALSE;
+	}
+	if (!setNonBlocking(fd))
+	{
+		CLOSE_SOCKET(fd);
+		return FALSE;
+	}
+
+	m_writeHandle = fopen(localPath.str(), "wb");
+	if (!m_writeHandle)
+	{
+		DEBUG_LOG(("LANObserverClient::connect - fopen('%s', wb) failed", localPath.str()));
+		CLOSE_SOCKET(fd);
+		return FALSE;
+	}
+	// Disable stdio buffering on the write handle. The recorder opens a
+	// separate engine File against the same path to drive playback; with
+	// default buffering the recorder's open can race ahead of an fwrite
+	// that hasn't yet hit the OS file, and readReplayHeader fails on a
+	// stale/short read. fflush after every write would also work but
+	// _IONBF keeps the bytes coherent under any future write path.
+	setvbuf(m_writeHandle, NULL, _IONBF, 0);
+
+	struct sockaddr_in addr;
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family      = AF_INET;
+	addr.sin_addr.s_addr = ipNetworkOrder;
+	addr.sin_port        = htons(port);
+
+	Int rc = ::connect(fd, (struct sockaddr*)&addr, sizeof(addr));
+	if (rc == SOCKET_ERROR)
+	{
+		Int err = SOCK_ERR_LAST;
+		if (err != SOCK_ERR_WOULDBLOCK && err != SOCK_ERR_INPROGRESS && err != SOCK_ERR_ALREADY)
+		{
+			DEBUG_LOG(("LANObserverClient::connect - connect failed (%d)", err));
+			CLOSE_SOCKET(fd);
+			fclose(m_writeHandle);
+			m_writeHandle = NULL;
+			return FALSE;
+		}
+	}
+
+	m_socketFd = fd;
+	m_localPath = localPath;
+	m_state = STATE_CONNECTING;
+	m_connectStartedAt = timeGetTime();
+	LANObsLog("LANObserverClient: TCP connect kickoff to %u.%u.%u.%u:%u (fd=%d)",
+		(ipNetworkOrder) & 0xff, (ipNetworkOrder>>8) & 0xff,
+		(ipNetworkOrder>>16) & 0xff, (ipNetworkOrder>>24) & 0xff, port, fd);
+	DEBUG_LOG(("LANObserverClient::connect - connecting fd=%d to port %u", fd, port));
+	return TRUE;
+}
+
+Bool LANObserverClient::adoptFd(Int fd, const AsciiString& localPath)
+{
+	close();
+
+	if (fd < 0)
+		return FALSE;
+	if (!setNonBlocking(fd))
+	{
+		CLOSE_SOCKET(fd);
+		return FALSE;
+	}
+
+	m_writeHandle = fopen(localPath.str(), "wb");
+	if (!m_writeHandle)
+	{
+		LANObsLog("LANObserverClient::adoptFd - fopen('%s', wb) FAILED (errno=%d)", localPath.str(), errno);
+		CLOSE_SOCKET(fd);
+		return FALSE;
+	}
+	// Same coherency requirement as connect(): the recorder reads this file
+	// through its own handle while we append.
+	setvbuf(m_writeHandle, NULL, _IONBF, 0);
+
+	m_socketFd = fd;
+	m_localPath = localPath;
+	// The relay socket is already connected end to end; the next bytes on
+	// the wire are the snapshot header.
+	m_state = STATE_BUFFERING;
+	m_everConnected = TRUE;
+	m_connectStartedAt = timeGetTime();
+	LANObsLog("LANObserverClient: adopted relay fd=%d", fd);
+	return TRUE;
+}
+
+void LANObserverClient::close()
+{
+	if (m_socketFd != -1)
+	{
+		CLOSE_SOCKET(m_socketFd);
+		m_socketFd = -1;
+	}
+	if (m_writeHandle)
+	{
+		fclose(m_writeHandle);
+		m_writeHandle = NULL;
+	}
+	m_state = STATE_IDLE;
+	m_bytesWritten      = 0;
+	m_connectStartedAt  = 0;
+	m_headerBytesRead   = 0;
+	m_snapshotSize      = 0;
+	m_snapshotBytesRead = 0;
+}
+
+void LANObserverClient::update()
+{
+	if (m_socketFd == -1 || m_state == STATE_IDLE || m_state == STATE_CLOSED)
+		return;
+
+	// CONNECTING: a non-blocking connect completes asynchronously. The correct
+	// (and cross-platform) way to detect completion is select() on the write
+	// set: the socket becomes writable once the handshake finishes (success)
+	// or the connect errors (failure, also signalled via the exception set).
+	// We then confirm via SO_ERROR. A recv() probe is wrong here: while the
+	// handshake is still in flight recv() returns WSAENOTCONN (10057) on
+	// Windows / ENOTCONN on POSIX, which the old code misread as a hard
+	// failure and gave up on the very first tick instead of waiting.
+	if (m_state == STATE_CONNECTING)
+	{
+		fd_set wfds, efds;
+		FD_ZERO(&wfds);
+		FD_ZERO(&efds);
+		FD_SET(m_socketFd, &wfds);
+		FD_SET(m_socketFd, &efds);
+		struct timeval tv;
+		tv.tv_sec  = 0;
+		tv.tv_usec = 0; // non-blocking poll; we re-check every tick
+		Int sel = select(m_socketFd + 1, NULL, &wfds, &efds, &tv);
+		if (sel == SOCKET_ERROR)
+		{
+			Int err = SOCK_ERR_LAST;
+			LANObsLog("LANObserverClient: TCP connect select() error (err=%d)", err);
+			DEBUG_LOG(("LANObserverClient - connect select error (%d)", err));
+			m_state = STATE_CLOSED;
+			return;
+		}
+		if (sel == 0)
+		{
+			// Neither writable nor errored yet: handshake still in flight.
+			// Keep waiting across ticks until it completes or we hit the
+			// connect deadline.
+			if (timeGetTime() - m_connectStartedAt > OBS_CONNECT_TIMEOUT_MS)
+			{
+				LANObsLog("LANObserverClient: TCP connect TIMED OUT after %ums - host not listening / unreachable",
+					OBS_CONNECT_TIMEOUT_MS);
+				DEBUG_LOG(("LANObserverClient - connect timed out"));
+				m_state = STATE_CLOSED;
+			}
+			return;
+		}
+		// Socket is ready. An errored connect shows up in the exception set
+		// (Windows) and/or as a non-zero SO_ERROR (both platforms).
+		Int soErr = 0;
+		int optLen = sizeof(soErr); // socklen_t missing in VC6 winsock; int works on both
+		if (FD_ISSET(m_socketFd, &efds)
+		    || getsockopt(m_socketFd, SOL_SOCKET, SO_ERROR, (char*)&soErr, &optLen) == SOCKET_ERROR
+		    || soErr != 0)
+		{
+			LANObsLog("LANObserverClient: TCP connect FAILED (SO_ERROR=%d) - host not listening / unreachable", soErr);
+			DEBUG_LOG(("LANObserverClient - connect failed (SO_ERROR=%d)", soErr));
+			m_state = STATE_CLOSED;
+			return;
+		}
+		// Handshake complete. Transition to BUFFERING; the snapshot-size
+		// header is detected as it arrives via the recv loop below.
+		LANObsLog("LANObserverClient: TCP connected; waiting for snapshot header");
+		m_state = STATE_BUFFERING;
+		m_everConnected = TRUE;
+		// fall through to recv below
+	}
+
+	// Drain whatever is available on the socket.
+	unsigned char buf[16 * 1024];
+	for (;;)
+	{
+		Int got = (Int)recv(m_socketFd, (char*)buf, sizeof(buf), 0);
+		if (got > 0)
+		{
+			const unsigned char* p = buf;
+			Int remaining = got;
+
+			// First, consume up to sizeof(header) bytes into a header buffer.
+			if (m_headerBytesRead < sizeof(LANObserverStreamHeader))
+			{
+				UnsignedInt want = (UnsignedInt)sizeof(LANObserverStreamHeader) - m_headerBytesRead;
+				UnsignedInt take = (UnsignedInt)remaining < want ? (UnsignedInt)remaining : want;
+				memcpy(m_headerBuf + m_headerBytesRead, p, take);
+				m_headerBytesRead += take;
+				p         += take;
+				remaining -= take;
+				if (m_headerBytesRead == sizeof(LANObserverStreamHeader))
+				{
+					LANObserverStreamHeader hdr;
+					memcpy(&hdr, m_headerBuf, sizeof(hdr));
+					m_snapshotSize = hdr.snapshotSize;
+					DEBUG_LOG(("LANObserverClient - snapshot size = %u", m_snapshotSize));
+				}
+			}
+
+			// Write the rest to the local file.
+			if (remaining > 0 && m_writeHandle)
+			{
+				size_t wrote = fwrite(p, 1, (size_t)remaining, m_writeHandle);
+				if (wrote != (size_t)remaining)
+				{
+					DEBUG_LOG(("LANObserverClient - fwrite short (%zu / %d)", wrote, remaining));
+				}
+				m_bytesWritten += (UnsignedInt)wrote;
+				// Flush so the recorder's reader sees the new bytes.
+				fflush(m_writeHandle);
+
+				// Once we've received the full snapshot, mark ready so the
+				// caller can kick off playbackFile.
+				if (m_state == STATE_BUFFERING
+				    && m_headerBytesRead == sizeof(LANObserverStreamHeader)
+				    && m_bytesWritten >= m_snapshotSize)
+				{
+					m_state = STATE_READY;
+					LANObsLog("client READY snapshot=%u written=%u", m_snapshotSize, m_bytesWritten);
+					DEBUG_LOG(("LANObserverClient - snapshot received (%u bytes), READY", m_bytesWritten));
+				}
+			}
+			continue;
+		}
+		if (got == 0)
+		{
+			// Peer closed.
+			DEBUG_LOG(("LANObserverClient - host closed stream after %u bytes", m_bytesWritten));
+			m_state = STATE_CLOSED;
+			if (m_writeHandle) { fflush(m_writeHandle); fclose(m_writeHandle); m_writeHandle = NULL; }
+			return;
+		}
+		Int err = SOCK_ERR_LAST;
+		if (err == SOCK_ERR_WOULDBLOCK)
+			return;
+		DEBUG_LOG(("LANObserverClient - recv error %d", err));
+		m_state = STATE_CLOSED;
+		return;
+	}
+}

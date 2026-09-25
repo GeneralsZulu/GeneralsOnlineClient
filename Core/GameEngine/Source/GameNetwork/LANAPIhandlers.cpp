@@ -35,9 +35,11 @@
 #include "Common/Registry.h"
 #include "Common/GlobalData.h"
 #include "Common/QuotedPrintable.h"
+#include "Common/ReleaseLog.h"
 #include "Common/UserPreferences.h"
 #include "GameNetwork/LANAPI.h"
 #include "GameNetwork/LANAPICallbacks.h"
+#include "GameNetwork/LANObserverStream.h" // for LANObsLog (release-mode observer diagnostics)
 #include "GameClient/MapUtil.h"
 
 void LANAPI::handleRequestLocations( LANMessage *msg, UnsignedInt senderIP )
@@ -129,7 +131,12 @@ void LANAPI::handleGameAnnounce( LANMessage *msg, UnsignedInt senderIP )
 				delete game;
 				return;
 			}
-			RequestGameJoin(game, m_directConnectRemoteIP);
+			// Duplicate announces are normal now that the join flow retries
+			// its requests: only escalate to MSG_REQUEST_JOIN once. While
+			// ACT_JOIN is already pending, a second RequestGameJoin would
+			// bounce off the busy guard and surface a bogus join failure.
+			if (m_pendingAction != ACT_JOIN)
+				RequestGameJoin(game, m_directConnectRemoteIP);
 		}
 	}
 	else
@@ -257,6 +264,13 @@ void LANAPI::handleRequestJoin( LANMessage *msg, UnsignedInt senderIP )
 	{
 		return; // Not us.  Ignore it.
 	}
+	// Release-mode trace: confirms an inbound join request actually reached the
+	// host. If the joiner logs "sending UDP MSG_REQUEST_JOIN" but this line never
+	// appears, the request was lost on the wire (the lossy leg the robust observe
+	// path is designed to bypass).
+	LANObsLog("handleRequestJoin: received MSG_REQUEST_JOIN from %08X (inLobby=%d inProgress=%d)",
+		senderIP, m_inLobby ? 1 : 0,
+		(m_currentGame && m_currentGame->isGameInProgress()) ? 1 : 0);
 	LANMessage reply;
 	fillInLANMessage( &reply );
 	if (!m_inLobby && m_currentGame && m_currentGame->getIP(0) == m_localIP)
@@ -267,7 +281,14 @@ void LANAPI::handleRequestJoin( LANMessage *msg, UnsignedInt senderIP )
 			reply.GameNotJoined.reason = LANAPIInterface::RET_GAME_STARTED;
 			reply.GameNotJoined.gameIP = m_localIP;
 			reply.GameNotJoined.playerIP = senderIP;
-			DEBUG_LOG(("LANAPI::handleRequestJoin - join denied because game already started."));
+			// Advertise the observer TCP port so the joiner can ask to spectate
+			// instead of just seeing an error dialog.
+			reply.GameNotJoined.observerPort =
+				(UnsignedShort)(NETWORK_BASE_PORT_NUMBER + LAN_OBSERVER_PORT_OFFSET);
+			LANObsLog("handleRequestJoin: game in progress; sending MSG_JOIN_DENY+observerPort=%u to %08X",
+				reply.GameNotJoined.observerPort, senderIP);
+			DEBUG_LOG(("LANAPI::handleRequestJoin - join denied because game already started; offering observer port %u.",
+				reply.GameNotJoined.observerPort));
 		}
 		else
 		{
@@ -360,14 +381,35 @@ void LANAPI::handleRequestJoin( LANMessage *msg, UnsignedInt senderIP )
 				LANGameSlot *slot = m_currentGame->getLANSlot(player);
 				if (slot->isHuman() && slot->getName().compare(msg->name) == 0)
 				{
-					// just deny duplicates
-					reply.messageType = LANMessage::MSG_JOIN_DENY;
-					reply.GameNotJoined.reason = LANAPIInterface::RET_DUPLICATE_NAME;
-					reply.GameNotJoined.gameIP = m_localIP;
-					reply.GameNotJoined.playerIP = senderIP;
+					if (slot->getIP() == senderIP)
+					{
+						// Same name AND same address: this is the same player
+						// re-sending MSG_REQUEST_JOIN because our JOIN_ACCEPT
+						// (or their request) was lost. Joins are now retried by
+						// the client over lossy NAT paths, so answer
+						// idempotently with the slot they already occupy
+						// instead of denying as a duplicate.
+						reply.messageType = LANMessage::MSG_JOIN_ACCEPT;
+						wcslcpy(reply.GameJoined.gameName, m_currentGame->getName().str(), ARRAY_SIZE(reply.GameJoined.gameName));
+						reply.GameJoined.slotPosition = player;
+						reply.GameJoined.gameIP = m_localIP;
+						reply.GameJoined.playerIP = senderIP;
+						// Refresh the punched lobby-port mapping in case their
+						// NAT rebound between attempts.
+						slot->setLobbyPort(m_dispatchSenderPort);
+						slot->setLastHeard(timeGetTime());
+						DEBUG_LOG(("LANAPI::handleRequestJoin - re-join from same player at slot %d; resending accept.", player));
+					}
+					else
+					{
+						// just deny duplicates
+						reply.messageType = LANMessage::MSG_JOIN_DENY;
+						reply.GameNotJoined.reason = LANAPIInterface::RET_DUPLICATE_NAME;
+						reply.GameNotJoined.gameIP = m_localIP;
+						reply.GameNotJoined.playerIP = senderIP;
+						DEBUG_LOG(("LANAPI::handleRequestJoin - join denied because of duplicate names."));
+					}
 					canJoin = false;
-
-					DEBUG_LOG(("LANAPI::handleRequestJoin - join denied because of duplicate names."));
 					break;
 				}
 			}
@@ -388,6 +430,11 @@ void LANAPI::handleRequestJoin( LANMessage *msg, UnsignedInt senderIP )
 					newSlot.setState(SLOT_PLAYER, UnicodeString(msg->name));
 					newSlot.setIP(senderIP);
 					newSlot.setPort(NETWORK_BASE_PORT_NUMBER);
+					// Record the source port of the joiner's request so later
+					// lobby replies go back to the exact endpoint that asked.
+					// On LAN every peer speaks from lobbyPort, so this matches
+					// the getLobbyPort()==0 fallback in sendMessage.
+					newSlot.setLobbyPort(m_dispatchSenderPort);
 					newSlot.setLastHeard(timeGetTime());
 					newSlot.setSerial(msg->GameToJoin.serial);
 					m_currentGame->setSlot(player,newSlot);
@@ -424,7 +471,15 @@ void LANAPI::handleRequestJoin( LANMessage *msg, UnsignedInt senderIP )
 
 void LANAPI::handleJoinAccept( LANMessage *msg, UnsignedInt senderIP )
 {
-	if (msg->GameJoined.playerIP == m_localIP) // Is it for us?
+	// "Is it for us?" -- on LAN, the host stamps the reply with the joiner's
+	// source IP, which equals the joiner's m_localIP. With the online
+	// coordinator the host saw our packets coming from our NAT external IP,
+	// so msg->GameJoined.playerIP is that external IP and m_localIP is the
+	// joiner's LAN IP. Also accept when the reply came back from the host
+	// we explicitly asked to join via direct connect.
+	Bool forUs = (msg->GameJoined.playerIP == m_localIP) ||
+	             (m_pendingAction == ACT_JOIN && senderIP == m_directConnectRemoteIP);
+	if (forUs)
 	{
 		if (m_pendingAction == ACT_JOIN) // Are we trying to join?
 		{
@@ -455,6 +510,21 @@ void LANAPI::handleJoinAccept( LANMessage *msg, UnsignedInt senderIP )
 
 				m_currentGame->getLANSlot(0)->setHost(msg->hostName);
 				m_currentGame->getLANSlot(0)->setLogin(msg->userName);
+				// Lock in the host's NAT-translated lobby port (source of the
+				// MSG_JOIN_ACCEPT packet) so subsequent lobby sends from this
+				// joiner go to the punched mapping. LAN: equals lobbyPort, no
+				// behavior change.
+				m_currentGame->getLANSlot(0)->setLobbyPort(m_dispatchSenderPort);
+				// Overwrite slot[0].IP with the actual packet source IP. The
+				// game-options string the host announced encodes its LOCAL IP,
+				// so ParseAsciiStringToGameInfo above stamped slot[0] with a
+				// LAN address that's unroutable from us. Subsequent handlers
+				// (handleGameOptions, handleSetAccept, handleHasMap, etc.) match
+				// incoming packets by `getIP(player) == senderIP`, and broadcast
+				// sends to direct-connect slots use slot[i].getIP() as the
+				// destination, so without this fix the joiner cannot exchange
+				// any in-lobby state with the host through NAT.
+				m_currentGame->getLANSlot(0)->setIP(senderIP);
 
 				LANPreferences prefs;
 				AsciiString entry;
@@ -472,12 +542,26 @@ void LANAPI::handleJoinAccept( LANMessage *msg, UnsignedInt senderIP )
 	}
 }
 
+// Defined in LANAPICallbacks.cpp; the OnGameJoin handler reads these when
+// deciding whether to surface the "Watch as observer?" prompt.
+extern UnsignedInt   s_pendingObserveHostIP;
+extern UnsignedShort s_pendingObservePort;
+
 void LANAPI::handleJoinDeny( LANMessage *msg, UnsignedInt senderIP )
 {
-	if (msg->GameJoined.playerIP == m_localIP) // Is it for us?
+	// Same NAT consideration as handleJoinAccept above.
+	Bool forUs = (msg->GameJoined.playerIP == m_localIP) ||
+	             (m_pendingAction == ACT_JOIN && senderIP == m_directConnectRemoteIP);
+	if (forUs)
 	{
 		if (m_pendingAction == ACT_JOIN) // Are we trying to join?
 		{
+			// Stash the host IP + observer-stream port if the host advertised
+			// one (only meaningful when reason == RET_GAME_STARTED). OnGameJoin
+			// uses these to render the observer prompt.
+			s_pendingObserveHostIP = msg->GameNotJoined.gameIP;
+			s_pendingObservePort   = msg->GameNotJoined.observerPort;
+
 			OnGameJoin(msg->GameNotJoined.reason, LookupGame(UnicodeString(msg->GameNotJoined.gameName)));
 			m_pendingAction = ACT_NONE;
 			m_expiration = 0;
@@ -489,8 +573,12 @@ void LANAPI::handleRequestGameLeave( LANMessage *msg, UnsignedInt senderIP )
 {
 	if (!m_inLobby && m_currentGame && !m_currentGame->isGameInProgress())
 	{
-		int player;
-		for (player = 0; player < MAX_SLOTS; ++player)
+		// (IP, source port) match: with two players behind one NAT an IP-only
+		// scan would remove the wrong sibling when one of them leaves.
+		int player = findSlotForSender(senderIP);
+		if (player < 0)
+			player = MAX_SLOTS;
+		for (; player < MAX_SLOTS; ++player)
 		{
 			if (m_currentGame->getIP(player) == senderIP)
 			{
@@ -579,14 +667,9 @@ void LANAPI::handleSetAccept( LANMessage *msg, UnsignedInt senderIP )
 {
 	if (!m_inLobby && m_currentGame && !m_currentGame->isGameInProgress())
 	{
-		int player;
-		for (player = 0; player < MAX_SLOTS; ++player)
+		if (findSlotForSender(senderIP) >= 0)
 		{
-			if (m_currentGame->getIP(player) == senderIP)
-			{
-				OnAccept(senderIP, msg->Accept.isAccepted);
-				break;
-			}
+			OnAccept(senderIP, msg->Accept.isAccepted);
 		}
 	}
 }
@@ -639,13 +722,45 @@ void LANAPI::handleChat( LANMessage *msg, UnsignedInt senderIP )
 			return;
 		}
 
-		int player;
-		for (player = 0; player < MAX_SLOTS; ++player)
+		// Resolve the sender by (IP, source port), not IP alone: with two
+		// joiners behind one public IP the IP-only scan credited the second
+		// sibling's chat to the first, so the relay below skipped the wrong
+		// slot -- the real sender got its own line back and the sibling
+		// never saw it (lab T1-SIBLING-GUESTS).
+		int player = findSlotForSender(senderIP);
+		if (player < 0)
+			player = MAX_SLOTS;
+		if (player < MAX_SLOTS)
 		{
-			if (m_currentGame && m_currentGame->getIP(player) == senderIP)
+			OnChat(UnicodeString(msg->name), m_currentGame->getIP(player), UnicodeString(msg->Chat.message), msg->Chat.chatType);
+		}
+
+		// Direct-connect games: joiners have punched mappings only to the
+		// HOST, so a joiner's chat unicast to another joiner's address is
+		// unroutable and silently lost. The host relays each joiner's chat
+		// to every other joiner verbatim (msg->name carries the original
+		// speaker, so attribution survives the relay). Only the host relays
+		// and it never relays its own messages, so no loops are possible.
+		if (m_currentGame && m_currentGame->getIsDirectConnect() && AmIHost()
+			&& senderIP != m_localIP && player < MAX_SLOTS)
+		{
+			Int localSlot = m_currentGame->getLocalSlotNum();
+			for (Int relayTo = 0; relayTo < MAX_SLOTS; ++relayTo)
 			{
-				OnChat(UnicodeString(msg->name), m_currentGame->getIP(player), UnicodeString(msg->Chat.message), msg->Chat.chatType);
-				break;
+				if (relayTo == player || relayTo == localSlot)
+					continue;
+				LANGameSlot *slot = m_currentGame->getLANSlot(relayTo);
+				if (slot != nullptr && slot->isHuman() && slot->getIP() != 0)
+				{
+					// Pin the port. sendMessage's IP-keyed guesses (reply to
+					// the dispatch sender, first slot with this IP) both
+					// resolve to the SAME sibling when two joiners share a
+					// public IP, so one of them got every relayed line twice
+					// and the other none (lab T1-SIBLING-GUESTS). The host
+					// stamped each joiner's lobby port at join time (0 = plain
+					// LAN, where sendMessage's default port is right).
+					sendMessage(msg, slot->getIP(), slot->getLobbyPort());
+				}
 			}
 		}
 	}
@@ -655,6 +770,21 @@ void LANAPI::handleGameStart( LANMessage *msg, UnsignedInt senderIP )
 {
 	if (!m_inLobby && m_currentGame && m_currentGame->getIP(0) == senderIP && !m_currentGame->isGameInProgress())
 	{
+		// Apply the authoritative options the host packed into the start
+		// order before loading. Without this, a joiner whose last
+		// MSG_GAME_OPTIONS was lost (or whose local copy drifted) loads a
+		// different game than the host and desyncs on the first CRC check.
+		// OnGameOptions runs the full parse including the direct-connect
+		// IP/port restore, so slot identity survives the update.
+		if (!AmIHost())
+		{
+			msg->StartGame.options[m_lanMaxOptionsLength] = 0;
+			AsciiString finalOptions(msg->StartGame.options);
+			if (!finalOptions.isEmpty())
+			{
+				OnGameOptions(senderIP, 0, finalOptions);
+			}
+		}
 		OnGameStart();
 	}
 }
@@ -671,13 +801,34 @@ void LANAPI::handleGameOptions( LANMessage *msg, UnsignedInt senderIP )
 {
 	if (!m_inLobby && m_currentGame && !m_currentGame->isGameInProgress())
 	{
-		int player;
-		for (player = 0; player < MAX_SLOTS; ++player)
+		// (IP, port)-aware so two players behind one NAT are not confused
+		// for each other -- crediting the wrong slot would starve the other
+		// of keepalives and get it dropped as "not responding".
+		int player = findSlotForSender(senderIP);
+		if (player >= 0)
 		{
-			if (m_currentGame->getIP(player) == senderIP)
+			OnGameOptions(senderIP, player, AsciiString(msg->GameOptions.options));
+		}
+		else
+		{
+			player = MAX_SLOTS;
+		}
+		// Direct-connect diagnostic: a game-options packet whose sender
+		// matches no slot IP means the peer's keepalives are arriving but
+		// being ignored, which reads as "player not responding" on our end.
+		if (player == MAX_SLOTS && m_currentGame->getIsDirectConnect())
+		{
+			static UnsignedInt s_lastNoMatchLogMs = 0;
+			UnsignedInt nowLog = timeGetTime();
+			if (nowLog - s_lastNoMatchLogMs > 5000)
 			{
-				OnGameOptions(senderIP, player, AsciiString(msg->GameOptions.options));
-				break;
+				s_lastNoMatchLogMs = nowLog;
+				ReleaseLog("LAN dc GAMEOPT from unmatched sender %d.%d.%d.%d (opts=%.32s) slots: %d.%d.%d.%d %d.%d.%d.%d %d.%d.%d.%d %d.%d.%d.%d",
+					PRINTF_IP_AS_4_INTS(senderIP), msg->GameOptions.options,
+					PRINTF_IP_AS_4_INTS(m_currentGame->getIP(0)),
+					PRINTF_IP_AS_4_INTS(m_currentGame->getIP(1)),
+					PRINTF_IP_AS_4_INTS(m_currentGame->getIP(2)),
+					PRINTF_IP_AS_4_INTS(m_currentGame->getIP(3)));
 			}
 		}
 	}
@@ -722,4 +873,46 @@ void LANAPI::handleInActive(LANMessage *msg, UnsignedInt senderIP) {
 	AsciiString options = GenerateGameOptionsString();
 	RequestGameOptions(options, FALSE);
 	lanUpdateSlotList();
+}
+
+/**
+ * A would-be observer is telling us it could never open a TCP connection to
+ * our observer stream port. Only the observer can know this: our listen
+ * socket bound and listened successfully and simply never saw a connection,
+ * which is indistinguishable from nobody having tried. The lobby UDP traffic
+ * that carried this message is a different protocol on a different port, so
+ * it routinely works while the stream port is dropped -- that is exactly the
+ * shape of the 2026-08-21 failure, where a host bound port 8188, logged
+ * LISTENING, accepted nothing all session, and two spectators sat through
+ * 8 second connect timeouts with no way to tell the host why.
+ *
+ * Say so in chat, on the machine that can actually fix it.
+ */
+void LANAPI::handleObserveUnreachable(LANMessage *msg, UnsignedInt senderIP)
+{
+	// Only meaningful for the host of the game they were trying to watch.
+	if (msg->ObserveFailure.gameIP != m_localIP)
+		return;
+	if (m_inLobby || m_currentGame == nullptr || !m_currentGame->amIHost())
+		return;
+
+	UnicodeString playerName;
+	playerName = msg->name;
+
+	LANObsLog("handleObserveUnreachable: %ls could not reach our observer port %u from %08X after %u ms; inbound TCP is being dropped (listener running=%d)",
+		playerName.str(), msg->ObserveFailure.observerPort, senderIP,
+		msg->ObserveFailure.attemptMs,
+		(m_observerHost && m_observerHost->isRunning()) ? 1 : 0);
+
+	// Rate limit: several spectators failing on the same blocked port would
+	// otherwise each post their own line, and a player who retries from the
+	// menu generates one per attempt. One warning per game is the message.
+	if (m_observeUnreachableReported)
+		return;
+	m_observeUnreachableReported = TRUE;
+
+	UnicodeString chat;
+	chat.format(L"%s could not connect to your observer stream on port %u. Your firewall is likely blocking incoming connections for this game.",
+		playerName.str(), msg->ObserveFailure.observerPort);
+	OnChat(L"", 0, chat, LANCHAT_SYSTEM);
 }

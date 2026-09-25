@@ -231,6 +231,64 @@ void ArchiveFileSystem::loadIntoDirectoryTree(ArchiveFile *archiveFile, Bool ove
 	}
 }
 
+// Load every Zulu*.big in `dir` at mod (override) priority, in name order so
+// a higher-versioned big (Zulu_152.big) wins over a plain Zulu.big.
+void ArchiveFileSystem::loadZuluBigsFrom(const AsciiString& dir)
+{
+	if (TheLocalFileSystem == nullptr)
+		return;
+
+	FilenameList files;
+	TheLocalFileSystem->getFileListInDirectory(dir, "", "Zulu*.big", files, FALSE);
+
+	FilenameListIter it;
+	for (it = files.begin(); it != files.end(); ++it)
+	{
+		// The plain *.big install-dir scan has usually loaded this archive
+		// already, but at BASE priority (first-wins), where retail archives
+		// like WindowZH.big shadow its files. Re-applying the directory
+		// tree with overwrite promotes every entry to mod priority without
+		// reopening the file.
+		ArchiveFileMap::iterator existing = m_archiveFileMap.find(*it);
+		if (existing != m_archiveFileMap.end())
+		{
+			loadIntoDirectoryTree(existing->second, TRUE);
+			continue;
+		}
+		ArchiveFile *archiveFile = openArchiveFile(it->str());
+		if (archiveFile != nullptr)
+		{
+			DEBUG_LOG(("ArchiveFileSystem::loadZuluBigsFrom - loading %s at mod priority.", it->str()));
+			loadIntoDirectoryTree(archiveFile, TRUE);
+			m_archiveFileMap[*it] = archiveFile;
+		}
+	}
+}
+
+// Hand-rolled component search: AsciiString::find only takes a single
+// character, and VC6 has no case-insensitive strstr.
+Bool isInReplayDataFolder(const AsciiString& path)
+{
+	const char *const needle = ARCHIVE_REPLAY_DATA_FOLDER;
+	const Int needleLen = (Int)strlen(needle);
+	const char *const start = path.str();
+	const char *p;
+
+	for (p = start; *p != '\0'; ++p)
+	{
+		// Must begin a path component...
+		if (p != start && *(p - 1) != '\\' && *(p - 1) != '/')
+			continue;
+		if (strnicmp(p, needle, needleLen) != 0)
+			continue;
+		// ...and be the whole component, not a prefix of a longer name.
+		const char after = *(p + needleLen);
+		if (after == '\\' || after == '/')
+			return TRUE;
+	}
+	return FALSE;
+}
+
 void ArchiveFileSystem::loadMods()
 {
 #if defined(GENERALS_ONLINE) && defined(GENERALS_ONLINE_COMMUNITY_PATCH_CHANGES)
@@ -254,6 +312,19 @@ void ArchiveFileSystem::loadMods()
         NetworkLog(ELogVerbosity::LOG_RELEASE, "Loaded community patch (%s): %d", strBigPath.c_str(), bLoaded);
     }
 #endif
+	// The fork's own data must override retail archives even when the game
+	// is started without ZuluLauncher's "-mod Zulu.big": the plain *.big
+	// scan is first-wins in name order, so retail WindowZH.big silently
+	// shadows the fork's updated window layouts (fork-only gadgets vanish
+	// and joiners crash in the game-options screen). Auto-load Zulu bigs at
+	// mod priority from the install dir first, then the user data dir (the
+	// installer's home for Zulu.big) so the user-data copy wins. An
+	// explicit -mod on the command line takes over completely.
+	if (TheGlobalData->m_modBIG.isEmpty() && TheGlobalData->m_modDir.isEmpty())
+	{
+		loadZuluBigsFrom("");
+		loadZuluBigsFrom(TheGlobalData->getPath_UserData());
+	}
 
 	if (TheGlobalData->m_modBIG.isNotEmpty())
 	{

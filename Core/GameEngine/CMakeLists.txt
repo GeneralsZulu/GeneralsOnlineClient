@@ -23,6 +23,7 @@ set(GAMEENGINE_SRC
 #    Include/Common/CommandLine.h
     Include/Common/crc.h
     Include/Common/CRCDebug.h
+    Include/Common/ReleaseLog.h
 #    Include/Common/CriticalSection.h
 #    Include/Common/CustomMatchPreferences.h
 #    Include/Common/DamageFX.h
@@ -539,7 +540,9 @@ set(GAMEENGINE_SRC
     Include/GameNetwork/LANAPI.h
     Include/GameNetwork/LANAPICallbacks.h
     Include/GameNetwork/LANGameInfo.h
+    Include/GameNetwork/LANObserverStream.h
     Include/GameNetwork/LANPlayer.h
+    Include/GameNetwork/MapDownloadHook.h
     Include/GameNetwork/NAT.h
     Include/GameNetwork/NetCommandList.h
     Include/GameNetwork/NetCommandMsg.h
@@ -572,6 +575,7 @@ set(GAMEENGINE_SRC
 #    Source/Common/CommandLine.cpp
     Source/Common/crc.cpp
     Source/Common/CRCDebug.cpp
+    Source/Common/ReleaseLog.cpp
 #    Source/Common/DamageFX.cpp
     Source/Common/Diagnostic/SimulationMathCrc.cpp
 #    Source/Common/Dict.cpp
@@ -1131,6 +1135,8 @@ set(GAMEENGINE_SRC
     Source/GameNetwork/LANAPICallbacks.cpp
     Source/GameNetwork/LANAPIhandlers.cpp
     Source/GameNetwork/LANGameInfo.cpp
+    Source/GameNetwork/LANObserverStream.cpp
+    Source/GameNetwork/MapDownloadHook.cpp
     Source/GameNetwork/NAT.cpp
     Source/GameNetwork/NetCommandList.cpp
     Source/GameNetwork/NetCommandMsg.cpp

@@ -45,6 +45,9 @@
 #include "Common/INI.h"
 #include "Common/QuotedPrintable.h"
 #include "Common/SkirmishBattleHonors.h"
+#if RTS_ZEROHOUR
+#include "Common/StatsUploader.h" // map_match_counts cache (Zulu fork)
+#endif
 #include "Common/ThingFactory.h"
 #include "Common/ThingTemplate.h"
 #include "Common/MapObject.h"
@@ -63,11 +66,73 @@
 
 #include "../NextGenMP_defines.h"
 #include "../NGMP_interfaces.h"
+#include <math.h>
 
 
 //-------------------------------------------------------------------------------
 // PRIVATE DATA ///////////////////////////////////////////////////////////////////////////////////
 static const char *mapExtension = ".map";
+
+// Sentinel written into ZuluMapCache.ini headers. Also used to detect vanilla
+// MapCache.ini files that earlier Zulu builds polluted with cratePosition /
+// techDerrickPosition fields (which crash the retail vanilla parser). Bump
+// when the on-disk Zulu cache format gains new fields the engine relies on.
+static const char *MAP_CACHE_FORMAT_VERSION_TAG = "; MapCacheFormatVersion = 6";
+
+static Bool hasZuluFormatSentinel(const AsciiString &filename)
+{
+	File *fp = TheFileSystem->openFile(filename.str(), File::READ);
+	if (fp == nullptr)
+		return FALSE;
+	char buf[1024];
+	Int n = fp->read(buf, sizeof(buf) - 1);
+	fp->close();
+	if (n <= 0)
+		return FALSE;
+	buf[n] = '\0';
+	return strstr(buf, MAP_CACHE_FORMAT_VERSION_TAG) != nullptr;
+}
+
+// If a previous Zulu build wrote vanilla's MapCache.ini, truncate it to zero
+// bytes so the next vanilla launch parses cleanly (and rebuilds from disk for
+// the user dir; standard dir may need -buildmapcache). Truncation reuses the
+// same write permission Zulu already had on the file; deletion would also
+// require directory write access, which is more permission-fragile.
+static void truncateIfZuluPolluted(const AsciiString &mapDir, const char *vanillaCacheName)
+{
+	AsciiString vanillaPath;
+	vanillaPath.format("%s\\%s", mapDir.str(), vanillaCacheName);
+
+	if (!TheFileSystem->doesFileExist(vanillaPath.str()))
+		return;
+	if (!hasZuluFormatSentinel(vanillaPath))
+		return;
+
+	DEBUG_LOG(("MapCache: %s was written by a prior Zulu build; truncating so vanilla can rebuild\n", vanillaPath.str()));
+	FILE *fp = fopen(vanillaPath.str(), "w");
+	if (fp != nullptr)
+		fclose(fp);
+}
+
+// If ZuluMapCache.ini was written by an older Zulu version (missing fields
+// we now rely on, e.g. garrisonablePosition introduced in format v3),
+// truncate it so the subsequent "missing cache" check triggers a fresh
+// rebuild from .map files this session.
+static void truncateIfStaleZuluCache(const AsciiString &mapDir, const char *zuluCacheName)
+{
+	AsciiString cachePath;
+	cachePath.format("%s\\%s", mapDir.str(), zuluCacheName);
+
+	if (!TheFileSystem->doesFileExist(cachePath.str()))
+		return;
+	if (hasZuluFormatSentinel(cachePath))
+		return; // current version, leave alone
+
+	DEBUG_LOG(("MapCache: %s has stale format sentinel; truncating to force rebuild\n", cachePath.str()));
+	FILE *fp = fopen(cachePath.str(), "w");
+	if (fp != nullptr)
+		fclose(fp);
+}
 
 static Int m_width = 0;						///< Height map width.
 static Int m_height = 0;					///< Height map height (y size of array).
@@ -80,9 +145,377 @@ static Dict worldDict = 0;
 static WaypointMap *m_waypoints = nullptr;
 static Coord3DList	m_supplyPositions;
 static Coord3DList	m_techPositions;
+static Coord3DList	m_cratePositions;
+static Coord3DList	m_techDerrickPositions;
+static Coord3DList	m_garrisonablePositions;
 
 static Int m_mapDX = 0;
 static Int m_mapDY = 0;
+
+#if RTS_ZEROHOUR
+//-------------------------------------------------------------------------------
+// Start-spot ground-path distances (Zulu).
+// Built from data already parsed at cache time: the raw heightmap, water
+// polygon triggers, and bridge map objects. A cell is impassable when its
+// corner-height spread exceeds the pathfind cliff limit (same rule as
+// WorldHeightMap::setCellCliffFlagFromHeights) or its center lies under a
+// water area; bridge spans stamp a passable corridor back in. An 8-way
+// grid flood fill (cost 10 straight / 14 diagonal) then yields the ground
+// distance between every pair of Player_N_Start waypoints.
+
+// Must match PATHFIND_CLIFF_SLOPE_LIMIT_F in WorldHeightMap.cpp.
+static const Real CACHE_CLIFF_SLOPE_LIMIT = 9.8f;
+
+struct CachedWaterArea
+{
+	std::vector<ICoord3D> points;
+	Real waterZ;
+	IRegion2D bounds;
+};
+
+struct CachedBridgeSpan
+{
+	AsciiString templateName;	// bridge template = point1/landmark map object name, for radar-color lookup
+	Coord3D from;
+	Coord3D to;
+};
+
+static std::vector<CachedWaterArea> m_waterAreas;
+static std::vector<CachedBridgeSpan> m_bridgeSpans;
+static Coord3D m_pendingBridgeStart;
+static AsciiString m_pendingBridgeName;
+static Bool m_havePendingBridgeStart = FALSE;
+
+// Same crossing test as PolygonTrigger::pointInTrigger, run against a local
+// copy of the polygon. The real PolygonTrigger class self-registers in the
+// global trigger list that belongs to the running game, which the cache
+// build must not touch.
+static Bool waterAreaContains(const CachedWaterArea &area, Int px, Int py)
+{
+	if (px < area.bounds.lo.x || py < area.bounds.lo.y || px > area.bounds.hi.x || py > area.bounds.hi.y)
+		return FALSE;
+
+	Bool inside = FALSE;
+	const Int numPoints = (Int)area.points.size();
+	Int i;
+	for (i = 0; i < numPoints; ++i)
+	{
+		ICoord3D pt1 = area.points[i];
+		ICoord3D pt2 = area.points[(i + 1 == numPoints) ? 0 : i + 1];
+		if (pt1.y == pt2.y)
+			continue; // ignore horizontal lines
+		if (pt1.y < py && pt2.y < py) continue;
+		if (pt1.y >= py && pt2.y >= py) continue;
+		if (pt1.x < px && pt2.x < px) continue;
+		Int dy = pt2.y - pt1.y;
+		Int dx = pt2.x - pt1.x;
+		Real intersectionX = pt1.x + (dx * (py - pt1.y)) / ((Real)dy);
+		if (intersectionX >= px)
+			inside = !inside;
+	}
+	return inside;
+}
+
+static void finalizeWaterArea(CachedWaterArea &area)
+{
+	area.waterZ = (Real)area.points[0].z;
+	area.bounds.lo.x = area.bounds.hi.x = area.points[0].x;
+	area.bounds.lo.y = area.bounds.hi.y = area.points[0].y;
+	Int i;
+	for (i = 1; i < (Int)area.points.size(); ++i)
+	{
+		if (area.points[i].x < area.bounds.lo.x) area.bounds.lo.x = area.points[i].x;
+		if (area.points[i].x > area.bounds.hi.x) area.bounds.hi.x = area.points[i].x;
+		if (area.points[i].y < area.bounds.lo.y) area.bounds.lo.y = area.points[i].y;
+		if (area.points[i].y > area.bounds.hi.y) area.bounds.hi.y = area.points[i].y;
+	}
+	m_waterAreas.push_back(area);
+}
+
+// Minimal reader for the PolygonTriggers chunk keeping only water areas.
+// Field layout follows PolygonTrigger::ParsePolygonTriggersDataChunk.
+static Bool ParseWaterAreasDataChunk(DataChunkInput &file, DataChunkInfo *info, void *userData)
+{
+	Int count = file.readInt();
+	while (count > 0)
+	{
+		count--;
+		file.readAsciiString();	// trigger name
+		if (info->version >= K_TRIGGERS_VERSION_4)
+			file.readAsciiString();	// layer name
+		file.readInt();	// trigger id
+		Bool isWater = FALSE;
+		if (info->version >= K_TRIGGERS_VERSION_2)
+			isWater = file.readByte();
+		if (info->version >= K_TRIGGERS_VERSION_3)
+		{
+			file.readByte();	// isRiver
+			file.readInt();	// riverStart
+		}
+		Int numPoints = file.readInt();
+		CachedWaterArea area;
+		Int i;
+		for (i = 0; i < numPoints; ++i)
+		{
+			ICoord3D pt;
+			pt.x = file.readInt();
+			pt.y = file.readInt();
+			pt.z = file.readInt();
+			if (isWater)
+				area.points.push_back(pt);
+		}
+		if (isWater && (Int)area.points.size() >= 3)
+			finalizeWaterArea(area);
+	}
+	if (info->version == K_TRIGGERS_VERSION_1)
+	{
+		// Maps from before water areas existed imply a default global water
+		// plane at the old water position (see the real parser).
+		CachedWaterArea area;
+		ICoord3D pt;
+		pt.z = 7;
+		pt.x = (Int)(-30 * MAP_XY_FACTOR);
+		pt.y = (Int)(-30 * MAP_XY_FACTOR);
+		area.points.push_back(pt);
+		pt.x = (Int)(30 * MAP_XY_FACTOR + TheGlobalData->m_waterExtentX);
+		area.points.push_back(pt);
+		pt.y = (Int)(30 * MAP_XY_FACTOR + TheGlobalData->m_waterExtentY);
+		area.points.push_back(pt);
+		pt.x = (Int)(-30 * MAP_XY_FACTOR);
+		area.points.push_back(pt);
+		finalizeWaterArea(area);
+	}
+	DEBUG_ASSERTCRASH(file.atEndOfChunk(), ("Incorrect data file length."));
+	return TRUE;
+}
+
+static void computeStartSpotPathDistances(MapMetaData *md)
+{
+	Int numSpots = md->m_waypoints.m_numStartSpots;
+	if (numSpots > MAX_MAP_START_SPOTS)
+		numSpots = MAX_MAP_START_SPOTS;
+	if (numSpots < 2 || m_data == nullptr || m_width < 2 || m_height < 2)
+		return;
+
+	const Int cellsX = m_width - 1;
+	const Int cellsY = m_height - 1;
+	const Int numCells = cellsX * cellsY;
+
+	// Passability grid: cells outside the playable area are blocked (units
+	// cannot detour through the decorative border), then the cliff rule on
+	// the cell's four corner heights, then water areas against the cell
+	// center.
+	std::vector<UnsignedByte> passable(numCells);
+	Int x, y;
+	for (y = 0; y < cellsY; ++y)
+	{
+		for (x = 0; x < cellsX; ++x)
+		{
+			if (x < m_borderSize || x > m_width - 2 - m_borderSize ||
+			    y < m_borderSize || y > m_height - 2 - m_borderSize)
+			{
+				passable[y * cellsX + x] = 0;
+				continue;
+			}
+			Real h1 = m_data[y * m_width + x] * MAP_HEIGHT_SCALE;
+			Real h2 = m_data[y * m_width + x + 1] * MAP_HEIGHT_SCALE;
+			Real h3 = m_data[(y + 1) * m_width + x] * MAP_HEIGHT_SCALE;
+			Real h4 = m_data[(y + 1) * m_width + x + 1] * MAP_HEIGHT_SCALE;
+			Real minZ = h1;
+			if (h2 < minZ) minZ = h2;
+			if (h3 < minZ) minZ = h3;
+			if (h4 < minZ) minZ = h4;
+			Real maxZ = h1;
+			if (h2 > maxZ) maxZ = h2;
+			if (h3 > maxZ) maxZ = h3;
+			if (h4 > maxZ) maxZ = h4;
+			Bool ok = (maxZ - minZ <= CACHE_CLIFF_SLOPE_LIMIT);
+			if (ok && !m_waterAreas.empty())
+			{
+				Real terrainZ = (h1 + h2 + h3 + h4) * 0.25f;
+				Int wx = REAL_TO_INT_FLOOR((x - m_borderSize + 0.5f) * MAP_XY_FACTOR);
+				Int wy = REAL_TO_INT_FLOOR((y - m_borderSize + 0.5f) * MAP_XY_FACTOR);
+				Int w;
+				for (w = 0; w < (Int)m_waterAreas.size(); ++w)
+				{
+					if (terrainZ < m_waterAreas[w].waterZ && waterAreaContains(m_waterAreas[w], wx, wy))
+					{
+						ok = FALSE;
+						break;
+					}
+				}
+			}
+			passable[y * cellsX + x] = (UnsignedByte)(ok ? 1 : 0);
+		}
+	}
+
+	// Bridges reconnect the grid across the water/chasm they span.
+	Int b;
+	for (b = 0; b < (Int)m_bridgeSpans.size(); ++b)
+	{
+		Real fx = m_bridgeSpans[b].from.x;
+		Real fy = m_bridgeSpans[b].from.y;
+		Real tx = m_bridgeSpans[b].to.x;
+		Real ty = m_bridgeSpans[b].to.y;
+		Real len = (Real)sqrt(sqr(tx - fx) + sqr(ty - fy));
+		Int steps = REAL_TO_INT_FLOOR(len / (MAP_XY_FACTOR * 0.5f)) + 1;
+		Int s;
+		for (s = 0; s <= steps; ++s)
+		{
+			Real t = (Real)s / (Real)steps;
+			Int cx = REAL_TO_INT_FLOOR((fx + (tx - fx) * t) / MAP_XY_FACTOR) + m_borderSize;
+			Int cy = REAL_TO_INT_FLOOR((fy + (ty - fy) * t) / MAP_XY_FACTOR) + m_borderSize;
+			Int dx, dy;
+			for (dy = -1; dy <= 1; ++dy)
+			{
+				for (dx = -1; dx <= 1; ++dx)
+				{
+					Int nx = cx + dx;
+					Int ny = cy + dy;
+					if (nx >= 0 && nx < cellsX && ny >= 0 && ny < cellsY)
+						passable[ny * cellsX + nx] = 1;
+				}
+			}
+		}
+	}
+
+	// Map each start waypoint to its grid cell, nudged to the nearest
+	// passable cell within a small radius (spots can sit against a cliff
+	// edge that the coarse cell test flags impassable).
+	Int spotCell[MAX_MAP_START_SPOTS];
+	Coord3D spotPos[MAX_MAP_START_SPOTS];
+	Int i, j;
+	for (i = 0; i < numSpots; ++i)
+	{
+		spotCell[i] = -1;
+		AsciiString wname;
+		wname.format("Player_%d_Start", i + 1);
+		WaypointMap::const_iterator it = md->m_waypoints.find(wname);
+		if (it == md->m_waypoints.end())
+			continue;
+		spotPos[i] = it->second;
+		Int cx = REAL_TO_INT_FLOOR(it->second.x / MAP_XY_FACTOR) + m_borderSize;
+		Int cy = REAL_TO_INT_FLOOR(it->second.y / MAP_XY_FACTOR) + m_borderSize;
+		if (cx < 0) cx = 0;
+		if (cx > cellsX - 1) cx = cellsX - 1;
+		if (cy < 0) cy = 0;
+		if (cy > cellsY - 1) cy = cellsY - 1;
+		if (!passable[cy * cellsX + cx])
+		{
+			Bool found = FALSE;
+			Int radius;
+			for (radius = 1; radius <= 5 && !found; ++radius)
+			{
+				Int dx, dy;
+				for (dy = -radius; dy <= radius && !found; ++dy)
+				{
+					for (dx = -radius; dx <= radius && !found; ++dx)
+					{
+						Int nx = cx + dx;
+						Int ny = cy + dy;
+						if (nx >= 0 && nx < cellsX && ny >= 0 && ny < cellsY && passable[ny * cellsX + nx])
+						{
+							cx = nx;
+							cy = ny;
+							found = TRUE;
+						}
+					}
+				}
+			}
+		}
+		spotCell[i] = cy * cellsX + cx;
+	}
+
+	// Flood fill from each spot: Dial's algorithm on a 15-slot bucket ring
+	// (all in-flight costs lie within 14 of the current cost, so residues
+	// mod 15 never collide).
+	std::vector<Int> dist(numCells);
+	for (i = 0; i < numSpots - 1; ++i)
+	{
+		if (spotCell[i] < 0)
+			continue;
+
+		Int c;
+		for (c = 0; c < numCells; ++c)
+			dist[c] = -1;
+
+		std::vector<Int> buckets[15];
+		dist[spotCell[i]] = 0;
+		buckets[0].push_back(spotCell[i]);
+		Int pending = 1;
+		Int curCost = 0;
+		while (pending > 0)
+		{
+			std::vector<Int> &bucket = buckets[curCost % 15];
+			if (bucket.empty())
+			{
+				++curCost;
+				continue;
+			}
+			Int cell = bucket.back();
+			bucket.pop_back();
+			--pending;
+			if (dist[cell] != curCost)
+				continue; // stale entry, a shorter path got there first
+			Int cx = cell % cellsX;
+			Int cy = cell / cellsX;
+			Int dx, dy;
+			for (dy = -1; dy <= 1; ++dy)
+			{
+				for (dx = -1; dx <= 1; ++dx)
+				{
+					if (dx == 0 && dy == 0)
+						continue;
+					Int nx = cx + dx;
+					Int ny = cy + dy;
+					if (nx < 0 || nx >= cellsX || ny < 0 || ny >= cellsY)
+						continue;
+					Int ncell = ny * cellsX + nx;
+					if (!passable[ncell])
+						continue;
+					if (dx != 0 && dy != 0)
+					{
+						// no cutting corners between two blocked cells
+						if (!passable[cy * cellsX + nx] || !passable[ny * cellsX + cx])
+							continue;
+					}
+					Int ncost = curCost + ((dx != 0 && dy != 0) ? 14 : 10);
+					if (dist[ncell] < 0 || ncost < dist[ncell])
+					{
+						dist[ncell] = ncost;
+						buckets[ncost % 15].push_back(ncell);
+						++pending;
+					}
+				}
+			}
+		}
+
+		for (j = i + 1; j < numSpots; ++j)
+		{
+			if (spotCell[j] < 0)
+				continue;
+			Real euclid = (Real)sqrt(sqr(spotPos[i].x - spotPos[j].x) + sqr(spotPos[i].y - spotPos[j].y));
+			Real d;
+			if (dist[spotCell[j]] >= 0)
+			{
+				d = dist[spotCell[j]] * (MAP_XY_FACTOR / 10.0f);
+				// The grid metric can undershoot slightly on pure diagonals,
+				// and 0 is reserved for "not computed".
+				if (d < euclid)
+					d = euclid;
+			}
+			else
+			{
+				// Disconnected (island vs island): very far, but keep the
+				// straight-line ordering between such pairs.
+				d = 1000000.0f + euclid;
+			}
+			md->m_startSpotPathDist[i][j] = d;
+			md->m_startSpotPathDist[j][i] = d;
+		}
+	}
+}
+#endif // RTS_ZEROHOUR
 
 static UnsignedInt calcCRC( AsciiString fname )
 {
@@ -138,6 +571,52 @@ static Bool ParseObjectDataChunk(DataChunkInput &file, DataChunkInfo *info, void
 
 //DEBUG_LOG(("obj %s owner %s",name.str(),d.getAsciiString(TheKey_originalOwner).str()));
 
+#if RTS_ZEROHOUR
+	// Bridge spans for the start-spot path-distance grid. Sectional river
+	// bridges are two consecutive map objects flagged BRIDGE_POINT1 then
+	// BRIDGE_POINT2 (same adjacency rule as W3DBridgeBuffer::loadBridges);
+	// landmark bridges are a single KINDOF_BRIDGE object whose span runs
+	// along its facing angle for its geometry's major radius in each
+	// direction.
+	if (flags & FLAG_BRIDGE_POINT1)
+	{
+		m_pendingBridgeStart = loc;
+		m_pendingBridgeName = name;
+		m_havePendingBridgeStart = TRUE;
+	}
+	else if (flags & FLAG_BRIDGE_POINT2)
+	{
+		if (m_havePendingBridgeStart)
+		{
+			CachedBridgeSpan span;
+			span.templateName = m_pendingBridgeName;
+			span.from = m_pendingBridgeStart;
+			span.to = loc;
+			m_bridgeSpans.push_back(span);
+			m_havePendingBridgeStart = FALSE;
+		}
+	}
+	else
+	{
+		m_havePendingBridgeStart = FALSE;
+		if (pThisOne->getThingTemplate() && pThisOne->getThingTemplate()->isKindOf(KINDOF_BRIDGE))
+		{
+			Real halfSpan = pThisOne->getThingTemplate()->getTemplateGeometryInfo().getMajorRadius();
+			Real dirX = (Real)cos(angle);
+			Real dirY = (Real)sin(angle);
+			CachedBridgeSpan span;
+			span.templateName = name;
+			span.from.x = loc.x - dirX * halfSpan;
+			span.from.y = loc.y - dirY * halfSpan;
+			span.from.z = loc.z;
+			span.to.x = loc.x + dirX * halfSpan;
+			span.to.y = loc.y + dirY * halfSpan;
+			span.to.z = loc.z;
+			m_bridgeSpans.push_back(span);
+		}
+	}
+#endif // RTS_ZEROHOUR
+
 	if (pThisOne->getProperties()->getType(TheKey_waypointID) == Dict::DICT_INT)
 	{
 		pThisOne->setIsWaypoint();
@@ -147,11 +626,54 @@ static Bool ParseObjectDataChunk(DataChunkInput &file, DataChunkInfo *info, void
 	}
 	else if (pThisOne->getThingTemplate() && pThisOne->getThingTemplate()->isKindOf(KINDOF_TECH_BUILDING))
 	{
-		m_techPositions.push_back(loc);
+		// Split derricks (template name contains "Derrick") from generic tech buildings
+		// so the lobby preview can render them with a distinct icon.
+		AsciiString templateLower = pThisOne->getThingTemplate()->getName();
+		templateLower.toLower();
+		if (strstr(templateLower.str(), "derrick") != nullptr)
+		{
+			m_techDerrickPositions.push_back(loc);
+		}
+		else
+		{
+			m_techPositions.push_back(loc);
+		}
 	}
 	else if (pThisOne->getThingTemplate() && pThisOne->getThingTemplate()->isKindOf(KINDOF_SUPPLY_SOURCE_ON_PREVIEW))
 	{
-		m_supplyPositions.push_back(loc);
+		// Match radarvan's split: small supply piles (template name contains
+		// "Small", e.g. SupplyPileSmall) render with a distinct icon; everything
+		// else (SupplyDock, SupplyWarehouse, regular SupplyPile, ToxinRepository)
+		// keeps the standard green Cash icon.
+		AsciiString templateLower = pThisOne->getThingTemplate()->getName();
+		templateLower.toLower();
+		if (strstr(templateLower.str(), "small") != nullptr)
+		{
+			m_cratePositions.push_back(loc);
+		}
+		else
+		{
+			m_supplyPositions.push_back(loc);
+		}
+	}
+	else if (pThisOne->getThingTemplate())
+	{
+		// A building is garrisonable if its template has a GarrisonContain
+		// behavior module. KINDOF_GARRISONABLE_UNTIL_DESTROYED is a different,
+		// much narrower flag (means "keeps being garrisonable even when
+		// REALLY_DAMAGED"), set only on a handful of special-case buildings,
+		// so we can't rely on it to catch the ~60 civilian buildings typical
+		// of a city map.
+		const ModuleInfo &mods = pThisOne->getThingTemplate()->getBehaviorModuleInfo();
+		Int count = mods.getCount();
+		for (Int i = 0; i < count; ++i)
+		{
+			if (mods.getNthName(i) == "GarrisonContain")
+			{
+				m_garrisonablePositions.push_back(loc);
+				break;
+			}
+		}
 	}
 
 	deleteInstance(pThisOne);
@@ -189,8 +711,10 @@ static Bool ParseSizeOnly(DataChunkInput &file, DataChunkInfo *info, void *userD
 			m_boundaries[i].y = file.readInt();
 		}
 	}
-	return true;
 
+	// Despite the function's name, read the height samples too: the
+	// start-spot path-distance computation needs them. The chunk framing
+	// makes any unread remainder harmless, so this stays compatible.
 	m_dataSize = file.readInt();
 	m_data = NEW UnsignedByte[m_dataSize];	// pool[]ify
 	if (m_dataSize <= 0 || (m_dataSize != (m_width*m_height))) {
@@ -236,6 +760,9 @@ static Bool loadMap( AsciiString filename )
 	file.registerParser( "HeightMapData", AsciiString::TheEmptyString, ParseSizeOnlyInChunk );
 	file.registerParser( "WorldInfo", AsciiString::TheEmptyString, ParseWorldDictDataChunk );
 	file.registerParser( "ObjectsList", AsciiString::TheEmptyString, ParseObjectsDataChunk );
+#if RTS_ZEROHOUR
+	file.registerParser( "PolygonTriggers", AsciiString::TheEmptyString, ParseWaterAreasDataChunk );
+#endif
 	if (!file.parse(nullptr)) {
 		throw(ERROR_CORRUPT_FILE_FORMAT);
 	}
@@ -256,6 +783,15 @@ static void resetMap()
 
 	m_techPositions.clear();
 	m_supplyPositions.clear();
+	m_cratePositions.clear();
+	m_techDerrickPositions.clear();
+	m_garrisonablePositions.clear();
+
+#if RTS_ZEROHOUR
+	m_waterAreas.clear();
+	m_bridgeSpans.clear();
+	m_havePendingBridgeStart = FALSE;
+#endif
 }
 
 static void getExtent( Region3D *extent )
@@ -314,6 +850,7 @@ void WaypointMap::update()
 }
 
 const char *const MapCache::m_mapCacheName = "MapCache.ini";
+const char *const MapCache::m_zuluMapCacheName = "ZuluMapCache.ini";
 
 AsciiString MapCache::getMapDir(bool bCustomMapDebug) const
 {
@@ -341,7 +878,7 @@ void MapCache::writeCacheINI( const AsciiString &mapDir )
 
 	TheFileSystem->createDirectory(mapDir);
 
-	filepath.concat(m_mapCacheName);
+	filepath.concat(m_zuluMapCacheName);
 	FILE *fp = fopen(filepath.str(), "w");
 	DEBUG_ASSERTCRASH(fp != nullptr, ("Failed to create %s", filepath.str()));
 	if (fp == nullptr) {
@@ -350,6 +887,7 @@ void MapCache::writeCacheINI( const AsciiString &mapDir )
 
 	fprintf(fp, "; FILE: %s /////////////////////////////////////////////////////////////\n", filepath.str());
 	fprintf(fp, "; This INI file is auto-generated - do not modify\n");
+	fprintf(fp, "%s\n", MAP_CACHE_FORMAT_VERSION_TAG);
 	fprintf(fp, "; /////////////////////////////////////////////////////////////////////////////\n");
 
 	MapCache::iterator it = begin();
@@ -398,6 +936,46 @@ void MapCache::writeCacheINI( const AsciiString &mapDir )
 				pos = *itc3d;
 				fprintf(fp, "  supplyPosition = X:%2.2f Y:%2.2f Z:%2.2f\n", pos.x, pos.y, pos.z);
 			}
+			itc3d = md.m_cratePositions.begin();
+			for (; itc3d != md.m_cratePositions.end(); ++itc3d)
+			{
+				pos = *itc3d;
+				fprintf(fp, "  cratePosition = X:%2.2f Y:%2.2f Z:%2.2f\n", pos.x, pos.y, pos.z);
+			}
+			itc3d = md.m_techDerrickPositions.begin();
+			for (; itc3d != md.m_techDerrickPositions.end(); ++itc3d)
+			{
+				pos = *itc3d;
+				fprintf(fp, "  techDerrickPosition = X:%2.2f Y:%2.2f Z:%2.2f\n", pos.x, pos.y, pos.z);
+			}
+			itc3d = md.m_garrisonablePositions.begin();
+			for (; itc3d != md.m_garrisonablePositions.end(); ++itc3d)
+			{
+				pos = *itc3d;
+				fprintf(fp, "  garrisonablePosition = X:%2.2f Y:%2.2f Z:%2.2f\n", pos.x, pos.y, pos.z);
+			}
+#if RTS_ZEROHOUR
+			MapBridgeSpanList::const_iterator itbs = md.m_bridgeSpans.begin();
+			for (; itbs != md.m_bridgeSpans.end(); ++itbs)
+			{
+				AsciiString spanName = itbs->m_templateName;
+				if (spanName.isEmpty())
+					spanName = "Unknown";
+				fprintf(fp, "  bridgeSpan = %s X:%2.2f Y:%2.2f Z:%2.2f X:%2.2f Y:%2.2f Z:%2.2f\n",
+					AsciiStringToQuotedPrintable(spanName).str(),
+					itbs->m_from.x, itbs->m_from.y, itbs->m_from.z,
+					itbs->m_to.x, itbs->m_to.y, itbs->m_to.z);
+			}
+			Int si, sj;
+			for (si = 0; si < md.m_numPlayers && si < MAX_MAP_START_SPOTS; ++si)
+			{
+				for (sj = si + 1; sj < md.m_numPlayers && sj < MAX_MAP_START_SPOTS; ++sj)
+				{
+					if (md.m_startSpotPathDist[si][sj] > 0.0f)
+						fprintf(fp, "  startSpotPathDist_%d_%d = %2.2f\n", si + 1, sj + 1, md.m_startSpotPathDist[si][sj]);
+				}
+			}
+#endif
 			fprintf(fp, "END\n\n");
 		}
 		else
@@ -415,6 +993,38 @@ void MapCache::updateCache()
 
 	const AsciiString mapDir = getMapDir();
 	const AsciiString userMapDir = getUserMapDir();
+
+	// Clean up vanilla's MapCache.ini if a previous Zulu build polluted it with
+	// fields the retail vanilla parser doesn't understand. We don't share a
+	// cache file with vanilla anymore; Zulu uses ZuluMapCache.ini exclusively.
+	truncateIfZuluPolluted(mapDir, m_mapCacheName);
+	truncateIfZuluPolluted(userMapDir, m_mapCacheName);
+
+	// Invalidate Zulu caches written under an older format version so the
+	// missing-file check below forces a session rebuild.
+	truncateIfStaleZuluCache(mapDir, m_zuluMapCacheName);
+	truncateIfStaleZuluCache(userMapDir, m_zuluMapCacheName);
+
+	// If our ZuluMapCache.ini is missing in the standard dir (fresh install or
+	// just-migrated from the shared MapCache.ini), force a rebuild from the
+	// .map files this session so official maps populate the new cache.
+	// Also force a rebuild when the file exists but lacks the current format
+	// sentinel — truncateIfStaleZuluCache above empties stale caches and
+	// they read as 0-byte files (not "missing"), so we'd otherwise skip the
+	// rebuild and miss new fields like garrisonablePosition.
+	Bool stdCacheRebuilt = FALSE;
+	{
+		AsciiString stdCachePath;
+		stdCachePath.format("%s\\%s", mapDir.str(), m_zuluMapCacheName);
+		Bool exists = TheFileSystem->doesFileExist(stdCachePath.str());
+		Bool versionMatch = exists ? hasZuluFormatSentinel(stdCachePath) : FALSE;
+		if (!exists || !versionMatch)
+		{
+			DEBUG_LOG(("MapCache: %s missing or stale (exists=%d, versionMatch=%d), forcing rebuild this session\n",
+				stdCachePath.str(), (int)exists, (int)versionMatch));
+			TheWritableGlobalData->m_buildMapCache = TRUE;
+		}
+	}
 
 	// Create the standard map cache if required. Is only relevant for Mod developers.
 	// TheSuperHackers @tweak This step is done before loading any other map caches to not poison the cached state.
@@ -434,6 +1044,7 @@ void MapCache::updateCache()
 			if (loadMapsFromDisk(mapDir, isOfficial, filterByAllowedMaps))
 			{
 				writeCacheINI(mapDir);
+				stdCacheRebuilt = TRUE;
 			}
 		}
 		m_doCreateStandardMapCacheINI = FALSE;
@@ -455,10 +1066,29 @@ void MapCache::updateCache()
 
 	// Load standard maps from map cache last.
 	// This overwrites matching user maps to prevent munkees getting rowdy :)
-	if (m_doLoadStandardMapCacheINI)
+	// Skip if we just rebuilt the standard cache from disk this session: the
+	// in-memory entries are fresh, and the on-disk MapCache.ini may have failed
+	// to write (typical when the install dir isn't user-writable, e.g. Program
+	// Files). Reading it back would clobber the fresh data with stale entries.
+	if (m_doLoadStandardMapCacheINI && !stdCacheRebuilt)
 	{
 		loadMapsFromMapCacheINI(mapDir);
 		m_doLoadStandardMapCacheINI = FALSE;
+	}
+	else if (stdCacheRebuilt)
+	{
+		m_doLoadStandardMapCacheINI = FALSE;
+	}
+}
+
+void MapCache::refreshUserMaps()
+{
+	setFPMode();
+
+	const AsciiString userMapDir = getUserMapDir();
+	if (loadMapsFromDisk(userMapDir, FALSE))
+	{
+		writeCacheINI(userMapDir);
 	}
 }
 
@@ -505,7 +1135,7 @@ void MapCache::loadMapsFromMapCacheINI( const AsciiString &mapDir )
 {
 	INI ini;
 	AsciiString fname;
-	fname.format("%s\\%s", mapDir.str(), m_mapCacheName);
+	fname.format("%s\\%s", mapDir.str(), m_zuluMapCacheName);
 
 	if (TheFileSystem->doesFileExist(fname.str()))
 	{
@@ -649,6 +1279,25 @@ Bool MapCache::addMap(
 	md.m_timestamp.m_lowTimeStamp = fileInfo.timestampLow;
 	md.m_supplyPositions = m_supplyPositions;
 	md.m_techPositions = m_techPositions;
+	md.m_cratePositions = m_cratePositions;
+	md.m_techDerrickPositions = m_techDerrickPositions;
+	md.m_garrisonablePositions = m_garrisonablePositions;
+#if RTS_ZEROHOUR
+	// Bridge spans survive into the metadata (and the cache INI) so the
+	// lobby preview and the Discord lobby render can draw them without
+	// re-parsing the map.
+	{
+		Int b;
+		for (b = 0; b < (Int)m_bridgeSpans.size(); ++b)
+		{
+			MapBridgeSpan span;
+			span.m_templateName = m_bridgeSpans[b].templateName;
+			span.m_from = m_bridgeSpans[b].from;
+			span.m_to = m_bridgeSpans[b].to;
+			md.m_bridgeSpans.push_back(span);
+		}
+	}
+#endif
 	md.m_CRC = calcCRC(fname);
 
 	Bool exists = false;
@@ -688,6 +1337,10 @@ Bool MapCache::addMap(
 	}
 
 	getExtent(&(md.m_extent));
+
+#if RTS_ZEROHOUR
+	computeStartSpotPathDistances(&md);
+#endif
 
 	(*this)[lowerFname] = md;
 
@@ -1004,6 +1657,127 @@ Int populateMapListbox( GameWindow *listbox, Bool useSystemMaps, Bool isMultipla
 	GadgetListBoxReset( listbox );
 
 	return populateMapListboxNoReset( listbox, useSystemMaps, isMultiplayer, mapToSelect );
+}
+
+//-------------------------------------------------------------------------------------------------
+// Case-insensitive substring search across two wide-char strings. Returns
+// true when needle is empty or appears anywhere inside haystack.
+static Bool wideContainsNoCase(const WideChar *haystack, const WideChar *needle)
+{
+	if (needle == nullptr || *needle == 0)
+		return TRUE;
+	if (haystack == nullptr)
+		return FALSE;
+
+	const size_t needleLen = wcslen(needle);
+	for (const WideChar *p = haystack; *p != 0; ++p)
+	{
+		if (_wcsnicmp(p, needle, needleLen) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Sorts maps by display name (case-insensitive) so the merged system+user
+// list comes out alphabetically rather than in MapCache iteration order.
+struct UnicodeStringNoCaseLess
+{
+	bool operator()(const UnicodeString& a, const UnicodeString& b) const
+	{
+		return _wcsicmp(a.str(), b.str()) < 0;
+	}
+};
+
+//-------------------------------------------------------------------------------------------------
+Int populateMapListboxFiltered( GameWindow *listbox, Bool isMultiplayer, const UnicodeString& nameFilter, Int playerCountFilter, AsciiString mapToSelect )
+{
+	if (!TheMapCache)
+		return -1;
+	if (!listbox)
+		return -1;
+
+	GadgetListBoxReset( listbox );
+
+	MapListBoxData lbData;
+	lbData.listbox = listbox;
+	lbData.numLength = GadgetListBoxGetListLength( listbox );
+	lbData.numColumns = GadgetListBoxGetNumColumns( listbox );
+	lbData.mapToSelect = mapToSelect;
+	lbData.isMultiplayer = isMultiplayer;
+
+	if (lbData.numColumns > 1)
+	{
+		lbData.easyImage = TheMappedImageCollection->findImageByName("Star-Bronze");
+		lbData.mediumImage = TheMappedImageCollection->findImageByName("Star-Silver");
+		lbData.brutalImage = TheMappedImageCollection->findImageByName("Star-Gold");
+		lbData.maxBrutalImage = TheMappedImageCollection->findImageByName("RedYell_Star");
+		lbData.battleHonors = new SkirmishBattleHonors;
+
+		lbData.w = lbData.brutalImage ? lbData.brutalImage->getImageWidth() : 10;
+		lbData.w = min(GadgetListBoxGetColumnWidth(listbox, 0), lbData.w);
+		lbData.h = lbData.w;
+	}
+
+	// Collect candidate map filenames, sorted by display name. We deliberately
+	// pass an empty mapDir to addMapToMapListbox so its directory check
+	// (mapName.startsWithNoCase("")) accepts every entry — system and user
+	// maps end up in one merged list.
+	const WideChar *needle = nameFilter.isEmpty() ? nullptr : nameFilter.str();
+
+	typedef std::map<UnicodeString, AsciiString, UnicodeStringNoCaseLess> SortedDisplayToFile;
+	SortedDisplayToFile sorted;
+
+	MapCache::iterator it = TheMapCache->begin();
+	for (; it != TheMapCache->end(); ++it)
+	{
+		const MapMetaData &mapData = it->second;
+		if (mapData.m_isMultiplayer != isMultiplayer)
+			continue;
+		if (mapData.m_displayName.isEmpty())
+			continue;
+		if (playerCountFilter > 0 && mapData.m_numPlayers != playerCountFilter)
+			continue;
+		if (!wideContainsNoCase(mapData.m_displayName.str(), needle))
+			continue;
+		sorted[mapData.m_displayName] = it->first;
+	}
+
+	const AsciiString emptyDir;
+
+	SortedDisplayToFile::const_iterator sIt = sorted.begin();
+	for (; sIt != sorted.end(); ++sIt)
+	{
+		MapCache::iterator mapCacheIt = TheMapCache->find(sIt->second);
+		if (mapCacheIt == TheMapCache->end())
+			continue;
+
+		if (!addMapToMapListbox(lbData, emptyDir, mapCacheIt->first, mapCacheIt->second))
+			break;
+	}
+
+	if (lbData.battleHonors)
+	{
+		delete lbData.battleHonors;
+		lbData.battleHonors = nullptr;
+	}
+
+	GadgetListBoxSetSelected(listbox, &lbData.selectionIndex, 1);
+
+	if (lbData.selectionIndex >= 0)
+	{
+		Int topIndex = GadgetListBoxGetTopVisibleEntry(listbox);
+		Int bottomIndex = GadgetListBoxGetBottomVisibleEntry(listbox);
+		Int rowsOnScreen = bottomIndex - topIndex;
+
+		if (lbData.selectionIndex >= bottomIndex)
+		{
+			Int newTop = max( 0, lbData.selectionIndex - max( 1, rowsOnScreen / 2 ) );
+			GadgetListBoxSetTopVisibleEntry( listbox, newTop );
+		}
+	}
+
+	return lbData.selectionIndex;
 }
 
 

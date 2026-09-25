@@ -81,6 +81,19 @@ class ArchivedDirectoryInfo;
 class DetailedArchivedDirectoryInfo;
 class ArchivedFileInfo;
 
+// TheSuperHackers @feature Folder holding one data archive per past release,
+// so old replays can be re-simulated against the data they were recorded on
+// (see GeneralsMD Common/ReplayDataVersions.h for the full story). Exactly one
+// of them is ever mounted, named explicitly via -mod, so the automatic *.big
+// sweeps -- which recurse -- have to leave the whole folder alone. It ships to
+// the user data dir, but the install-dir sweep still needs this: 1.5.6 and
+// 1.5.7 put it next to the exe, and a copy can survive there.
+#define ARCHIVE_REPLAY_DATA_FOLDER "ReplayData"
+
+// True if 'path' has ARCHIVE_REPLAY_DATA_FOLDER as one of its directory
+// components.
+Bool isInReplayDataFolder(const AsciiString& path);
+
 typedef std::map<AsciiString, DetailedArchivedDirectoryInfo> DetailedArchivedDirectoryInfoMap; // Archived directory name to detailed archived directory info
 typedef std::map<AsciiString, ArchivedDirectoryInfo> ArchivedDirectoryInfoMap; // Archived directory name to archived directory info
 typedef std::map<AsciiString, ArchivedFileInfo> ArchivedFileInfoMap; // Archived file name to archived file info
@@ -147,6 +160,7 @@ public:
 	ArchiveFile* getArchiveFile(const AsciiString& filename, FileInstance instance = 0) const;
 
 	void loadMods();
+	void loadZuluBigsFrom(const AsciiString& dir); ///< load every Zulu*.big in dir at mod (override) priority, name order
 
 	ArchivedDirectoryInfo* friend_getArchivedDirectoryInfo(const Char* directory);
 

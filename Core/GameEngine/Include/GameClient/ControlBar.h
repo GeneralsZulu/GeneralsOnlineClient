@@ -742,7 +742,11 @@ public:
 	void initObserverControls();
 	void populateObserverInfoWindow ();
 	void populateObserverList();
+	void setObserverPlayerNamesHidden(Bool hide); ///< hide/restore the strip's name labels, leaving the flag buttons alone
 	Bool isObserverControlBarOn() { return m_isObserverCommandBar;}
+	Bool isUsingZuluObserverBar() const; ///< TRUE when ZuluObserverBar.wnd supplies the observer windows
+	void drawObserverContextBackdrop(); ///< draw fitted panels behind visible context windows (observer/replay)
+	void applyZuluObserverHudLayout(Bool enable); ///< move radar/portrait into the Zulu observer bar frames, or restore
 
 	void setObserverLookAtPlayer (Player *player); ///< Sets the looked at player. Used to present information about the player.
 	Player *getObserverLookAtPlayer () const { return m_observerLookAtPlayer; } ///< Returns the looked at player. Can return null.

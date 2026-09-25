@@ -699,6 +699,18 @@ void GameLogic::logicMessageDispatcher( GameMessage *msg, void *userData )
 			break;
 		}
 
+		case GameMessage::MSG_SURRENDER_CONSENT:
+		{
+			// "!surrender"/"!unsurrender" chat directive, routed through the
+			// lockstep command stream so every client (and replay playback)
+			// latches consent on the same logic frame. Only the sender's own
+			// flag is set; AI allies act on it in
+			// AISkirmishPlayer::processSurrenderDirective().
+			const Bool consented = msg->getArgument( 0 )->boolean;
+			msgPlayer->setSurrenderConsented( consented );
+			break;
+		}
+
 #ifdef ALLOW_SURRENDER
 		case GameMessage::MSG_DO_SURRENDER:
 		{

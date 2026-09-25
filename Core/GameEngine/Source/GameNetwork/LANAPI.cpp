@@ -29,12 +29,14 @@
 #include "Common/crc.h"
 #include "Common/GameState.h"
 #include "Common/Registry.h"
+#include "Common/ReleaseLog.h"
 #include "GameNetwork/LANAPI.h"
 #include "GameNetwork/networkutil.h"
 #include "Common/GlobalData.h"
 #include "Common/RandomValue.h"
 #include "GameClient/GameText.h"
 #include "GameClient/MapUtil.h"
+#include "GameClient/MessageBox.h"
 #include "Common/UserPreferences.h"
 #include "GameLogic/GameLogic.h"
 
@@ -84,14 +86,27 @@ LANAPI::LANAPI(void) : m_transport(nullptr)
 	m_broadcastAddr = INADDR_BROADCAST;
 	m_directConnectRemoteIP = 0;
 	m_actionTimeout = 5000; // ms
+	m_pendingResendIP = 0;
+	m_nextResendMs = 0;
 	m_lastUpdate = 0;
 	m_transport = new UDPTransport;
 	m_isActive = TRUE;
+	m_observerHost = nullptr;
+	m_observerClient = nullptr;
+	m_observerClientPlaybackKicked = FALSE;
+	m_observerProgressLastMs = 0;
+	m_observerProgressLastBytes = 0;
+	m_observeUnreachableReported = FALSE;
+	m_mapDownloadPending = FALSE;
+	m_mapDownloadCRC = 0;
+	m_mapDownloadFailedCRC = 0;
 }
 
 LANAPI::~LANAPI()
 {
 	reset();
+	stopObserverHost();
+	stopObserverClient();
 	delete m_transport;
 }
 
@@ -109,6 +124,14 @@ void LANAPI::init()
 	m_isInLANMenu = TRUE;
 	m_currentGame = nullptr;
 	m_directConnectRemoteIP = 0;
+	m_dispatchSenderIP = 0;
+	m_dispatchSenderPort = 0;
+
+	// A download from a previous session is no longer ours to finish, and a CRC
+	// that failed there deserves a fresh try in this one.
+	m_mapDownloadPending = FALSE;
+	m_mapDownloadCRC = 0;
+	m_mapDownloadFailedCRC = 0;
 
 	m_lastGameopt = "";
 
@@ -171,19 +194,90 @@ void LANAPI::reset()
 	m_games = nullptr;
 	m_lobbyPlayers = nullptr;
 	m_directConnectRemoteIP = 0;
+	m_dispatchSenderIP = 0;
+	m_dispatchSenderPort = 0;
 	m_pendingAction = ACT_NONE;
 	m_expiration = 0;
 	m_inLobby = true;
 	m_isInLANMenu = TRUE;
 	m_currentGame = nullptr;
 
+	// Tear down any active observer session so a fresh LAN cycle doesn't
+	// inherit a stale listen socket or live client connection.
+	stopObserverHost();
+	stopObserverClient();
 }
 
-void LANAPI::sendMessage(LANMessage* msg, UnsignedInt ip /* = 0 */)
+Int LANAPI::findSlotForSender(UnsignedInt senderIP) const
 {
+	if (m_currentGame == nullptr)
+		return -1;
+
+	// Players behind one NAT share a public IP and differ only by port, so
+	// prefer an exact (IP, source port) match against the per-slot lobby
+	// port the host recorded when that player first spoke. Falls through to
+	// the historical IP-only match for LAN games (where lobby ports are all
+	// the same) and for peers whose port we have not learned yet.
+	if (m_dispatchSenderPort != 0)
+	{
+		for (Int i = 0; i < MAX_SLOTS; ++i)
+		{
+			const LANGameSlot *slot = m_currentGame->getConstLANSlot(i);
+			if (slot != nullptr && slot->isHuman() && slot->getIP() == senderIP
+				&& slot->getLobbyPort() == m_dispatchSenderPort)
+			{
+				return i;
+			}
+		}
+	}
+	for (Int i = 0; i < MAX_SLOTS; ++i)
+	{
+		const LANGameSlot *slot = m_currentGame->getConstLANSlot(i);
+		if (slot != nullptr && slot->isHuman() && slot->getIP() == senderIP)
+			return i;
+	}
+	return -1;
+}
+
+void LANAPI::sendMessage(LANMessage *msg, UnsignedInt ip /* = 0 */, UnsignedShort explicitPort /* = 0 */)
+{
+	if (ip != 0 && explicitPort != 0)
+	{
+		m_transport->queueSend(ip, explicitPort, (unsigned char *)msg, sizeof(LANMessage));
+		return;
+	}
 	if (ip != 0)
 	{
-		m_transport->queueSend(ip, lobbyPort, (unsigned char*)msg, sizeof(LANMessage) /*, 0, 0 */);
+		// Choose the destination port in priority order:
+		//   1) source port of the LAN message currently being dispatched. This
+		//      is the exact endpoint the request came from, so it is right even
+		//      when several players share one public IP (two people behind the
+		//      same router/NAT). It MUST outrank the slot scan below, which
+		//      matches on IP alone and would otherwise address the reply to
+		//      whichever of them occupies the earlier slot -- the second
+		//      joiner then never sees the answer and times out.
+		//   2) per-peer lobby port stored on the matching game slot (used for
+		//      sends we originate rather than reply to; the host learns this
+		//      from each joiner's source port when running behind NAT).
+		//   3) lobbyPort (LAN default, unchanged behavior).
+		UnsignedShort port = lobbyPort;
+		if (m_dispatchSenderPort != 0 && ip == m_dispatchSenderIP)
+		{
+			port = m_dispatchSenderPort;
+		}
+		if (port == lobbyPort && m_currentGame != nullptr)
+		{
+			for (Int i = 0; i < MAX_SLOTS; ++i)
+			{
+				LANGameSlot *slot = m_currentGame->getLANSlot(i);
+				if (slot != nullptr && slot->isHuman() && slot->getIP() == ip && slot->getLobbyPort() != 0)
+				{
+					port = slot->getLobbyPort();
+					break;
+				}
+			}
+		}
+		m_transport->queueSend(ip, port, (unsigned char *)msg, sizeof(LANMessage) /*, 0, 0 */);
 	}
 	else if ((m_currentGame != nullptr) && (m_currentGame->getIsDirectConnect()))
 	{
@@ -191,9 +285,11 @@ void LANAPI::sendMessage(LANMessage* msg, UnsignedInt ip /* = 0 */)
 		for (Int i = 0; i < MAX_SLOTS; ++i)
 		{
 			if (i != localSlot) {
-				GameSlot* slot = m_currentGame->getSlot(i);
+				LANGameSlot *slot = m_currentGame->getLANSlot(i);
 				if ((slot != nullptr) && (slot->isHuman())) {
-					m_transport->queueSend(slot->getIP(), lobbyPort, (unsigned char*)msg, sizeof(LANMessage) /*, 0, 0 */);
+					UnsignedInt   destIP = slot->getIP();
+					UnsignedShort port = slot->getLobbyPort() != 0 ? slot->getLobbyPort() : lobbyPort;
+					m_transport->queueSend(destIP, port, (unsigned char *)msg, sizeof(LANMessage) /*, 0, 0 */);
 				}
 			}
 		}
@@ -256,6 +352,9 @@ AsciiString GetMessageTypeString(UnsignedInt type)
 	case LANMessage::MSG_INACTIVE:
 		returnString.format("Inactive (%d)", type);
 		break;
+	case LANMessage::MSG_OBSERVE_UNREACHABLE:
+		returnString.format("Observe Unreachable (%d)", type);
+		break;
 	default:
 		returnString.format("Unknown Message (%d)", type);
 	}
@@ -317,6 +416,24 @@ void LANAPI::checkMOTD()
 
 extern Bool LANbuttonPushed;
 extern Bool LANSocketErrorDetected;
+
+// The observe prompt in OnGameJoin reads these to know which host/port to
+// connect to. RequestGameJoin sets them directly for the robust
+// (no-UDP-deny-needed) observe path below.
+//
+// STAGE 2: the Zulu fork defines these (and LANAPI::updateMapDownload below) in
+// LANAPICallbacks.cpp, which is hand-merged separately. Delete both definitions
+// from here when that file lands, or the link will fail on duplicate symbols.
+UnsignedInt   s_pendingObserveHostIP = 0;
+UnsignedShort s_pendingObservePort   = 0;
+
+// Peer-side background map download. OnGameOptions (LANAPICallbacks.cpp) starts
+// the fetch; until that file is merged nothing ever starts one, so this pump has
+// nothing to finish.
+void LANAPI::updateMapDownload()
+{
+}
+
 void LANAPI::update()
 {
 	if (LANbuttonPushed)
@@ -353,7 +470,14 @@ void LANAPI::update()
 				continue;
 			}
 
-			LANMessage* msg = (LANMessage*)(m_transport->m_inBuffer[i].data);
+			// Track the source port so reply-path sendMessage calls can
+			// route back through the same NAT mapping (matters for the
+			// online-coordinator flow; LAN packets always arrive on
+			// lobbyPort and behave identically).
+			m_dispatchSenderIP   = senderIP;
+			m_dispatchSenderPort = m_transport->m_inBuffer[i].port;
+
+			LANMessage *msg = (LANMessage *)(m_transport->m_inBuffer[i].data);
 			//DEBUG_LOG(("LAN message type %s from %ls (%s@%s)", GetMessageTypeString(msg->messageType).str(),
 			//	msg->name, msg->userName, msg->hostName));
 			switch (msg->messageType)
@@ -423,6 +547,10 @@ void LANAPI::update()
 			case LANMessage::MSG_INACTIVE:		// someone is telling us that we're inactive.
 				handleInActive(msg, senderIP);
 				break;
+			case LANMessage::MSG_OBSERVE_UNREACHABLE:	// somebody couldn't reach our observer port.
+				DEBUG_LOG(("LANAPI::update - got a MSG_OBSERVE_UNREACHABLE from %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(senderIP)));
+				handleObserveUnreachable( msg, senderIP );
+				break;
 
 			default:
 				DEBUG_LOG(("Unknown LAN message type %d", msg->messageType));
@@ -430,6 +558,12 @@ void LANAPI::update()
 
 			// Mark it as read
 			m_transport->m_inBuffer[i].length = 0;
+
+			// Clear the transient dispatch context so any sends queued from
+			// outside the dispatch loop (timers, user input) don't pick up
+			// a stale per-message port.
+			m_dispatchSenderIP   = 0;
+			m_dispatchSenderPort = 0;
 		}
 		else
 		{
@@ -438,6 +572,11 @@ void LANAPI::update()
 	}
 	if (LANbuttonPushed)
 		return;
+
+	// Pump observer host accepts/streams and observer client recv/state.
+	updateObserver();
+	// Finish any in-flight background map download (see OnGameOptions).
+	updateMapDownload();
 	// Send out periodic I'm Here messages
 	if (now > s_resendDelta + m_lastResendTime)
 	{
@@ -535,6 +674,10 @@ void LANAPI::update()
 			{
 				if (m_currentGame->getIP(p) && m_currentGame->getPlayerLastHeard(p) + s_resendDelta * 8 < now)
 				{
+					ReleaseLog("LAN host dropping slot %d ip=%d.%d.%d.%d lastHeard=%u now=%u delta=%u",
+						p, PRINTF_IP_AS_4_INTS(m_currentGame->getIP(p)),
+						m_currentGame->getPlayerLastHeard(p), now,
+						now - m_currentGame->getPlayerLastHeard(p));
 					LANMessage msg;
 					fillInLANMessage(&msg);
 					UnicodeString theStr;
@@ -556,6 +699,18 @@ void LANAPI::update()
 	if (gameListChanged)
 	{
 		OnGameList(m_games);
+	}
+
+	// Retransmit an unanswered join-flow request. A single UDP packet over a
+	// punched NAT path is easily lost (worst case: the host is mid-handoff,
+	// tearing down its coordinator lobby, when our MSG_REQUEST_JOIN lands);
+	// without a retry that one loss shows up as "Connection timed out".
+	if ((m_pendingAction == ACT_JOIN || m_pendingAction == ACT_JOINDIRECTCONNECT)
+		&& m_nextResendMs != 0 && now >= m_nextResendMs)
+	{
+		DEBUG_LOG(("LANAPI::update - retrying join request (action %d)", (Int)m_pendingAction));
+		sendMessage(&m_pendingResendMsg, m_pendingResendIP);
+		m_nextResendMs = now + 1000;
 	}
 
 	// Time out old actions
@@ -634,6 +789,28 @@ void LANAPI::RequestGameJoin(LANGameInfo* game, UnsignedInt ip /* = 0 */)
 		return;
 	}
 
+	// Robust observe path: if we already know the game is in progress, don't
+	// depend on the host's UDP MSG_JOIN_DENY round-trip to learn the observer
+	// port. That handshake rides the lobby UDP socket, which the host services
+	// only on a throttled in-game pump and which competes with the in-game
+	// network flood, so it is lossy and gets lossier as a match goes on. The
+	// observer TCP port is deterministic (same formula the host uses in
+	// startObserverHost), so derive it locally, surface the observe prompt
+	// immediately, and let TCP handle connection reliability. The UDP join/deny
+	// flow below remains as a fallback for when our local in-progress flag is
+	// stale (e.g. the announce that would have set it was dropped).
+	if (game->isGameInProgress())
+	{
+		UnsignedInt   hostIP  = game->getSlot(0)->getIP();
+		UnsignedShort obsPort = (UnsignedShort)(NETWORK_BASE_PORT_NUMBER + LAN_OBSERVER_PORT_OFFSET);
+		LANObsLog("RequestGameJoin: game flagged in-progress; going direct to observer host=%08X port=%u (no UDP deny needed)",
+			hostIP, obsPort);
+		s_pendingObserveHostIP = hostIP;
+		s_pendingObservePort   = obsPort;
+		OnGameJoin( RET_GAME_STARTED, game );
+		return;
+	}
+
 	LANMessage msg;
 	msg.messageType = LANMessage::MSG_REQUEST_JOIN;
 	fillInLANMessage(&msg);
@@ -645,10 +822,16 @@ void LANAPI::RequestGameJoin(LANGameInfo* game, UnsignedInt ip /* = 0 */)
 	GetStringFromRegistry("\\ergc", "", s);
 	strlcpy(msg.GameToJoin.serial, s.str(), ARRAY_SIZE(msg.GameToJoin.serial));
 
+	LANObsLog("RequestGameJoin: game not flagged in-progress; sending UDP MSG_REQUEST_JOIN to host=%08X",
+		msg.GameToJoin.gameIP);
 	sendMessage(&msg, ip);
 
 	m_pendingAction = ACT_JOIN;
 	m_expiration = timeGetTime() + m_actionTimeout;
+	// Arm the once-a-second retransmit (see update()).
+	m_pendingResendMsg = msg;
+	m_pendingResendIP = ip;
+	m_nextResendMs = timeGetTime() + 1000;
 }
 
 void LANAPI::RequestGameJoinDirectConnect(UnsignedInt ipaddress)
@@ -677,6 +860,10 @@ void LANAPI::RequestGameJoinDirectConnect(UnsignedInt ipaddress)
 
 	m_pendingAction = ACT_JOINDIRECTCONNECT;
 	m_expiration = timeGetTime() + m_actionTimeout;
+	// Arm the once-a-second retransmit (see update()).
+	m_pendingResendMsg = msg;
+	m_pendingResendIP = ipaddress;
+	m_nextResendMs = timeGetTime() + 1000;
 }
 
 void LANAPI::RequestGameLeave()
@@ -743,6 +930,12 @@ void LANAPI::RequestHasMap()
 	if (m_inLobby || !m_currentGame)
 		return;
 
+	// Direct-connect parses can leave us temporarily unmatched in the slot
+	// list (our slot carries the NAT-external IP until restored); reporting
+	// from getSlot(-1) would read garbage.
+	if (m_currentGame->getLocalSlotNum() < 0)
+		return;
+
 	LANMessage msg;
 	fillInLANMessage(&msg);
 	msg.messageType = LANMessage::MSG_MAP_AVAILABILITY;
@@ -788,7 +981,19 @@ void LANAPI::RequestChat(UnicodeString message, ChatType format)
 	msg.messageType = LANMessage::MSG_CHAT;
 	msg.Chat.chatType = format;
 	wcslcpy(msg.Chat.message, message.str(), ARRAY_SIZE(msg.Chat.message));
-	sendMessage(&msg);
+	if (!m_inLobby && m_currentGame != nullptr && m_currentGame->getIsDirectConnect() && !AmIHost())
+	{
+		// Online game room, joiner side: send to the HOST only. The host
+		// relays every joiner's chat to the other joiners (handleChat), and
+		// since the guest mesh joiners can also reach each other directly, a
+		// broadcast here made every other joiner see the line twice: once
+		// from us, once relayed (2026-09-02 online night, every guest log).
+		sendMessage(&msg, m_currentGame->getIP(0));
+	}
+	else
+	{
+		sendMessage(&msg);
+	}
 
 	OnChat(m_name, m_localIP, message, format);
 }
@@ -801,8 +1006,19 @@ void LANAPI::RequestGameStart()
 	LANMessage msg;
 	msg.messageType = LANMessage::MSG_GAME_START;
 	fillInLANMessage(&msg);
+	// Ship the final options with the start order so every joiner loads from
+	// this exact slot state (see LANMessage::StartGame).
+	AsciiString finalOptions = GenerateGameOptionsString();
+	strlcpy(msg.StartGame.options, finalOptions.str(), ARRAY_SIZE(msg.StartGame.options));
+	// The start order is a single UDP datagram per peer; a peer that misses
+	// it is left behind in the lobby while everyone else loads. Receivers
+	// ignore repeats (isGameInProgress guard), so send it a few times.
 	sendMessage(&msg);
 	m_transport->update(); // force a send
+	sendMessage(&msg);
+	m_transport->update();
+	sendMessage(&msg);
+	m_transport->update();
 
 	OnGameStart();
 }
@@ -1300,4 +1516,475 @@ void LANAPI::setIsActive(Bool isActive) {
 		}
 	}
 	m_isActive = isActive;
+}
+
+// =====================================================================
+// Observer mode
+// =====================================================================
+
+#include "Common/Recorder.h"
+#include "Common/FileSystem.h"
+#include "GameNetwork/MapDownloadHook.h"
+
+// Socket close for the relay fd path; LANAPI.cpp otherwise only touches
+// sockets through Transport/UDP wrappers.
+#ifdef _WIN32
+#define LANAPI_CLOSE_SOCKET(fd) ::closesocket(fd)
+#else
+#define LANAPI_CLOSE_SOCKET(fd) ::close(fd)
+#endif
+
+// Find a cached map by CRC. The MapCache is keyed by lowercased filename, but
+// the live-observer flow only knows the map by the CRC carried in the replay
+// header, so we scan. Returns the matching metadata, or NULL when no cached
+// map has that CRC (or the cache / crc is unusable).
+static const MapMetaData *findObserverMapByCRC(UnsignedInt crc)
+{
+	if (!TheMapCache || crc == 0)
+		return NULL;
+
+	for (MapCache::iterator it = TheMapCache->begin(); it != TheMapCache->end(); ++it)
+	{
+		if (it->second.m_CRC == crc)
+			return &it->second;
+	}
+	return NULL;
+}
+
+void LANAPI::startObserverHost()
+{
+	if (!AmIHost())
+	{
+		LANObsLog("startObserverHost: skipped, AmIHost()=0 (currentGame=%d)", m_currentGame ? 1 : 0);
+		return;
+	}
+	if (!m_observerHost)
+		m_observerHost = new LANObserverHost();
+	if (!m_observerHost->isRunning())
+	{
+		// New listen socket, so a new game: let it warn once again if
+		// spectators still cannot get in.
+		m_observeUnreachableReported = FALSE;
+		UnsignedShort port = (UnsignedShort)(NETWORK_BASE_PORT_NUMBER + LAN_OBSERVER_PORT_OFFSET);
+		if (!m_observerHost->start(port))
+		{
+			// Leave the failure visible; updateObserver re-attempts on a
+			// throttle while the game is in progress.
+			LANObsLog("startObserverHost: start(%u) FAILED; will retry from updateObserver", port);
+			DEBUG_LOG(("LANAPI::startObserverHost - failed to start on port %u", port));
+			delete m_observerHost;
+			m_observerHost = nullptr;
+			return;
+		}
+	}
+	// Wire the host's currently-recording .rep file path. If recording hasn't
+	// started yet (we may be a frame early), updateObserver refreshes the
+	// path on every tick via the same lookup.
+	if (TheRecorder)
+	{
+		AsciiString dir = RecorderClass::getReplayDir();
+		AsciiString file = RecorderClass::getLastReplayFileName();
+		file.concat(RecorderClass::getReplayExtention());
+		AsciiString full = dir;
+		full.concat(file);
+		m_observerHost->setReplayFile(full);
+		LANObsLog("startObserverHost: streaming replay '%s'", full.str());
+	}
+}
+
+void LANAPI::stopObserverHost()
+{
+	if (m_observerHost)
+	{
+		m_observerHost->stop();
+		delete m_observerHost;
+		m_observerHost = nullptr;
+	}
+}
+
+void LANAPI::stopObserverClient()
+{
+	if (m_observerClient)
+	{
+		// Tell the recorder so it stops waiting at EOF.
+		if (TheRecorder)
+			TheRecorder->setLiveObserverStreamOpen(FALSE);
+		m_observerClient->close();
+		delete m_observerClient;
+		m_observerClient = nullptr;
+	}
+	m_observerClientPlaybackKicked = FALSE;
+	m_observerProgressLastMs = 0;
+	m_observerProgressLastBytes = 0;
+}
+
+// Observer-client reconnect state. Written by RequestObserve, consumed by
+// updateObserver: if the TCP connect fails or the stream dies before
+// playback starts, we retry the connect a couple of times before surfacing
+// an error dialog. File statics (like the s_pendingObserve pair) so no
+// header change is needed.
+static UnsignedInt   s_observeHostIPHostOrder = 0;
+static UnsignedShort s_observeConnectPort     = 0;
+static Int           s_observeAttemptsLeft    = 0;
+static UnsignedInt   s_observeLastBytes       = 0;
+static UnsignedInt   s_observeLastProgressMs  = 0;
+// Give up on a connected-but-silent host after this long without a single
+// new byte. Generous because the host may still be inside its blocking map
+// load right after game start, during which nothing is pumped.
+static const UnsignedInt OBS_CLIENT_STALL_TIMEOUT_MS = 60000;
+
+void LANAPI::RequestObserve(UnsignedInt hostIP, UnsignedShort observerPort)
+{
+	LANObsLog("RequestObserve: hostIP=%08X port=%u", hostIP, observerPort);
+	if (observerPort == 0)
+	{
+		LANObsLog("RequestObserve: aborting, no observer port");
+		DEBUG_LOG(("LANAPI::RequestObserve - no observer port advertised by host"));
+		return;
+	}
+
+	s_observeHostIPHostOrder = hostIP;
+	s_observeConnectPort     = observerPort;
+	s_observeAttemptsLeft    = 2; // retries after the initial attempt
+	s_observeLastBytes       = 0;
+	s_observeLastProgressMs  = timeGetTime();
+
+	stopObserverClient();
+	m_observerClient = new LANObserverClient();
+
+	// Scratch file in the replay dir. Reuse a single name so we don't pile
+	// up junk; the file is rewritten each session. A fresh install that has
+	// never recorded a replay has no Replays\ directory yet, so create it
+	// or the fopen below fails with ENOENT.
+	if (TheFileSystem)
+		TheFileSystem->createDirectory(RecorderClass::getReplayDir());
+	AsciiString path = RecorderClass::getReplayDir();
+	path.concat("_live_observer");
+	path.concat(RecorderClass::getReplayExtention());
+
+	// hostIP arrives in HOST byte order from LANMessage payloads (consistent
+	// with how the rest of LANAPI deals with IPs). Sockets want network order.
+	UnsignedInt nbo = htonl(hostIP);
+
+	if (!m_observerClient->connect(nbo, observerPort, path))
+	{
+		DEBUG_LOG(("LANAPI::RequestObserve - connect kickoff failed"));
+		stopObserverClient();
+		return;
+	}
+	if (TheRecorder)
+		TheRecorder->setLiveObserverStreamOpen(TRUE);
+	m_observerClientPlaybackKicked = FALSE;
+	DEBUG_LOG(("LANAPI::RequestObserve - observing host %08X port %u", hostIP, observerPort));
+}
+
+// Make sure the map referenced by the just-buffered live-observer snapshot
+// exists locally before we start playback. The observer stream never carries
+// the .map itself; we only learn which map is being played from the replay
+// header's GameInfo string. If the map is missing, loadMap() later fails
+// silently into black/corrupt terrain, so we fetch it from the cncstats CDN
+// here (the same TheMapDownloadHook used by the LAN/WOL join path).
+//
+// Returns TRUE when the map is available (already present, freshly installed,
+// or we couldn't even determine the map and should let playback proceed and
+// report its own failure). Returns FALSE only when the map is genuinely
+// missing and could not be obtained, so the caller should abort the join.
+Bool LANAPI::ensureObserverMapAvailable(AsciiString relReplayPath)
+{
+	if (!TheRecorder || !TheMapCache)
+		return TRUE; // can't check; behave as before and let playback proceed
+
+	// Peek the replay header to learn the map + CRC. forPlayback=FALSE reads
+	// the header and closes the file again without arming playback, so the
+	// playbackFileLiveObserver() call that follows is unaffected.
+	RecorderClass::ReplayHeader header;
+	header.filename = relReplayPath;
+	header.forPlayback = FALSE;
+	if (!TheRecorder->readReplayHeader(header))
+	{
+		LANObsLog("ensureObserverMapAvailable: readReplayHeader failed for '%s'", relReplayPath.str());
+		return TRUE; // let playbackFileLiveObserver surface the real failure
+	}
+
+	// readReplayHeader resets its own GameInfo before returning, so re-parse
+	// the raw options string into a local GameInfo to read the map identity.
+	ReplayGameInfo info;
+	info.reset();
+	info.enterGame();
+	if (!ParseAsciiStringToGameInfo(&info, header.gameOptions))
+	{
+		LANObsLog("ensureObserverMapAvailable: GameInfo parse failed; proceeding");
+		return TRUE;
+	}
+
+	AsciiString mapName = info.getMap();
+	UnsignedInt mapCRC  = info.getMapCRC();
+	Int         mapMask = info.getMapContentsMask();
+
+	// Already have it? CRC is the exact key; fall back to filename lookup.
+	if (findObserverMapByCRC(mapCRC) != NULL)
+		return TRUE;
+	if (!mapName.isEmpty() && TheMapCache->findMap(mapName) != NULL)
+		return TRUE;
+
+	// Missing locally. We need a CRC and the download hook to fetch it; the
+	// hook is null in classic Generals builds, in which case we can't recover.
+	if (mapCRC == 0 || mapName.isEmpty() || TheMapDownloadHook == NULL)
+	{
+		LANObsLog("ensureObserverMapAvailable: map '%s' missing and not fetchable (crc=%u hook=%d)",
+			mapName.str(), mapCRC, TheMapDownloadHook != NULL);
+		return FALSE;
+	}
+
+	// Let the user know the join is fetching the map (the download is a
+	// blocking call, same as the lobby map-vote / join paths).
+	UnicodeString msg;
+	msg.format(L"Downloading map for observer playback...");
+	OnChat(L"", 0, msg, LANCHAT_SYSTEM);
+
+	// The host's map name is a full relative .map path, so it doubles as the
+	// install path (mirrors the LAN join precedent in LANAPICallbacks.cpp).
+	// 0x7E = all sidecars (preview|ini|str|solo|assets|readme); use the
+	// header's mask when present, otherwise ask for everything. The hook
+	// CRC-verifies the bytes and refreshes the cache on success.
+	UnsignedInt mask = (mapMask != 0) ? (UnsignedInt)mapMask : 0x7E;
+	if (!TheMapDownloadHook(mapName, mapCRC, mask))
+	{
+		LANObsLog("ensureObserverMapAvailable: CDN download failed (crc=%u path='%s')",
+			mapCRC, mapName.str());
+		return FALSE;
+	}
+
+	// Confirm the refreshed cache now sees the installed map.
+	if (findObserverMapByCRC(mapCRC) != NULL)
+		return TRUE;
+	if (TheMapCache->findMap(mapName) != NULL)
+		return TRUE;
+
+	LANObsLog("ensureObserverMapAvailable: map still not in cache after download (crc=%u)", mapCRC);
+	return FALSE;
+}
+
+void LANAPI::updateObserver()
+{
+	// Host self-heal: if we're hosting an in-progress LAN game, the observer
+	// listen socket must be up. It can be missing because the bind failed at
+	// game-start time (port still held by another process/instance) or
+	// because startObserverHost never ran; either way, re-attempt on a
+	// throttle so a transient failure doesn't permanently kill observing.
+	// While it is up, refresh the streamed replay path every tick: at
+	// OnGameStart time recording hasn't begun yet, so the path wired then
+	// can predate the recorder's actual file.
+	if (m_currentGame && m_currentGame->isGameInProgress() && AmIHost())
+	{
+		if (!m_observerHost || !m_observerHost->isRunning())
+		{
+			static UnsignedInt s_lastListenRetryMs = 0;
+			UnsignedInt now = timeGetTime();
+			if (s_lastListenRetryMs == 0 || now - s_lastListenRetryMs >= 5000u)
+			{
+				s_lastListenRetryMs = now;
+				LANObsLog("updateObserver: observer listen socket not running; attempting start");
+				startObserverHost();
+			}
+		}
+		else if (TheRecorder)
+		{
+			AsciiString file = RecorderClass::getLastReplayFileName();
+			file.concat(RecorderClass::getReplayExtention());
+			AsciiString full = RecorderClass::getReplayDir();
+			full.concat(file);
+			m_observerHost->setReplayFile(full);
+		}
+	}
+
+	if (m_observerHost)
+	{
+		// Capture up to a handful of names per tick for chat notification.
+		UnicodeString newNames[4];
+		Int newCount = m_observerHost->update(newNames, 4);
+		for (Int i = 0; i < newCount; ++i)
+		{
+			UnicodeString msg;
+			msg.format(L"%s is now observing the game.", newNames[i].str());
+			OnChat(L"", 0, msg, LANCHAT_SYSTEM);
+		}
+	}
+
+	if (m_observerClient)
+	{
+		m_observerClient->update();
+
+		// Track byte progress for the stall guard.
+		if (m_observerClient->bytesReceived() != s_observeLastBytes)
+		{
+			s_observeLastBytes      = m_observerClient->bytesReceived();
+			s_observeLastProgressMs = timeGetTime();
+		}
+
+		// A connected host that never sends anything (not even the 4-byte
+		// snapshot header) is as dead as a failed connect; fold it into the
+		// same retry path below by treating it as a failed attempt.
+		Bool stalled = (m_observerClient->state() == LANObserverClient::STATE_BUFFERING
+		    && timeGetTime() - s_observeLastProgressMs > OBS_CLIENT_STALL_TIMEOUT_MS);
+
+		// Connect failed, stream died before playback started, or stalled:
+		// retry the TCP connect (each attempt has its own handshake deadline),
+		// then surface an error dialog instead of silently doing nothing.
+		// STATE_IDLE here means a retry's connect() kickoff itself failed
+		// (socket/file error); treat it like a failed attempt too.
+		if (!m_observerClientPlaybackKicked
+		    && (m_observerClient->state() == LANObserverClient::STATE_CLOSED
+		        || m_observerClient->state() == LANObserverClient::STATE_IDLE
+		        || stalled))
+		{
+			if (s_observeAttemptsLeft > 0 && s_observeConnectPort != 0)
+			{
+				--s_observeAttemptsLeft;
+				LANObsLog("updateObserver: observer connect %s; retrying (%d attempt(s) left)",
+					stalled ? "stalled" : "failed", s_observeAttemptsLeft);
+				OnChat(L"", 0, TheGameText->FETCH_OR_SUBSTITUTE("LAN:ObserveRetrying",
+					L"Observer connection failed; retrying..."), LANCHAT_SYSTEM);
+				AsciiString path = RecorderClass::getReplayDir();
+				path.concat("_live_observer");
+				path.concat(RecorderClass::getReplayExtention());
+				s_observeLastBytes      = 0;
+				s_observeLastProgressMs = timeGetTime();
+				m_observerClient->connect(htonl(s_observeHostIPHostOrder), s_observeConnectPort, path);
+				if (TheRecorder)
+					TheRecorder->setLiveObserverStreamOpen(TRUE);
+				return;
+			}
+			LANObsLog("updateObserver: observer connect failed after all retries; giving up");
+
+			// Tell the host, but only when the TCP handshake never completed
+			// once. That case means our SYNs never got answered while the
+			// host's listen socket was bound and healthy, which from the
+			// host's side is invisible: it sees no connection attempt at all.
+			// The lobby UDP path is a separate protocol and port and is
+			// routinely fine when the stream port is blocked, which is exactly
+			// how 2026-08-21 went. A stall or a mid-stream close means we did
+			// connect, so inbound works and this would be a false alarm.
+			if (!m_observerClient->everConnected() && s_observeHostIPHostOrder != 0)
+			{
+				// Host byte order throughout, like every other IP in a
+				// LANMessage payload; only the socket calls use htonl.
+				LANMessage failMsg;
+				fillInLANMessage( &failMsg );
+				failMsg.messageType                 = LANMessage::MSG_OBSERVE_UNREACHABLE;
+				failMsg.ObserveFailure.gameIP       = s_observeHostIPHostOrder;
+				failMsg.ObserveFailure.observerPort = s_observeConnectPort;
+				failMsg.ObserveFailure.attemptMs    = timeGetTime() - s_observeLastProgressMs;
+				LANObsLog("updateObserver: reporting unreachable observer port %u to host %08X",
+					s_observeConnectPort, s_observeHostIPHostOrder);
+				sendMessage(&failMsg, s_observeHostIPHostOrder);
+			}
+
+			stopObserverClient();
+			UnicodeString title = TheGameText->fetch("LAN:JoinFailed");
+			UnicodeString body  = TheGameText->FETCH_OR_SUBSTITUTE("LAN:ObserveConnectFailedBody",
+				L"Could not connect to the host's observer stream. Check that the host machine's firewall allows the game and that the host is running the same game version.");
+			MessageBoxOk(title, body, NULL);
+			return;
+		}
+
+		// Periodic snapshot-download progress as a lobby chat line so the user
+		// can see the join is doing something during the catch-up wait, which
+		// scales with game length. Throttled to once per second and only while
+		// the snapshot is still arriving (BUFFERING + non-zero declared size).
+		if (m_observerClient->state() == LANObserverClient::STATE_BUFFERING
+		    && m_observerClient->snapshotSize() > 0)
+		{
+			UnsignedInt now      = timeGetTime();
+			UnsignedInt received = m_observerClient->bytesReceived();
+			UnsignedInt total    = m_observerClient->snapshotSize();
+			Bool timeElapsed = (now - m_observerProgressLastMs) >= 1000u;
+			if (m_observerProgressLastMs == 0 || timeElapsed)
+			{
+				UnsignedInt pct  = total ? (UnsignedInt)((UnsignedInt64)received * 100u / total) : 0;
+				Real receivedMB  = (Real)received / (1024.0f * 1024.0f);
+				Real totalMB     = (Real)total    / (1024.0f * 1024.0f);
+				UnicodeString msg;
+				msg.format(L"Downloading replay: %.1f / %.1f MB (%u%%)",
+					receivedMB, totalMB, pct);
+				OnChat(L"", 0, msg, LANCHAT_SYSTEM);
+				m_observerProgressLastMs    = now;
+				m_observerProgressLastBytes = received;
+			}
+		}
+
+		// Transition from snapshot-ready -> kick off playback (once).
+		if (!m_observerClientPlaybackKicked
+		    && m_observerClient->state() == LANObserverClient::STATE_READY
+		    && TheRecorder)
+		{
+			AsciiString path = m_observerClient->localFilePath();
+			// playbackFile expects a path relative to getReplayDir(); strip
+			// the dir prefix if present.
+			AsciiString dir = RecorderClass::getReplayDir();
+			AsciiString rel = path;
+			if (path.startsWith(dir.str()))
+				rel = path.str() + dir.getLength();
+
+			LANObsLog("kick playback: localPath='%s' rel='%s' snapshot=%u written=%u",
+				path.str(), rel.str(),
+				m_observerClient->snapshotSize(), m_observerClient->bytesReceived());
+
+			// Make sure we actually have the map being played before starting
+			// playback; pull it from the cncstats CDN if not. Failing here
+			// (vs. blindly starting playback) avoids the silent black-terrain
+			// loadMap() failure when the observer lacks the map.
+			if (!ensureObserverMapAvailable(rel))
+			{
+				LANObsLog("observer map unavailable; aborting join");
+				DEBUG_LOG(("LANAPI - observer map unavailable; aborting"));
+				stopObserverClient();
+				m_observerClientPlaybackKicked = TRUE; // don't re-run the gate
+				UnicodeString title = TheGameText->fetch("LAN:JoinFailed");
+				UnicodeString body  = TheGameText->fetch("LAN:ObserveMapMissingBody");
+				MessageBoxOk(title, body, NULL);
+				return;
+			}
+
+			DEBUG_LOG(("LANAPI - observer kicking playbackFileLiveObserver('%s')", rel.str()));
+			if (TheRecorder->playbackFileLiveObserver(rel))
+			{
+				LANObsLog("playbackFileLiveObserver returned TRUE");
+				m_observerClient->markPlaybackStarted();
+				m_observerClientPlaybackKicked = TRUE;
+			}
+			else
+			{
+				LANObsLog("playbackFileLiveObserver returned FALSE; aborting");
+				DEBUG_LOG(("LANAPI - observer playbackFileLiveObserver failed; aborting"));
+				stopObserverClient();
+				// Surface the failure so the user isn't left staring at the
+				// lobby wondering what happened. Most common cause: the host's
+				// snapshot was incomplete or the .rep prefix didn't parse.
+				UnicodeString title = TheGameText->fetch("LAN:JoinFailed");
+				UnicodeString body  = TheGameText->fetch("LAN:ObserveFailedBody");
+				MessageBoxOk(title, body, NULL);
+			}
+		}
+
+		// Stream closed: tell the recorder so it stops waiting at EOF.
+		if (m_observerClient && m_observerClient->isStreamClosed())
+		{
+			if (TheRecorder)
+				TheRecorder->setLiveObserverStreamOpen(FALSE);
+			// Don't delete the client object yet; the recorder may still be
+			// reading the buffered file. Cleanup happens at reset/dtor.
+		}
+
+		// User exited the live-observer playback (ESC, alt-F4, replay-end
+		// after stream closure, etc.). Clean up the network client now so
+		// the next observe attempt starts from a fresh state.
+		if (m_observerClientPlaybackKicked
+		    && TheRecorder
+		    && !TheRecorder->isLiveObserverMode())
+		{
+			DEBUG_LOG(("LANAPI - recorder exited LIVE_OBSERVER, dropping observer client"));
+			stopObserverClient();
+		}
+	}
 }

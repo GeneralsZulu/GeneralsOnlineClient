@@ -434,6 +434,34 @@ void DebugInit(int flags)
 // DebugLog
 // ----------------------------------------------------------------------------
 #ifdef DEBUG_LOGGING
+// TheSuperHackers @tweak Known high-volume, low-signal log lines. Each of these
+// fires hundreds of times per launch (per-BIG-file open/load, function-lexicon
+// address collisions, and the per-string "missing string" dump) and dominates
+// the debug log without helping diagnose gameplay/desync issues. Dropping them
+// here keeps the per-match debug log small enough to upload. Compared as
+// prefixes against the formatted message (after any prepended tick prefix).
+static bool isSuppressedLogLine(const char *msg)
+{
+	static const char *const noisePrefixes[] = {
+		"WARNING! Function lexicon entries match same address!",
+		"Win32BIGFileSystem::openArchiveFile - ",
+		"Win32BIGFileSystem::loadBigFilesFromDirectory - ",
+		"StdBIGFileSystem::openArchiveFile - ",
+		"StdBIGFileSystem::loadBigFilesFromDirectory - ",
+		"*** MISSING: ",
+	};
+	if (msg == nullptr)
+		return false;
+	const size_t count = sizeof(noisePrefixes) / sizeof(noisePrefixes[0]);
+	size_t i;
+	for (i = 0; i < count; ++i)
+	{
+		if (strncmp(msg, noisePrefixes[i], strlen(noisePrefixes[i])) == 0)
+			return true;
+	}
+	return false;
+}
+
 /**
 	Print a string to the log file and/or console.
 */
@@ -458,6 +486,13 @@ void DebugLog(const char *format, ...)
 		MessageBoxWrapper("String too long for debug buffer", "", MB_OK|MB_TASKMODAL);
 
 	whackFunnyCharacters(theBuffer);
+
+	// Drop known high-volume log spam. `offset` is where the formatted message
+	// begins (after any prepended tick prefix), so the filter matches the
+	// message text regardless of the prefix setting.
+	if (isSuppressedLogLine(theBuffer + offset))
+		return;
+
 	doLogOutput(theBuffer);
 }
 
@@ -745,6 +780,39 @@ static void TriggerMiniDump()
 
 	MiniDumper::shutdownMiniDumper();
 #endif
+}
+
+
+// Zulu: fatal error with a specific, actionable message for the user.
+//
+// ReleaseCrash() and ReleaseCrashLocalized() are the two existing fatal-error
+// surfaces, but neither works for a broken install: ReleaseCrash() shows the
+// generic "You have encountered a serious error" text (which tells the user
+// nothing about what to fix), and ReleaseCrashLocalized() fetches its strings
+// through TheGameText, which is exactly what is unavailable when our data
+// package is missing. So this one takes plain, already-localized-to-English
+// text and shows it verbatim. Does not return.
+void ReleaseFatalError(const char *title, const char *message)
+{
+	DEBUG_LOG(("FATAL: %s: %s", title, message));
+
+	fprintf(stderr, "\nFATAL: %s\n%s\n", title, message);
+	fflush(stderr);
+
+	if (!DX8Wrapper_IsWindowed) {
+		if (ApplicationHWnd) {
+			ShowWindow(ApplicationHWnd, SW_HIDE);
+		}
+	}
+
+	// A modal box would wedge an unattended headless run forever - the text above is
+	// the report in that case.
+	const Bool headless = (TheGlobalData != nullptr && TheGlobalData->m_headless);
+	if (!headless) {
+		::MessageBox(nullptr, message, title, MB_OK|MB_SYSTEMMODAL|MB_ICONERROR);
+	}
+
+	_exit(1);
 }
 
 
