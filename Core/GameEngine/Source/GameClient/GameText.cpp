@@ -1553,8 +1553,11 @@ UnicodeString GameTextManager::fetchOrSubstituteFormatVA( const Char *label, con
 	UnicodeString str = fetch(label, &exists);
 	if (exists)
 	{
+		// TheSuperHackers @bugfix bill-rich 24/09/2026 Format the string that was just fetched, not the
+		// empty one being built: every label that actually exists returned an empty string, so a
+		// message only appeared when its label was missing and the hardcoded fallback was used.
 		UnicodeString strFormat;
-		strFormat.format_va(strFormat.str(), args);
+		strFormat.format_va(str.str(), args);
 		str = strFormat;
 	}
 	else
