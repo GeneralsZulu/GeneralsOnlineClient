@@ -1,0 +1,228 @@
+// GeneralsExtras.str
+// Additional GUI strings shipped with the Zulu mod. Loaded by
+// GameTextManager::initAdditionalStringFile() after loadMods, augmenting
+// (never overriding) Generals.csf. Format mirrors the standard .str format:
+//   Label
+//   "Text"
+//   END
+
+GUI:Randomize
+"RANDOMIZE"
+END
+
+GUI:Search
+"Search:"
+END
+
+GUI:None
+" "
+END
+
+GUI:ResumeFromReplay
+"RESUME"
+END
+
+GUI:MapVote
+"RADARVAN PICK"
+END
+
+GUI:MapVoteNotFound
+"Radarvan picked '%hs' but that map isn't installed locally."
+END
+
+GUI:MapVoteFailed
+"Radarvan map pick failed: %hs"
+END
+
+GUI:MapVoteApplied
+"Radarvan picked '%hs'."
+END
+
+GUI:MapVoteDownloading
+"Radarvan picked '%hs'. Downloading it from the map server..."
+END
+
+GUI:ResumeArmed
+"Resume armed. The next game start will continue the replay."
+END
+
+GUI:ResumeArmedStatus
+"Resume armed: %hs (handoff at frame %u)."
+END
+
+GUI:ResumeCountMismatch
+"Lobby has %d players but the replay has %d. Match the lobby roster to the replay before resuming."
+END
+
+GUI:ResumeHandoffComplete
+"Replay handoff complete. Game continues live."
+END
+
+GUI:ResumeHeaderUnreadable
+"Replay file could not be read."
+END
+
+GUI:ResumeHostMismatch
+"Lobby host '%ls' does not match replay host '%ls'."
+END
+
+GUI:ResumeMissingPlayer
+"Replay player '%ls' is not present in the lobby."
+END
+
+GUI:ResumeNoLobby
+"You must be hosting a LAN lobby to arm a resume."
+END
+
+GUI:ResumeReady
+"Replay ready to resume."
+END
+
+GUI:ResumeTooShort
+"Replay is too short to resume from."
+END
+
+GUI:ResumeVersionMismatch
+"Replay was recorded with a different game version."
+END
+
+Color:Maroon
+"Maroon"
+END
+
+Color:Lime
+"Lime"
+END
+
+Color:Brown
+"Brown"
+END
+
+Color:MetallicGrey
+"Metallic Grey"
+END
+
+Color:Silver
+"Silver"
+END
+
+Color:Black
+"Black"
+END
+
+Color:Violet
+"Violet"
+END
+
+GUI:TacticalAI
+"Tactical AI"
+END
+
+GUI:FilterPlayers
+"Players:"
+END
+
+GUI:FilterPlayersAny
+"Any"
+END
+
+GUI:FilterPlayersFmt
+"%d Players"
+END
+
+LAN:OfferObserveBody
+"This game is already in progress. Watch it as an observer?"
+END
+
+LAN:JoinFailed
+"Join Failed"
+END
+
+LAN:ObserveFailedBody
+"Could not start observing the game. The host's replay may be incomplete; try again in a moment."
+END
+
+LAN:ObserveRetrying
+"Observer connection failed; retrying..."
+END
+
+LAN:ObserveConnectFailedBody
+"Could not connect to the host's observer stream. Check that the host machine's firewall allows the game and that the host is running the same game version."
+END
+
+LAN:ObserveMapMissingBody
+"Could not start observing the game. You do not have the map being played and it could not be downloaded."
+END
+
+GUI:LiveObserverNoFF
+"Fast Forward is unavailable while observing a live game."
+END
+
+// ScoreScreen.wnd column headers. Each cell stacks a raw count on top of
+// the dollar-value aggregate ($X.XXk with a percent delta from the column
+// average), so the headers stay short and the "$" in the value line
+// disambiguates which number is which.
+GUI:ScoreUnitBuilt
+"Units Built"
+END
+
+GUI:ScoreUnitLost
+"Units Lost"
+END
+
+GUI:ScoreUnitKilled
+"Units Killed"
+END
+
+GUI:ScoreBldgBuilt
+"Buildings Built"
+END
+
+GUI:ScoreBldgLost
+"Buildings Lost"
+END
+
+GUI:ScoreBldgKilled
+"Buildings Killed"
+END
+
+// Repurposes the retail-vestigial Score column to show
+// (value killed) / (income) * 100, or "-" when no income was earned.
+GUI:ScoreEfficiency
+"Efficiency"
+END
+
+// LAN lobby "Enforce Random" checkbox: while checked, the host locks every
+// occupied slot's faction and team to Random (color stays selectable). The
+// Randomize button can still assign concrete factions/teams afterwards.
+GUI:EnforceRandom
+"Enforce Random"
+END
+
+TOOLTIP:EnforceRandom
+"Lock all players to random faction and random team"
+END
+
+// Quit button on the multiplayer load screen: leaves a game a peer is never going to
+// finish loading, instead of waiting out the load timeout.
+GUI:LoadScreenQuit
+"QUIT"
+END
+
+// Observer info panel rows. The stock strings ("Units Destroyed", "Units Lost") wrap onto a
+// second line inside the panel's one-line rows, so the panel uses these short labels instead.
+CONTROLBAR:ObsLabelUnits
+"Units"
+END
+
+CONTROLBAR:ObsLabelBuildings
+"Buildings"
+END
+
+CONTROLBAR:ObsLabelKills
+"Kills"
+END
+
+CONTROLBAR:ObsLabelLosses
+"Losses"
+END
