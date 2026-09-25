@@ -45,13 +45,11 @@ Int GameMain()
 	TheGameEngine = CreateGameEngine();
 	TheGameEngine->init();
 
-	if (TheGlobalData->m_exportStats && (!TheGlobalData->m_headless || TheGlobalData->m_simulateReplays.empty()))
-	{
-		printf("ERROR: -exportStats requires headless replay mode (-headless -replay <file>).\n");
-		fflush(stdout);
-		exitcode = 1;
-	}
-	else if (!TheGlobalData->m_simulateReplays.empty())
+	// Stats export is no longer headless-only: live LAN/online matches collect
+	// and ship their own telemetry from RecorderClass::stopRecording, so
+	// m_exportStats is on by default and a normal launch must not be rejected
+	// for it. -noStats still turns the whole thing off.
+	if (!TheGlobalData->m_simulateReplays.empty())
 	{
 		exitcode = ReplaySimulation::simulateReplays(TheGlobalData->m_simulateReplays, TheGlobalData->m_simulateReplayJobs);
 	}

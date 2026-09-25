@@ -52,6 +52,7 @@
 #include "Common/RandomValue.h"
 #include "Common/Recorder.h"
 #include "Common/StatsCollector.h"
+#include "Common/StatsExporter.h"
 #include "Common/ThingFactory.h"
 #include "Common/Team.h"
 #include "Common/ThingTemplate.h"
@@ -2473,6 +2474,32 @@ void GameLogic::tryStartNewGame( Bool loadingSaveGame )
 			TheStatsCollector->reset();
 		}
 
+		// Stats export: kick off live-game collection for every client in a LAN
+		// or online multiplayer game (host and non-host alike). Because the
+		// engine is deterministic lockstep, every client computes identical
+		// game state and produces equivalent stats / replays; uploading from
+		// all of them gives cncstats N copies per match rather than a single
+		// host-sourced upload, which is the intent.
+		//
+		// GeneralsOnline matches run as GAME_INTERNET (GameLogic::startNewGame
+		// assigns TheGameInfo = TheNGMPGame for them), so this covers both the
+		// ported LAN path and GO online play.
+		//
+		// Skirmish (vs. AI), replay viewing, live spectating, single-player
+		// campaign, and the shell are still skipped: replays would duplicate
+		// the original game's stats, and skirmish/single-player aren't
+		// competitive matches. A resumed-from-replay game records a fresh
+		// replay and runs in its original multiplayer mode, so it collects
+		// normally. The headless-replay path is driven separately by
+		// ReplaySimulation, which calls Begin/Collect/Export itself; that path
+		// runs in GAME_REPLAY mode so this hook stays inactive.
+		if (TheGlobalData->m_exportStats
+			&& (m_gameMode == GAME_LAN || m_gameMode == GAME_INTERNET)
+			&& TheGameInfo != nullptr)
+		{
+			StatsExporterBeginRecording();
+		}
+
 		///		ShowControlBar(FALSE);
 
 				// explicitly set the Control bar to Observer Mode
@@ -4097,6 +4124,12 @@ void GameLogic::update()
 	{
 		TheStatsCollector->update();
 	}
+
+	// Stats export snapshot. Self-gates on the exporter's active flag, so this
+	// is a cheap no-op unless StatsExporterBeginRecording was called in
+	// startNewGame (a live LAN/online match) or by ReplaySimulation (headless
+	// replay).
+	StatsExporterCollectSnapshot();
 
 	// Update the Recorder
 	if (!recorderUpdatedAtTop)

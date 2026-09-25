@@ -426,6 +426,8 @@ Int parseHeadless(char *args[], int num)
 
 Int parseExportStats(char *args[], int num)
 {
+	// Stats export is on by default; this flag is kept for backward
+	// compatibility with the headless-replay invocation pattern.
 	TheWritableGlobalData->m_exportStats = TRUE;
 	return 1;
 }

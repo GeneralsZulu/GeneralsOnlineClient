@@ -56,7 +56,13 @@
 #include "Common/RandomValue.h"
 #include "Common/CRCDebug.h"
 #include "Common/OptionPreferences.h"
+#include "Common/ReleaseLog.h"
+#include "Common/StatsExporter.h"
+#include "Common/StatsUploader.h"
 #include "Common/version.h"
+#include "GameClient/MapUtil.h"
+#include "GameNetwork/GameInfo.h"
+#include "GameNetwork/LANObserverStream.h"
 #include "../NGMPGame.h"
 #include "../OnlineServices_Init.h"
 
@@ -68,6 +74,35 @@ extern NGMPGame* TheNGMPGame;
 #else
 #define RESUME_LOG(...) DEBUG_LOG((__VA_ARGS__))
 #endif
+
+// UTF-8 encode a UnicodeString onto an AsciiString. Used for the telemetry
+// uploads, whose form fields and headers carry the player's lobby name; the
+// servers expect UTF-8 rather than the engine's UTF-16.
+static void appendUtf8(AsciiString& out, const UnicodeString& name)
+{
+	const WideChar *p = name.str();
+	if (p == nullptr)
+		return;
+	for (; *p != L'\0'; ++p)
+	{
+		unsigned int c = static_cast<unsigned int>(*p);
+		if (c < 0x80)
+		{
+			out.concat(static_cast<char>(c));
+		}
+		else if (c < 0x800)
+		{
+			out.concat(static_cast<char>(0xC0 | (c >> 6)));
+			out.concat(static_cast<char>(0x80 | (c & 0x3F)));
+		}
+		else
+		{
+			out.concat(static_cast<char>(0xE0 | (c >> 12)));
+			out.concat(static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
+			out.concat(static_cast<char>(0x80 | (c & 0x3F)));
+		}
+	}
+}
 
 constexpr const char s_genrep[] = "GENREP";
 constexpr const UnsignedInt replayBufferBytes = 8192;
@@ -1094,6 +1129,11 @@ void RecorderClass::startRecording(GameDifficulty diff, Int originalGameMode, In
  */
 void RecorderClass::stopRecording() {
 	logGameEnd();
+
+	// Release diagnostics (always compiled): mark the end of the match in the
+	// uploadable release log.
+	ReleaseLog("=== Match end: frame=%d desync=%d ===",
+		TheGameLogic ? TheGameLogic->getFrame() : -1, (int)m_wasDesync);
 	if (TheNetwork)
 	{
 		//if (TheLAN)
@@ -1124,6 +1164,150 @@ void RecorderClass::stopRecording() {
 		}
 #endif
 	}
+
+	// Project telemetry (cncstats + radarvan): stats JSON, the replay, this
+	// client's per-match logs, and any map assets the server is missing.
+	//
+	// Fires for every client in a LAN/online multiplayer game - the conditions
+	// under which StatsExporterBeginRecording was called in
+	// GameLogic::startNewGame. For replay viewers, live spectators and
+	// single-player campaigns the exporter was never started, so
+	// StatsExporterIsActive() is FALSE and every channel below is skipped.
+	//
+	// The replay file has already been closed above, so the bytes on disk are
+	// complete before the worker snapshots them.
+	if (!m_fileName.isEmpty())
+	{
+		// Capture this first: ExportGameStatsJSON clears the active flag as it
+		// finishes, so asking afterwards would always say FALSE.
+		const bool wasCollecting = StatsExporterIsActive();
+
+		// Write the stats JSON on this (main) thread - it reads live game
+		// state - but defer the actual upload to the background telemetry
+		// worker below, so end-of-match never blocks on HTTP.
+		const AsciiString statsFilePath = ExportGameStatsJSON(getReplayDir(), m_fileName, FALSE);
+
+		// Telemetry uploads only fire if the game had at least two human
+		// players. Mirrors the gate inside ExportGameStatsJSON for the stats
+		// upload, so all channels behave consistently. Logged once here so the
+		// skip is visible when debugging upload behaviour.
+		const bool hasMinHumans = StatsExporterHasMinHumansForUpload();
+		if (wasCollecting && !hasMinHumans)
+		{
+			printf("[telemetry] Skipping replay/map upload: fewer than 2 human players\n");
+			fflush(stdout);
+		}
+
+		// Local player identity for the uploads below (replay + logs). The
+		// lobby display name is UTF-8 encoded for the replay upload's optional
+		// form field; the slot number is a stable fallback id for the
+		// per-player log grouping. Computed once, under the shared gate.
+		AsciiString playerNameUtf8;
+		Int localPlayerSlot = -1;
+		if (wasCollecting && hasMinHumans && TheGameInfo != nullptr)
+		{
+			localPlayerSlot = TheGameInfo->getLocalSlotNum();
+			if (localPlayerSlot >= 0)
+			{
+				const GameSlot *s = TheGameInfo->getConstSlot(localPlayerSlot);
+				if (s != nullptr)
+					appendUtf8(playerNameUtf8, s->getName());
+			}
+		}
+
+		// Gather every channel into one request and hand it to the background
+		// worker. Everything below only reads main-thread-only state
+		// (TheGameInfo / TheMapCache / TheGlobalData); StartMatchTelemetryUpload
+		// snapshots the volatile files (replay, logs) before it returns, so the
+		// next game is free to overwrite them while the upload is in flight.
+		if (wasCollecting && hasMinHumans)
+		{
+			MatchTelemetryUpload up;
+			up.seed = GetGameLogicRandomSeed();
+			up.mapCRC = 0;
+			up.mapContentsMask = 0;
+
+			// Stats: the gzipped JSON we just wrote (upload deferred here).
+			if (!TheGlobalData->m_statsUrl.isEmpty() && !statsFilePath.isEmpty())
+			{
+				up.statsUrl = TheGlobalData->m_statsUrl;
+				up.statsFilePath = statsFilePath;
+			}
+
+			// Replay.
+			if (!TheGlobalData->m_replayUrl.isEmpty())
+			{
+				AsciiString replayPath = getReplayDir();
+				replayPath.concat(m_fileName);
+				up.replayUrl = TheGlobalData->m_replayUrl;
+				up.replayFilePath = replayPath;
+				up.replayFileName = m_fileName;
+				up.playerNameUtf8 = playerNameUtf8;
+			}
+
+			// Per-match client logs. The server groups them under
+			// <seed>/<player>/, so every client's copy is retrievable together.
+			// The debug log only exists in logging builds; the observer log
+			// only when this client observed - absent files are skipped by the
+			// worker.
+			if (!TheGlobalData->m_logsUrl.isEmpty())
+			{
+				AsciiString playerId = playerNameUtf8;
+				if (playerId.isEmpty())
+					playerId.format("slot%d", localPlayerSlot);
+				up.logsUrl = TheGlobalData->m_logsUrl;
+				up.playerId = playerId;
+#ifdef DEBUG_LOGGING
+				up.logFilePaths.push_back(AsciiString(DebugGetLogFileName())); // absolute path
+#endif
+				up.logFilePaths.push_back(AsciiString(LANObsGetLogFileName()));   // observer log, in the user data dir
+				up.logFilePaths.push_back(AsciiString(ReleaseGetLogFileName()));  // always-on release log, same dir
+				// The observer log from before the last relaunch. Absent on a
+				// first run, and skipped silently when so. Worth carrying
+				// because a player whose spectating just broke restarts the
+				// game, which is precisely what truncates the log that would
+				// have explained it.
+				//
+				// Once per run, though: it is a snapshot of a file that is
+				// already closed and can no longer change, so every match after
+				// the first would re-upload the same bytes under a new match
+				// seed.
+				static Bool s_prevObserverLogSent = FALSE;
+				if (!s_prevObserverLogSent)
+				{
+					s_prevObserverLogSent = TRUE;
+					up.logFilePaths.push_back(AsciiString(LANObsGetPrevLogFileName()));
+				}
+			}
+
+			// Map check + conditional map upload. Look up the played map's CRC
+			// from the cache; the worker asks the server whether it already has
+			// it and, if not, uploads the .map plus every sidecar on disk.
+			// 0xFE = all sidecar bits set (2|4|8|16|32|64).
+			if (!TheGlobalData->m_mapCheckUrl.isEmpty() && TheMapCache != nullptr)
+			{
+				AsciiString mapName = TheGlobalData->m_mapName;
+				const MapMetaData *md = TheMapCache->findMap(mapName);
+				if (md == nullptr || md->m_CRC == 0)
+				{
+					printf("[map] No cached metadata for \"%s\", skipping map check\n", mapName.str());
+					fflush(stdout);
+				}
+				else
+				{
+					up.mapCheckUrl = TheGlobalData->m_mapCheckUrl;
+					up.mapAssetsUrl = TheGlobalData->m_mapAssetsUrl;
+					up.mapUploadUrl = TheGlobalData->m_mapUploadUrl;
+					up.mapCRC = md->m_CRC;
+					up.mapFilePath = md->m_fileName;
+					up.mapContentsMask = 0xFE;
+				}
+			}
+
+			StartMatchTelemetryUpload(up);
+		}
+	}
+
 	m_fileName.clear();
 }
 

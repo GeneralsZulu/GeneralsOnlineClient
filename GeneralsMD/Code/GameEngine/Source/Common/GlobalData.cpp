@@ -638,7 +638,9 @@ GlobalData::GlobalData()
 	m_framesPerSecondLimit = 0;
 	m_chipSetType = 0;
 	m_headless = FALSE;
-	m_exportStats = FALSE;
+	// Stats export is on by default; -noStats turns it off. Every telemetry
+	// channel in RecorderClass::stopRecording hangs off this flag.
+	m_exportStats = TRUE;
 	m_statsUrl = "https://cncstats.computersrfun.org/stats";
 	m_logsUrl = "https://cncstats.computersrfun.org/logs";
 	m_replayUrl = "https://www.radarvan.com/api/upload_replay";
