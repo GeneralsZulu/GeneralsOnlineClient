@@ -588,6 +588,16 @@ Int parseMapMatchCountsUrl(char *args[], int num)
 	return 1;
 }
 
+Int parseMapVoteUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_mapVoteUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
 // Retail lockstep timing (2s fixed retry, mean-latency run-ahead) for A/B
 // runs in the lab. See NetworkUtil.cpp.
 Int parseNetLegacy(char *args[], int num)
@@ -1448,6 +1458,11 @@ static CommandLineParam paramsForStartup[] =
 	// {map, matchCount} entries, used to annotate each row with how
 	// often the map has been played. Pass an empty string ("") to disable.
 	{ "-mapMatchCountsUrl", parseMapMatchCountsUrl },
+
+	// Base URL the LAN-lobby "Radarvan Pick" button POSTs to: the handler
+	// appends "<playerCount>/choose" before sending {"players":[...]}.
+	// Pass an empty string ("") to disable.
+	{ "-mapVoteUrl", parseMapVoteUrl },
 };
 
 // These Params are parsed during Engine Init before INI data is loaded

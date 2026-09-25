@@ -650,6 +650,7 @@ GlobalData::GlobalData()
 	m_teamStatsUrl = "https://www.radarvan.com/api/team_stats/";
 	m_synergyUrl = "https://www.radarvan.com/api/player_ratings/synergy/";
 	m_mapMatchCountsUrl = "https://www.radarvan.com/api/map_match_counts";
+	m_mapVoteUrl = "https://www.radarvan.com/api/map_vote/";
 	m_windowed = 0;
 	m_xResolution = 800;
 	m_yResolution = 600;
