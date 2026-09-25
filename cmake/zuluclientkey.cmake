@@ -41,3 +41,9 @@ configure_file(
     "${CMAKE_SOURCE_DIR}/cmake/ZuluClientKey.h.in"
     "${ZULU_CLIENT_KEY_GENERATED_DIR}/ZuluClientKey.h"
     @ONLY)
+
+# Put the generated header on the include path for every target configured after
+# this module is included (the engine sources #include it by bare name). Zulu
+# did this per-target in GeneralsMD/Code/GameEngine/CMakeLists.txt; doing it here
+# keeps the wiring inside the module that owns the header.
+include_directories("${ZULU_CLIENT_KEY_GENERATED_DIR}")
