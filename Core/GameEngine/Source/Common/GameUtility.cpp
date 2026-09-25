@@ -22,6 +22,7 @@
 #include "Common/PlayerList.h"
 #include "Common/Player.h"
 #include "Common/Radar.h"
+#include "Common/Recorder.h"
 
 #include "GameClient/ControlBar.h"
 #include "GameClient/GameClient.h"
@@ -62,6 +63,23 @@ bool localPlayerHasRadar()
 	if (!TheRadar->isRadarHidden(index) && player->hasRadar())
 		return true;
 
+	return false;
+}
+
+bool isViewerOnlyClient()
+{
+	if (TheRecorder != nullptr && TheRecorder->isPlaybackMode())
+		return true;
+	if (ThePlayerList != nullptr)
+	{
+		const Player* local = ThePlayerList->getLocalPlayer();
+		// TheSuperHackers @feature bill-rich 15/09/2026 A defeated player has no army left to
+		// command, so they are as much a viewer as a lobby observer. isPlayerActive() is
+		// false for both, which promotes the dead player to the full viewer UI and extends
+		// the command block in processCommandUI to them.
+		if (local != nullptr && !local->isPlayerActive())
+			return true;
+	}
 	return false;
 }
 

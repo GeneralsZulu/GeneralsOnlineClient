@@ -30,11 +30,13 @@
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "Common/GameUtility.h"
 
 #include "Common/BuildAssistant.h"
 #include "Common/Money.h"
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
+#include "Common/Recorder.h"
 #include "Common/Science.h"
 #include "Common/SpecialPower.h"
 #include "Common/ThingTemplate.h"
@@ -120,6 +122,17 @@ CBCommandStatus ControlBar::processCommandTransitionUI( GameWindow *control, Gad
 CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 																							GadgetGameMessage gadgetMessage )
 {
+	//
+	// TheSuperHackers @feature bill-rich 15/09/2026
+	// observers and replay viewers see the owning player's UI but must never
+	// issue commands. Every context-sensitive button funnels through here
+	// (control-bar hotkeys re-dispatch GBM_SELECTED into this path too), so
+	// bail out before any side effects. The recorder's cullBadCommands is the
+	// backstop should a command message slip into the stream some other way.
+	//
+	if( rts::isViewerOnlyClient() )
+		return CBC_COMMAND_NOT_USED;
+
 	// get the command pointer from the control user data we put in the button
 	const CommandButton *commandButton = (const CommandButton *)GadgetButtonGetData(control);
 	if( !commandButton )
