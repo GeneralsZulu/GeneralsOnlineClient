@@ -37,6 +37,9 @@
 #include "GameNetwork/LANAPICallbacks.h"
 #include "DiscordWebhook.h"
 
+// TheSuperHackers @bugfix bill-rich 27/09/2026 vcpkg zlib 1.3.1's zconf.h redefines the engine's Byte
+// typedef; the same guard CompressionManager.cpp and StatsUploader.cpp use keeps it out.
+#define __MACTYPES__
 #include <zlib.h>
 #include <windows.h>
 #include <wininet.h>
@@ -876,7 +879,10 @@ static bool encodePng(const PixBuf *src, unsigned char **outBuf, unsigned int *o
 	unsigned long compMax = (unsigned long)rawLen + (rawLen / 1000) + 32;
 	unsigned char *comp = (unsigned char *)malloc(compMax);
 	if (!comp) { free(raw); return false; }
-	if (compress2(comp, &compMax, raw, rawLen, Z_BEST_COMPRESSION) != Z_OK)
+	// __MACTYPES__ (above) keeps zconf.h from redefining the engine's Byte, so
+	// zlib's Bytef resolves to the engine's signed Byte here and the unsigned
+	// buffers need an explicit cast.
+	if (compress2((Bytef *)comp, &compMax, (const Bytef *)raw, rawLen, Z_BEST_COMPRESSION) != Z_OK)
 	{
 		free(comp); free(raw); return false;
 	}
@@ -1578,19 +1584,29 @@ static void drawPlayerMarkersAndLabels(PixBuf *big,
 // In -zulu_debug mode, mirror status to the lobby chat window so the host
 // can watch the post pipeline progress without opening the debug log. No-op
 // outside zulu_debug so production hosts don't see [discord] spam.
+// Verbose mode for this module, off -zulu_debug.
+static bool lobbyDiscordVerbose()
+{
+	return TheGlobalData != nullptr && TheGlobalData->m_zuluDebug;
+}
+
 static void debugChat(const char *fmt, ...)
 {
-	if (!TheGlobalData || !TheGlobalData->m_zuluDebug) return;
-	if (!TheLAN) return;
+	if (!lobbyDiscordVerbose()) return;
 	char buf[512];
 	va_list ap;
 	va_start(ap, fmt);
 	_vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
 	buf[sizeof(buf) - 1] = 0;
 	va_end(ap);
-	UnicodeString u;
-	u.translate(AsciiString(buf));
-	TheLAN->OnChat(L"[discord]", TheLAN->GetLocalIP(), u, LANAPI::LANCHAT_SYSTEM);
+	// The LAN lobby can echo into its own chat window; the online lobby has no
+	// equivalent hook here, so there it is the log line alone.
+	if (TheLAN)
+	{
+		UnicodeString u;
+		u.translate(AsciiString(buf));
+		TheLAN->OnChat(L"[discord]", TheLAN->GetLocalIP(), u, LANAPI::LANCHAT_SYSTEM);
+	}
 	printf("[discord] %s\n", buf);
 }
 
@@ -1800,7 +1816,7 @@ static void drawBridgeOverlay(PixBuf *big, const MapMetaData *mmd)
 // =========================================================================
 // Public entry point.
 // =========================================================================
-void PostLanLobbyMapToDiscord(LANGameInfo *game)
+void PostLobbyMapToDiscord(GameInfo *game)
 {
 	static const char *kWebhookUrl = ZULU_DISCORD_WEBHOOK_URL;
 	if (!kWebhookUrl || !*kWebhookUrl)
@@ -1848,7 +1864,7 @@ void PostLanLobbyMapToDiscord(LANGameInfo *game)
 
 	// Default gate: 2+ humans. -zulu_debug drops it to 1+ so a host can
 	// iterate the rendering with just themselves in the lobby.
-	int minHumans = (TheGlobalData && TheGlobalData->m_zuluDebug) ? 1 : 2;
+	int minHumans = lobbyDiscordVerbose() ? 1 : 2;
 	if (humanCount < minHumans)
 	{
 		debugChat("skipped: %d humans (need %d)", humanCount, minHumans);

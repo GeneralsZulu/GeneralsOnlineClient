@@ -17,7 +17,7 @@
 
 #pragma once
 
-class LANGameInfo;
+class GameInfo;
 
 /// Render an upscaled lobby map preview with player labels at each fixed
 /// start position and POST it to the Discord webhook URL baked in at
@@ -30,7 +30,9 @@ class LANGameInfo;
 ///     "2+ humans" requirement; AI-only and 1-human matches don't post).
 ///
 /// Best-effort and synchronous: blocks the caller for the WinINet POST
-/// (mirroring the existing balance_teams / map_summary calls). Intended
-/// to be invoked by the host once at game-start, just before the start
-/// signal is broadcast to the rest of the lobby.
-void PostLanLobbyMapToDiscord(LANGameInfo *game);
+/// (mirroring the existing balance_teams call). Invoked by the host when
+/// the Randomize roll lands, which is the moment the lineup is final.
+///
+/// Takes a plain GameInfo, so the LAN lobby and the GeneralsOnline lobby
+/// both post through it; nothing in here is LAN-specific.
+void PostLobbyMapToDiscord(GameInfo *game);

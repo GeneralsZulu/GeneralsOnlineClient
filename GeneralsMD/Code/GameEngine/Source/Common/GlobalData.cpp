@@ -648,6 +648,7 @@ GlobalData::GlobalData()
 	m_mapUploadUrl = "https://cncstats.computersrfun.org/add_map";
 	m_mapAssetsUrl = "https://cncstats.computersrfun.org/list_map_assets";
 	m_mapDownloadUrl = "https://cncstats.computersrfun.org/get_map_file";
+	m_balanceTeamsUrl = "https://www.radarvan.com/api/balance_teams/";
 	m_predictUrl = "https://www.radarvan.com/api/predict";
 	m_teamStatsUrl = "https://www.radarvan.com/api/team_stats/";
 	m_synergyUrl = "https://www.radarvan.com/api/player_ratings/synergy/";
@@ -1026,6 +1027,7 @@ GlobalData::GlobalData()
 
 	m_watchReplayFile.clear();
 	m_replayTheater = FALSE;
+	m_zuluDebug = FALSE;
 
 	for (i = LEVEL_FIRST; i <= LEVEL_LAST; ++i)
 		m_healthBonus[i] = 1.0f;

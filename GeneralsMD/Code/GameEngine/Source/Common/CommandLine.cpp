@@ -550,6 +550,25 @@ Int parseMapDownloadUrl(char *args[], int num)
 	return 1;
 }
 
+// Generic Zulu-side debug toggle. The launcher forwards its own argv to the
+// game exe verbatim, so passing -zulu_debug on either entry point sets the same
+// flag. Right now the only consumer is the lobby Discord post helper.
+Int parseZuluDebug(char *args[], int num)
+{
+	TheWritableGlobalData->m_zuluDebug = TRUE;
+	return 1;
+}
+
+Int parseBalanceTeamsUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_balanceTeamsUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
 Int parsePredictUrl(char *args[], int num)
 {
 	if (num > 1)
@@ -1449,6 +1468,8 @@ static CommandLineParam paramsForStartup[] =
 	// a lobby peer needs a map it doesn't have. Empty string disables
 	// in-lobby map downloads (falls back to launch-time P2P transfer).
 	{ "-mapDownloadUrl", parseMapDownloadUrl },
+	{ "-balanceTeamsUrl", parseBalanceTeamsUrl },
+	{ "-zulu_debug", parseZuluDebug },
 
 	// Loading-screen "battlefield intel" endpoints. Pass an empty string
 	// ("") to disable any one of them.

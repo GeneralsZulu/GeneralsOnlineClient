@@ -161,6 +161,11 @@ public:
 	// (game falls back to the legacy at-launch P2P transfer).
 	AsciiString m_mapDownloadUrl;
 
+	// URL to GET ?players=<name>&players=<name>... to fetch a balanced team
+	// split for the lobby, used by the Randomize button when no teams are
+	// pre-set. Empty string disables the API call.
+	AsciiString m_balanceTeamsUrl;
+
 	// URLs for the multiplayer loading-screen "battlefield intel" panel.
 	// When the countdown starts, each client fires these (non-blocking) and
 	// shows a distilled win-prediction / team-chemistry blurb in place of the
@@ -652,6 +657,12 @@ public:
 	// else's). See installer/replay_data_versions.csv.
 	AsciiString m_watchReplayFile;
 	Bool        m_replayTheater;
+
+	// Generic Zulu-side debug toggle, set by -zulu_debug. Ported back from the
+	// Zulu client along with the lobby Discord post, which is still its only
+	// consumer: it mirrors the post pipeline into the lobby chat and drops the
+	// "2+ humans" gate to "1+", so a host can iterate the rendering alone.
+	Bool        m_zuluDebug;
 
 	//-allAdvice feature
 	//Bool m_allAdvice;

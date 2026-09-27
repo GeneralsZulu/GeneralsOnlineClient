@@ -482,6 +482,10 @@ GO_SOURCE_LAUNCHER_LOG := $(GO_BUILD_SUBDIR_LOG)/launcher/$(GO_LAUNCHER_NAME)
 GO_SELFHOST_BASE       ?= https://cncstats.computersrfun.org/go
 GO_CLIENT_KEY_SECRET   := zuluclientkey
 GO_CNCSTATS_KEY_SECRET := cncstats_zuluclientkey
+# Which Discord channel a Randomize roll posts the lobby map into. Same two
+# secrets the Zulu targets use: the live channel for a release, the debug one
+# for the dev channel. A build with neither simply does not post.
+GO_DISCORD_WEBHOOK_SECRET =
 
 # Its own staging tree, with a payload directory per channel: the installer
 # demands the game exe be named ZuluGO.exe, so the shipping build and the
@@ -536,13 +540,16 @@ GO_LATEST_PUBLIC_URL      = https://storage.googleapis.com/$(GCS_BUCKET)/latest-
 # `make zulugo-exe` sets neither, so it builds as "dev" and keeps working on a
 # machine with no gcloud credentials.
 zulugo-installer:         ZULU_BUILD_VARIANT  := release
+zulugo-installer:         GO_DISCORD_WEBHOOK_SECRET := discord_webhook
 zulugo-installer:         GO_SECRETS_REQUIRED := 1
 zulugo-installer-release: ZULU_BUILD_VARIANT  := release
+zulugo-installer-release: GO_DISCORD_WEBHOOK_SECRET := discord_webhook
 zulugo-installer-release: GO_SECRETS_REQUIRED := 1
 # A release must never ship unsigned by accident: with this set, sign.sh
 # fails the build instead of skipping when signing is not configured.
 zulugo-installer-release: export ZULU_SIGN_REQUIRED := 1
 zulugo-installer-dev:     ZULU_BUILD_VARIANT  := dev
+zulugo-installer-dev:     GO_DISCORD_WEBHOOK_SECRET := debug_discord_webhook
 zulugo-installer-dev:     GO_SECRETS_REQUIRED := 1
 
 # One docker build of the msvc-wine tree.
@@ -568,6 +575,10 @@ define go_build
 		echo "[keys] fetching secret '$(GO_CNCSTATS_KEY_SECRET)' from GCP Secret Manager..."; \
 		CNCSTATS_ZULU_CLIENT_KEY=$$($(GCLOUD) secrets versions access latest --secret=$(GO_CNCSTATS_KEY_SECRET) 2>/dev/null || true); \
 	fi; \
+	if [ -n "$(GO_DISCORD_WEBHOOK_SECRET)" ] && [ -z "$$ZULU_DISCORD_WEBHOOK_URL" ]; then \
+		echo "[discord] fetching secret '$(GO_DISCORD_WEBHOOK_SECRET)' from GCP Secret Manager..."; \
+		ZULU_DISCORD_WEBHOOK_URL=$$($(GCLOUD) secrets versions access latest --secret=$(GO_DISCORD_WEBHOOK_SECRET) 2>/dev/null || true); \
+	fi; \
 	if [ -n "$(GO_SECRETS_REQUIRED)" ]; then \
 		[ -n "$(GO_SELFHOST_BASE)" ] || { \
 			echo "ERROR: GO_SELFHOST_BASE is empty; the client would fall back to the public service."; exit 1; }; \
@@ -577,10 +588,16 @@ define go_build
 			echo "ERROR: could not read secret '$(GO_CNCSTATS_KEY_SECRET)' (gcloud auth? empty payload?)."; exit 1; }; \
 		echo "[keys] both client keys loaded"; \
 	fi; \
+	DISCORD_DEF=; \
+	if [ -n "$$ZULU_DISCORD_WEBHOOK_URL" ]; then \
+		DISCORD_DEF="-DZULU_DISCORD_WEBHOOK_URL=$$ZULU_DISCORD_WEBHOOK_URL"; \
+		echo "[discord] webhook url loaded ($${#ZULU_DISCORD_WEBHOOK_URL} bytes)"; \
+	fi; \
 	EXTRA_CMAKE_DEFS=$$(printf '%s\n' \
 		"-DZULU_GO_SELFHOST_BASE=$(GO_SELFHOST_BASE)" \
 		"-DZULU_CLIENT_KEY=$$ZULU_CLIENT_KEY" \
 		"-DCNCSTATS_ZULU_CLIENT_KEY=$$CNCSTATS_ZULU_CLIENT_KEY" \
+		$${DISCORD_DEF:+"$$DISCORD_DEF"} \
 		$(3)); \
 	export EXTRA_CMAKE_DEFS; \
 	PRESET=$(GO_PRESET) \

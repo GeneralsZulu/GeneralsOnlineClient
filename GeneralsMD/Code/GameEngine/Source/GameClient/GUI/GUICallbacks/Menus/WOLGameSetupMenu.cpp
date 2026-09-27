@@ -69,6 +69,7 @@
 
 #include "GameNetwork/GeneralsOnline/NGMP_interfaces.h"
 #include "GameNetwork/RandomAssign.h"
+#include "Common/LobbyDiscord.h"
 #include <ws2ipdef.h>
 #include <format>
 #include "../OnlineServices_Init.h"
@@ -4400,8 +4401,57 @@ WindowMsgHandledType WOLGameSetupMenuSystem( GameWindow *window, UnsignedInt msg
 								if (game->getSlot(i))
 									saved[i] = *game->getSlot(i);
 							}
+							// Balance first, on the same scratch copy, so the roll hands
+							// factions to teams that are already settled. A no-op when the
+							// teams are set by hand; a network failure is announced and the
+							// roll still happens.
+							AsciiString balanceErr;
+							if (!tryBalanceTeamsViaApi(game, &balanceErr))
+							{
+								UnicodeString errU;
+								errU.translate(balanceErr);
+								pLobbyInterface->SendAnnouncementMessageToCurrentLobby(errU, true);
+							}
+
 							std::vector<RandomSlotAssignment> changes;
 							performRandomAssign(game, &changes);
+
+							// The roll reports what it changed; the balance wrote teams
+							// straight into the slots, so fold those in against the
+							// snapshot. Without this the service never hears about them and
+							// the next lobby push puts everyone back on no team.
+							for (i = 0; i < MAX_SLOTS; ++i)
+							{
+								GameSlot *slot = game->getSlot(i);
+								if (slot == NULL || slot->getTeamNumber() == saved[i].getTeamNumber())
+									continue;
+
+								size_t c;
+								Bool folded = FALSE;
+								for (c = 0; c < changes.size(); ++c)
+								{
+									if (changes[c].slotIndex == i)
+									{
+										changes[c].team = slot->getTeamNumber();
+										folded = TRUE;
+										break;
+									}
+								}
+								if (!folded)
+								{
+									RandomSlotAssignment teamOnly;
+									teamOnly.slotIndex = i;
+									teamOnly.team = slot->getTeamNumber();
+									changes.push_back(teamOnly);
+								}
+							}
+
+							// The lineup is final here, so this is the picture worth posting.
+							// Host-side only, so one image per roll rather than one per
+							// client, and a no-op on a build with no webhook baked in. It
+							// runs before the slots are restored, so the image shows the roll.
+							PostLobbyMapToDiscord(game);
+
 							for (i = 0; i < MAX_SLOTS; ++i)
 							{
 								if (game->getSlot(i))

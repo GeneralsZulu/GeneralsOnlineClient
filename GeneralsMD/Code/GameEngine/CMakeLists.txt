@@ -112,6 +112,7 @@ set(GAMEENGINE_SRC
     Include/Common/StateMachine.h
     Include/Common/StatsCollector.h
     Include/Common/StatsExporter.h
+    Include/Common/LobbyDiscord.h
     Include/Common/StatsUploader.h
 #    Include/Common/STLTypedefs.h
 #    Include/Common/StreamingArchiveFile.h
@@ -633,6 +634,7 @@ set(GAMEENGINE_SRC
     Source/Common/StateMachine.cpp
     Source/Common/StatsCollector.cpp
     Source/Common/StatsExporter.cpp
+    Source/Common/LobbyDiscord.cpp
     Source/Common/StatsUploader.cpp
 #    Source/Common/System/ArchiveFile.cpp
 #    Source/Common/System/ArchiveFileSystem.cpp
@@ -1266,6 +1268,14 @@ target_precompile_headers(z_gameengine PRIVATE
     Include/Precompiled/PreRTS.h
 )
 
+
+# LobbyDiscord.cpp #include's the cmake-generated DiscordWebhook.h. Ninja cannot
+# see that dependency on its own, because nothing in the source tree produces the
+# header, so say so here: re-running cmake with a different
+# ZULU_DISCORD_WEBHOOK_URL rewrites the header and then recompiles the one object
+# that bakes it in. Same pattern the client keys use.
+set_source_files_properties(Source/Common/LobbyDiscord.cpp PROPERTIES
+    OBJECT_DEPENDS "${ZULU_DISCORD_WEBHOOK_GENERATED_DIR}/DiscordWebhook.h")
 
 add_compile_definitions(_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
 add_compile_definitions(GENERALS_ONLINE)

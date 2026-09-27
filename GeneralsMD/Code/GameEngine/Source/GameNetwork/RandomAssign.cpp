@@ -28,6 +28,8 @@
 #include "GameNetwork/GameInfo.h"
 #include "Common/PlayerTemplate.h"
 #include "Common/MultiplayerSettings.h"
+#include "Common/GlobalData.h"
+#include "Common/StatsUploader.h"
 #include "GameClient/MapUtil.h"
 #include "GameClient/ChallengeGenerals.h"
 
@@ -675,4 +677,250 @@ void performRandomAssign(GameInfo *game, std::vector<RandomSlotAssignment> *outC
 
 	// Reset accepted state since we changed settings
 	game->resetAccepted();
+}
+
+//-----------------------------------------------------------------------------
+// Team balancing via the radarvan balance_teams API. Ported back from the Zulu
+// client: the Randomize button asks the server for a fair split before it rolls
+// the factions, so a pick-up game starts even instead of whoever-sits-where.
+//-----------------------------------------------------------------------------
+
+// Translate a slot's display name into the form expected by the
+// balance_teams API. AI slot names ("Easy Army", "Hard Army", ...) are
+// joined to a single token ("EasyArmy", "HardArmy") so the server's name
+// table doesn't have to care about spacing. Human names pass through.
+static AsciiString slotNameForApi(const GameSlot *slot)
+{
+	AsciiString out;
+	out.translate(slot->getName());
+	if (slot->isAI())
+	{
+		AsciiString joined;
+		for (const char *p = out.str(); *p != '\0'; ++p)
+		{
+			if (*p != ' ')
+				joined.concat(*p);
+		}
+		out = joined;
+	}
+	return out;
+}
+
+// Hand-maintained aliases for slot-display-name <-> server-canonical-name
+// pairs that prefix matching can't bridge (e.g. a numeric in-game handle vs.
+// a spelled-out canonical). Either form may appear on either side of the
+// comparison.
+struct BalanceNameAlias { const char *a; const char *b; };
+static const BalanceNameAlias g_balanceNameAliases[] = {
+	{ "131", "OneThree111" },
+};
+static const size_t g_balanceNameAliasCount =
+	sizeof(g_balanceNameAliases) / sizeof(g_balanceNameAliases[0]);
+
+static Bool aliasMatch(const AsciiString &x, const AsciiString &y)
+{
+	for (size_t k = 0; k < g_balanceNameAliasCount; ++k)
+	{
+		const BalanceNameAlias &al = g_balanceNameAliases[k];
+		if ((x.compareNoCase(al.a) == 0 && y.compareNoCase(al.b) == 0) ||
+		    (x.compareNoCase(al.b) == 0 && y.compareNoCase(al.a) == 0))
+		{
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+// Case-insensitive prefix compare of two char arrays for `n` chars.
+static Bool prefixMatchNoCase(const char *a, const char *b, Int n)
+{
+	for (Int i = 0; i < n; ++i)
+	{
+		char ca = a[i];
+		char cb = b[i];
+		if (ca == 0 || cb == 0) return FALSE;
+		if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + ('a' - 'A'));
+		if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + ('a' - 'A'));
+		if (ca != cb) return FALSE;
+	}
+	return TRUE;
+}
+
+// The balance-teams server canonicalizes the names it receives ("Pan" comes
+// back as "Pancake", "Wild" as "WildCard"), so a slot's display name will
+// often differ from the form the server returns. Treat exact-equal-no-case as
+// the strongest signal, with case-insensitive prefix-match-in-either-direction
+// as the fallback. The 2-character minimum guards against single-letter
+// collisions.
+static Bool slotMatchesCanonical(const AsciiString &slotName, const AsciiString &canonical)
+{
+	if (slotName.compareNoCase(canonical) == 0) return TRUE;
+	if (aliasMatch(slotName, canonical)) return TRUE;
+	Int slen = slotName.getLength();
+	Int clen = canonical.getLength();
+	if (slen < 2 || clen < 2) return FALSE;
+	Int shortLen = (slen < clen) ? slen : clen;
+	return prefixMatchNoCase(slotName.str(), canonical.str(), shortLen);
+}
+
+struct BalanceSlotPlan { Int slotIdx; Int team; };
+
+// True if every occupied non-observer slot has m_teamNumber == -1.
+static Bool allTeamsUnset(const GameInfo *game)
+{
+	for (Int i = 0; i < MAX_SLOTS; ++i)
+	{
+		const GameSlot *slot = game->getConstSlot(i);
+		if (!slot || !slot->isOccupied())
+			continue;
+		if (slot->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
+			continue;
+		if (slot->getTeamNumber() != -1)
+			return FALSE;
+	}
+	return TRUE;
+}
+
+bool tryBalanceTeamsViaApi(GameInfo *game, AsciiString *outError)
+{
+	if (!game)
+		return true;
+
+	if (!allTeamsUnset(game))
+		return true;
+
+	// Collect names from occupied non-observer slots in slot order.
+	std::vector<AsciiString> names;
+	Int i;
+	for (i = 0; i < MAX_SLOTS; ++i)
+	{
+		const GameSlot *slot = game->getConstSlot(i);
+		if (!slot || !slot->isOccupied())
+			continue;
+		if (slot->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
+			continue;
+
+		AsciiString asciiName = slotNameForApi(slot);
+		if (asciiName.isEmpty())
+			continue;
+		names.push_back(asciiName);
+	}
+
+	if (names.size() < 2)
+		return true; // nothing to balance
+
+	BalanceTeamsResult res = BalanceTeamsFromServer(TheGlobalData->m_balanceTeamsUrl, names);
+	if (!res.success)
+	{
+		if (outError)
+			*outError = res.errorMessage;
+		return false;
+	}
+
+	// Decide a target team per slot:
+	//   - matches a name in res.team1                   -> team 0
+	//   - matches a recognized name not in res.team1    -> team 1
+	//   - matches no canonical name (server didn't recognize) -> defer
+	// Deferred slots are then distributed to whichever team has fewer members,
+	// so a 4-player lobby with one unrecognized name still ends up 2v2 instead
+	// of dumping everything unmatched onto team 1.
+	std::vector<BalanceSlotPlan> plans;
+	plans.reserve(MAX_SLOTS);
+
+	for (i = 0; i < MAX_SLOTS; ++i)
+	{
+		GameSlot *slot = game->getSlot(i);
+		if (!slot || !slot->isOccupied())
+			continue;
+		if (slot->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
+			continue;
+
+		AsciiString asciiName = slotNameForApi(slot);
+
+		Int team = -1;
+		size_t j;
+		for (j = 0; j < res.team1.size() && team == -1; ++j)
+		{
+			if (slotMatchesCanonical(asciiName, res.team1[j]))
+				team = 0;
+		}
+		if (team == -1)
+		{
+			for (j = 0; j < res.allKnown.size() && team == -1; ++j)
+			{
+				Bool isInTeam1 = FALSE;
+				size_t a;
+				for (a = 0; a < res.team1.size(); ++a)
+				{
+					if (res.allKnown[j].compareNoCase(res.team1[a]) == 0)
+					{
+						isInTeam1 = TRUE;
+						break;
+					}
+				}
+				if (isInTeam1) continue;
+				if (slotMatchesCanonical(asciiName, res.allKnown[j]))
+					team = 1;
+			}
+		}
+
+		BalanceSlotPlan plan;
+		plan.slotIdx = i;
+		plan.team = team;
+		plans.push_back(plan);
+	}
+
+	Int t0count = 0, t1count = 0;
+	size_t pi;
+	for (pi = 0; pi < plans.size(); ++pi)
+	{
+		if (plans[pi].team == 0) ++t0count;
+		else if (plans[pi].team == 1) ++t1count;
+	}
+	for (pi = 0; pi < plans.size(); ++pi)
+	{
+		if (plans[pi].team != -1) continue;
+		if (t0count <= t1count)
+		{
+			plans[pi].team = 0;
+			++t0count;
+		}
+		else
+		{
+			plans[pi].team = 1;
+			++t1count;
+		}
+	}
+
+	// Ensure the host (slot 0) ends up on team 0 (UI "Team 1"). If the host
+	// landed on team 1 because of how the server split names, flip both teams
+	// so the host's side is always Team 1.
+	Int hostTeam = -1;
+	for (pi = 0; pi < plans.size(); ++pi)
+	{
+		if (plans[pi].slotIdx == 0)
+		{
+			hostTeam = plans[pi].team;
+			break;
+		}
+	}
+	if (hostTeam == 1)
+	{
+		for (pi = 0; pi < plans.size(); ++pi)
+		{
+			if (plans[pi].team == 0)
+				plans[pi].team = 1;
+			else if (plans[pi].team == 1)
+				plans[pi].team = 0;
+		}
+	}
+
+	for (pi = 0; pi < plans.size(); ++pi)
+	{
+		GameSlot *slot = game->getSlot(plans[pi].slotIdx);
+		if (!slot) continue;
+		slot->setTeamNumber(plans[pi].team);
+	}
+
+	return true;
 }

@@ -61,6 +61,7 @@
 #include "GameClient/GameText.h"
 #include "GameNetwork/GUIUtil.h"
 #include "GameNetwork/RandomAssign.h"
+#include "Common/LobbyDiscord.h"
 #include "GameClient/MapUtil.h"
 #include "GameNetwork/ResumeFromReplay.h"
 
@@ -1839,6 +1840,17 @@ WindowMsgHandledType LanGameOptionsMenuSystem( GameWindow *window, UnsignedInt m
 					// broadcast the new options and tell the room it happened.
 					if (TheLAN->AmIHost())
 					{
+						// Balance first, so the roll below hands out factions to teams that
+						// are already settled. A no-op when the teams are set by hand; a
+						// network failure is said out loud and the roll still happens.
+						AsciiString balanceErr;
+						if (!tryBalanceTeamsViaApi(TheLAN->GetMyGame(), &balanceErr))
+						{
+							UnicodeString errU;
+							errU.translate(balanceErr);
+							TheLAN->RequestChat(errU, LANAPIInterface::LANCHAT_SYSTEM);
+						}
+
 						std::vector<RandomSlotAssignment> changes;
 						performRandomAssign(TheLAN->GetMyGame(), &changes);
 						if (changes.empty())
@@ -1855,6 +1867,11 @@ WindowMsgHandledType LanGameOptionsMenuSystem( GameWindow *window, UnsignedInt m
 							strInform.format(TheGameText->FETCH_OR_SUBSTITUTE("GUI:HostRandomizedSlots", L"Randomize: the host resolved the random factions, colors and start positions (roll %d)"), s_randomizeCount);
 							TheLAN->RequestChat(strInform, LANAPIInterface::LANCHAT_SYSTEM);
 						}
+
+						// The lineup is final at this point, so this is the picture worth
+						// posting. Host-side only, so one image per roll rather than one
+						// per client, and a no-op on a build with no webhook baked in.
+						PostLobbyMapToDiscord(TheLAN->GetMyGame());
 					}
 				}
         else if ( controlID == checkboxLimitSuperweaponsID )

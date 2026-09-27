@@ -23,6 +23,7 @@
 #pragma once
 
 #include "Lib/BaseType.h"
+#include "Common/AsciiString.h"
 
 #include <vector>
 
@@ -47,6 +48,14 @@ struct RandomSlotAssignment
 // slots that changed and what changed, for callers that must push the roll
 // through an authoritative service instead of applying it locally.
 void performRandomAssign(GameInfo *game, std::vector<RandomSlotAssignment> *outChanges = nullptr);
+
+// If every occupied non-observer slot has team == -1, query the balance_teams
+// API (TheGlobalData->m_balanceTeamsUrl) with the lobby's player names and
+// assign team 0 / team 1 from the answer. Returns true on success or no-op
+// (teams already set, or fewer than two candidates). Returns false on an API or
+// network failure; *outError is then a player-facing message fit for chat, and
+// the slots are left untouched.
+bool tryBalanceTeamsViaApi(GameInfo *game, AsciiString *outError);
 
 // Source of randomness for assignStartPositionsGlobal. Returns a value in
 // [lo, hi] inclusive. Game start passes a GameLogicRandomValue wrapper so
