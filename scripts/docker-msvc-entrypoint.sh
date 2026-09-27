@@ -126,6 +126,20 @@ if [ "${USE_VCPKG}" = "true" ]; then
 		-DCURL_USE_PKGCONFIG=OFF
 	)
 fi
+# Version, from the product's .nsi by way of the Makefile. Without this the
+# cmake defaults decide, and every Zulu GO build called itself 1.6.x no matter
+# what the installer it shipped in said. The VC6 entrypoint has done this from
+# the start; this one had simply never been given the same passthrough.
+if [ -n "${ZULU_VERSION_MAJOR:-}" ]; then
+	EXTRA_CMAKE_ARGS+=("-DZULU_VERSION_MAJOR=${ZULU_VERSION_MAJOR}")
+fi
+if [ -n "${ZULU_VERSION_MINOR:-}" ]; then
+	EXTRA_CMAKE_ARGS+=("-DZULU_VERSION_MINOR=${ZULU_VERSION_MINOR}")
+fi
+if [ -n "${ZULU_VERSION_BUILDNUM:-}" ]; then
+	EXTRA_CMAKE_ARGS+=("-DZULU_VERSION_BUILDNUM=${ZULU_VERSION_BUILDNUM}")
+fi
+
 # Extra -D args from the caller (EXTRA_CMAKE_DEFS, one per line), for things
 # like -DZULU_GO_SELFHOST_BASE=..., the client keys, or the debug defines that
 # stand in for a "releaselog" preset on this toolchain.

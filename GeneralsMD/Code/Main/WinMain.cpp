@@ -937,7 +937,14 @@ Int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
         // TODO_NGMP: Better solution
 #if defined(GENERALS_ONLINE)
-        TheVersion->setVersion(VERSION_MAJOR, VERSION_MINOR, GENERALS_ONLINE_VERSION, GENERALS_ONLINE_NET_VERSION,
+        // TheSuperHackers @bugfix bill-rich 27/09/2026 The build number is the
+        // one from the version this build ships as, not GENERALS_ONLINE_VERSION.
+        // That constant is the service's contract number, it is 1 and stays 1,
+        // and putting it here made every build report "<major>.<minor>.1" to the
+        // stats server, the replay header and the UI, none of which ever matched
+        // the version on the installer. The contract number still goes to the
+        // service on its own, from GENERALS_ONLINE_VERSION directly.
+        TheVersion->setVersion(VERSION_MAJOR, VERSION_MINOR, VERSION_BUILDNUM, GENERALS_ONLINE_NET_VERSION,
             AsciiString("Generals Online Development Team"), AsciiString(""),
             AsciiString(__TIME__), AsciiString(__DATE__));
 #else

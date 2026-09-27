@@ -313,7 +313,9 @@ UnicodeString Version::getUnicodeBuildUserOrGitCommitAuthorName() const
 UnicodeString Version::getUnicodeProductTitle() const
 {
 	// @todo Make configurable
-#if defined(GENERALS_ONLINE)
+#if defined(ZULU_GO_SELFHOST_BASE)
+	return L"Zulu GO";
+#elif defined(GENERALS_ONLINE)
 	return L"GeneralsOnline";
 #else
 	return L"Community Patch";
@@ -322,7 +324,14 @@ UnicodeString Version::getUnicodeProductTitle() const
 
 UnicodeString Version::getUnicodeProductVersion() const
 {
-#if defined(GENERALS_ONLINE)
+#if defined(ZULU_GO_SELFHOST_BASE)
+	// TheSuperHackers @bugfix bill-rich 27/09/2026 Nothing here. This build's
+	// version is major.minor.buildNum, which every caller of this already
+	// appends; GENERALS_ONLINE_VERSION_STRING is the public client's own build
+	// code, unrelated to the version on our installer, and printing it beside
+	// ours gave the player two different answers to the same question.
+	return UnicodeString::TheEmptyString;
+#elif defined(GENERALS_ONLINE)
     UnicodeString str;
 	str.format(L"%hs", GENERALS_ONLINE_VERSION_STRING);
 	return str;
