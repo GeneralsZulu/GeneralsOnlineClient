@@ -1097,6 +1097,20 @@ void MapCache::refreshUserMaps()
 	}
 }
 
+void MapCache::refreshInstalledMaps()
+{
+	setFPMode();
+
+	const AsciiString mapDir = getMapDir();
+	if (loadMapsFromDisk(mapDir, TRUE))
+	{
+		// The install directory is often read-only for a normal user, so the
+		// cache file may not be writable. The in-memory entry is what the
+		// lobby and the observer join need, and that is already there.
+		writeCacheINI(mapDir);
+	}
+}
+
 void MapCache::prepareUnseenMaps( const AsciiString &mapDir )
 {
 	MapCache::iterator it = begin();

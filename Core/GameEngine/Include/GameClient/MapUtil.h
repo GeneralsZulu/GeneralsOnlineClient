@@ -152,6 +152,11 @@ public:
 	// plus parsing any newly-added .map files.
 	void refreshUserMaps();
 
+	// Re-scan the installed maps directory. Needed when a map arrives at
+	// runtime under its install-relative path (an official map fetched from
+	// the CDN), which refreshUserMaps() cannot see.
+	void refreshInstalledMaps();
+
 	AsciiString getMapDir(bool bCustomMapDebug = false) const;
 	AsciiString getUserMapDir(bool bCustomMapDebug = false) const;
 	AsciiString getMapExtension() const;

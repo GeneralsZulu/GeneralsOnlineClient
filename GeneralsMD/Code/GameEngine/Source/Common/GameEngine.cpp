@@ -105,6 +105,8 @@
 #include "GameNetwork/WOLBrowser/WebBrowser.h"
 #include "GameNetwork/LANAPI.h"
 #include "GameNetwork/GameSpy/GameResultsThread.h"
+#include "GameNetwork/MapDownloadHook.h"
+#include "Common/StatsUploader.h"
 
 #include "Common/version.h"
 
@@ -770,6 +772,20 @@ void GameEngine::init()
 		// initialize the MapCache
 		TheMapCache = MSGNEW("GameEngineSubsystem") MapCache;
 		TheMapCache->updateCache();
+
+		// Install the in-lobby map download hook. Engine-side LAN / online
+		// callsites call TheMapDownloadHook when a peer joins a lobby or asks
+		// to observe a match on a map it does not have; the hook fetches it
+		// from the cncstats server and refreshes MapCache so the preview shows
+		// without a game restart. See MapDownloadHook.h.
+		//
+		// The blocking hook is for callsites that have to have the map before
+		// they can continue (observer join, replay playback). The lobby uses
+		// the start/poll pair instead, so a slow CDN cannot freeze the UI or
+		// stall the LAN heartbeat.
+		TheMapDownloadHook = &DownloadAndInstallMap;
+		TheMapDownloadStartHook = &MapDownloadStart;
+		TheMapDownloadPollHook = &MapDownloadPoll;
 
 
 #ifdef DUMP_PERF_STATS///////////////////////////////////////////////////////////////////////////

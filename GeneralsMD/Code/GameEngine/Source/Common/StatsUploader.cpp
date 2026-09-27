@@ -2069,6 +2069,25 @@ static AsciiString mapDownloadUrl()
 	return TheGlobalData->m_mapDownloadUrl;
 }
 
+// A downloaded user map lands under the user maps directory; an official map
+// keeps its install-relative path and lands under the install Maps directory.
+// The two have separate caches, so the refresh has to follow the file.
+static void refreshMapCacheFor(const AsciiString& localMapPath)
+{
+	if (TheMapCache == nullptr)
+		return;
+
+	const AsciiString userDir = TheMapCache->getUserMapDir();
+	const Int userDirLen = userDir.getLength();
+	const Bool underUserDir = (userDirLen > 0)
+		&& (_strnicmp(localMapPath.str(), userDir.str(), userDirLen) == 0);
+
+	if (underUserDir)
+		TheMapCache->refreshUserMaps();
+	else
+		TheMapCache->refreshInstalledMaps();
+}
+
 Bool DownloadAndInstallMap(const AsciiString& localMapPath,
                            UnsignedInt mapCRC,
                            UnsignedInt contentsMask)
@@ -2139,8 +2158,7 @@ Bool DownloadAndInstallMap(const AsciiString& localMapPath,
 	// Refresh MapCache so findMap() and getMapPreviewImage() see the new
 	// entry. Without this the lobby preview would stay blank until the
 	// next full game restart.
-	if (TheMapCache != nullptr)
-		TheMapCache->refreshUserMaps();
+	refreshMapCacheFor(localMapPath);
 
 	return TRUE;
 }
@@ -3880,8 +3898,7 @@ MapDownloadStatus MapDownloadPoll(void)
 
 				// Refresh MapCache so findMap() and getMapPreviewImage() see the
 				// new entry without a game restart.
-				if (TheMapCache != nullptr)
-					TheMapCache->refreshUserMaps();
+				refreshMapCacheFor(localPath);
 
 				status = MAPDOWNLOAD_INSTALLED;
 			}

@@ -746,6 +746,17 @@ void LANAPI::updateMapDownload()
 		lanUpdateSlotList();
 		updateGameOptions();
 		msg.format(L"Map downloaded.");
+
+		// The bytes are on disk, but if the cache still cannot find the map
+		// the availability bit stays false and every later options packet
+		// would start the same download again. Retire this CRC and let the
+		// launch-time transfer from the host handle it.
+		const Int localSlot = m_currentGame->getLocalSlotNum();
+		if (localSlot < 0 || !m_currentGame->getConstSlot(localSlot)->hasMap())
+		{
+			m_mapDownloadFailedCRC = m_mapDownloadCRC;
+			msg.format(L"Map downloaded, but it is not usable yet; the host will send it when the game starts.");
+		}
 	}
 	else
 	{
