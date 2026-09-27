@@ -40,7 +40,10 @@
 #include "GameClient/GadgetRadioButton.h"
 #include "GameClient/Shell.h"
 #include "GameClient/GameWindowManager.h"
+#include "GameClient/GadgetComboBox.h"
 #include "GameClient/GadgetListBox.h"
+#include "GameClient/GadgetTextEntry.h"
+#include "GameClient/GameText.h"
 #include "GameNetwork/GameSpy/PeerDefs.h"
 #include "GameNetwork/GameSpyOverlay.h"
 #include "GameClient/MapUtil.h"
@@ -62,6 +65,38 @@ static NameKeyType radioButtonUserMapsID = NAMEKEY_INVALID;
 extern WindowLayout *WOLMapSelectLayout;			///< Map selection overlay
 static GameWindow *mapList = nullptr;
 
+// TheSuperHackers @feature bill-rich 27/09/2026 Search box and player-count
+// dropdown, the same pair the LAN map select has had. The online list is the
+// longer of the two -- every official map plus everything the map downloader
+// has ever dropped in -- so scrolling it blind was the worse of the two.
+static NameKeyType textEntrySearchID = NAMEKEY_INVALID;
+static NameKeyType comboBoxFilterPlayersID = NAMEKEY_INVALID;
+static GameWindow *textEntrySearch = nullptr;
+static GameWindow *comboBoxFilterPlayers = nullptr;
+
+// Index 0 is "Any" (filter value 0), entries 1..7 are 2..8 players. The value
+// rides on each entry as item data so the callback never parses display text.
+static const Int FILTER_PLAYER_COUNT_MIN = 2;
+static const Int FILTER_PLAYER_COUNT_MAX = 8;
+
+static Int getCurrentPlayerCountFilter()
+{
+	if (!comboBoxFilterPlayers)
+		return 0;
+	Int selIndex = -1;
+	GadgetComboBoxGetSelectedPos(comboBoxFilterPlayers, &selIndex);
+	if (selIndex < 0)
+		return 0;
+	return (Int)GadgetComboBoxGetItemData(comboBoxFilterPlayers, selIndex);
+}
+
+static UnicodeString getCurrentNameFilter()
+{
+	if (!textEntrySearch)
+		return UnicodeString::TheEmptyString;
+	return GadgetTextEntryGetText(textEntrySearch);
+}
+
 static GameWindow *buttonMapStartPosition[MAX_SLOTS] = {0};
 static NameKeyType buttonMapStartPositionID[MAX_SLOTS] = { NAMEKEY_INVALID,NAMEKEY_INVALID,
 																									NAMEKEY_INVALID,NAMEKEY_INVALID,
@@ -74,10 +109,34 @@ static GameWindow *winMapWindow = nullptr;
 #include "GameNetwork/GeneralsOnline/NGMPGame.h"
 extern NGMPGame* TheNGMPGame;
 
+// Which side of the system/user split the list is showing. There is no
+// GadgetRadioGet..., and the search box and the dropdown both need to know, so
+// the screen tracks it: set once at init and again whenever a radio is clicked.
+static Bool s_usesSystemMaps = TRUE;
+
+// Unlike the LAN screen, this one keeps the system/user radio pair: a stats
+// match is restricted to official maps, and that restriction is expressed by
+// forcing the System selection. So the filter runs inside whichever side is
+// selected rather than merging the two.
+static void repopulateMapList()
+{
+	if (!mapList)
+		return;
+	if (TheMapCache)
+		TheMapCache->updateCache();
+	populateMapListboxFiltered( mapList, TRUE, getCurrentNameFilter(),
+	                            getCurrentPlayerCountFilter(),
+	                            TheNGMPGame->getMap(),
+	                            s_usesSystemMaps ? MAPORIGIN_OFFICIAL : MAPORIGIN_USER );
+}
+
+
 static void NullifyControls(void)
 {
 	parent = nullptr;
 	mapList = nullptr;
+	textEntrySearch = nullptr;
+	comboBoxFilterPlayers = nullptr;
 	if (winMapPreview)
 	{
 		winMapPreview->winSetUserData(nullptr);
@@ -102,6 +161,18 @@ static const char *gadgetsToHide[] =
 	"ButtonSelectMap",
 	"ButtonStart",
 	"StaticTextMapPreview",
+
+	// TheSuperHackers @bugfix bill-rich 27/09/2026 The panel grew downward to
+	// hold the search row, so it now covers the lobby's options row; and
+	// Randomize moved into the bottom button row, where it used to be Start
+	// alone. Both would otherwise show through the panel and still take clicks.
+	"CheckboxLimitSuperweapons",
+	"StartingCashLabel",
+	"ComboBoxStartingCash",
+	"CheckboxEnforceRandom",
+	"CheckBoxUseStats",
+	"CheckBoxLimitArmies",
+	"ButtonRandomize",
 
 	nullptr
 };
@@ -161,7 +232,37 @@ void WOLMapSelectMenuInit( WindowLayout *layout, void *userData )
 	listboxMap = TheNameKeyGenerator->nameToKey( "WOLMapSelectMenu.wnd:ListboxMap" );
 	radioButtonSystemMapsID = TheNameKeyGenerator->nameToKey( "WOLMapSelectMenu.wnd:RadioButtonSystemMaps" );
 	radioButtonUserMapsID = TheNameKeyGenerator->nameToKey( "WOLMapSelectMenu.wnd:RadioButtonUserMaps" );
+	textEntrySearchID = TheNameKeyGenerator->nameToKey( "WOLMapSelectMenu.wnd:TextEntrySearch" );
+	comboBoxFilterPlayersID = TheNameKeyGenerator->nameToKey( "WOLMapSelectMenu.wnd:ComboBoxFilterPlayers" );
 	winMapWindow = TheWindowManager->winGetWindowFromId( parent, listboxMap );
+
+	// Both are absent from an older layout, so every use is guarded.
+	textEntrySearch = TheWindowManager->winGetWindowFromId(parent, textEntrySearchID);
+	if (textEntrySearch)
+		GadgetTextEntrySetText(textEntrySearch, UnicodeString::TheEmptyString);
+
+	comboBoxFilterPlayers = TheWindowManager->winGetWindowFromId(parent, comboBoxFilterPlayersID);
+	if (comboBoxFilterPlayers)
+	{
+		GadgetComboBoxReset(comboBoxFilterPlayers);
+		const Color white = GameMakeColor(255, 255, 255, 255);
+
+		// Index 0: "Any" -- filter value 0 disables the player-count check.
+		Int idx = GadgetComboBoxAddEntry(comboBoxFilterPlayers,
+			TheGameText->fetch("GUI:FilterPlayersAny"), white);
+		GadgetComboBoxSetItemData(comboBoxFilterPlayers, idx, (void *)0);
+
+		const UnicodeString fmt = TheGameText->fetch("GUI:FilterPlayersFmt");
+		Int n;
+		for (n = FILTER_PLAYER_COUNT_MIN; n <= FILTER_PLAYER_COUNT_MAX; ++n)
+		{
+			UnicodeString label;
+			label.format(fmt.str(), n);
+			idx = GadgetComboBoxAddEntry(comboBoxFilterPlayers, label, white);
+			GadgetComboBoxSetItemData(comboBoxFilterPlayers, idx, (void *)n);
+		}
+		GadgetComboBoxSetSelectedPos(comboBoxFilterPlayers, 0);
+	}
 
 #if !defined(GENERALS_ONLINE_ALLOW_ALL_SETTINGS_FOR_STATS_MATCHES)
 	GameWindow* radioButtonSystemMaps = TheWindowManager->winGetWindowFromId(parent, radioButtonSystemMapsID);
@@ -201,11 +302,11 @@ void WOLMapSelectMenuInit( WindowLayout *layout, void *userData )
 	GadgetListBoxSetListLength(mapList, TheMapCache->size());
 #endif
 	
+	s_usesSystemMaps = usesSystemMapDir;
+
 	if( mapList )
 	{
-		if (TheMapCache)
-			TheMapCache->updateCache();
-		populateMapListbox( mapList, usesSystemMapDir, TRUE, TheNGMPGame->getMap() );
+		repopulateMapList();
 	}
 
 }
@@ -397,6 +498,30 @@ WindowMsgHandledType WOLMapSelectMenuSystem( GameWindow *window, UnsignedInt msg
 				}
 				break;
 			}
+		// --------------------------------------------------------------------------------------------
+		case GEM_UPDATE_TEXT:
+		{
+			GameWindow *control = (GameWindow *)mData1;
+			if (control != nullptr && mapList != nullptr &&
+			    control->winGetWindowId() == (Int)textEntrySearchID)
+			{
+				repopulateMapList();
+			}
+			break;
+		}
+
+		// --------------------------------------------------------------------------------------------
+		case GCM_SELECTED:
+		{
+			GameWindow *control = (GameWindow *)mData1;
+			if (control != nullptr && mapList != nullptr &&
+			    control->winGetWindowId() == (Int)comboBoxFilterPlayersID)
+			{
+				repopulateMapList();
+			}
+			break;
+		}
+
 		//---------------------------------------------------------------------------------------------
 		case GBM_SELECTED:
 		{
@@ -418,18 +543,16 @@ WindowMsgHandledType WOLMapSelectMenuSystem( GameWindow *window, UnsignedInt msg
 			}
 			else if ( controlID == radioButtonSystemMapsID )
 			{
-				if (TheMapCache)
-					TheMapCache->updateCache();
-				populateMapListbox( mapList, TRUE, TRUE, TheNGMPGame->getMap() );
+				s_usesSystemMaps = TRUE;
+				repopulateMapList();
 				CustomMatchPreferences pref;
 				pref.setUsesSystemMapDir(TRUE);
 				pref.write();
 			}
 			else if ( controlID == radioButtonUserMapsID )
 			{
-				if (TheMapCache)
-					TheMapCache->updateCache();
-				populateMapListbox( mapList, FALSE, TRUE, TheNGMPGame->getMap() );
+				s_usesSystemMaps = FALSE;
+				repopulateMapList();
 				CustomMatchPreferences pref;
 				pref.setUsesSystemMapDir(FALSE);
 				pref.write();

@@ -1709,7 +1709,7 @@ struct UnicodeStringNoCaseLess
 };
 
 //-------------------------------------------------------------------------------------------------
-Int populateMapListboxFiltered( GameWindow *listbox, Bool isMultiplayer, const UnicodeString& nameFilter, Int playerCountFilter, AsciiString mapToSelect )
+Int populateMapListboxFiltered( GameWindow *listbox, Bool isMultiplayer, const UnicodeString& nameFilter, Int playerCountFilter, AsciiString mapToSelect, Int originFilter )
 {
 	if (!TheMapCache)
 		return -1;
@@ -1756,6 +1756,10 @@ Int populateMapListboxFiltered( GameWindow *listbox, Bool isMultiplayer, const U
 		if (mapData.m_displayName.isEmpty())
 			continue;
 		if (playerCountFilter > 0 && mapData.m_numPlayers != playerCountFilter)
+			continue;
+		if (originFilter == MAPORIGIN_OFFICIAL && !mapData.m_isOfficial)
+			continue;
+		if (originFilter == MAPORIGIN_USER && mapData.m_isOfficial)
 			continue;
 		if (!wideContainsNoCase(mapData.m_displayName.str(), needle))
 			continue;

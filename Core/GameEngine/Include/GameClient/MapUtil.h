@@ -192,12 +192,22 @@ extern TechAndSupplyImages TheSupplyAndTechImageLocations;
 Int populateMapListbox( GameWindow *listbox, Bool useSystemMaps, Bool isMultiplayer, AsciiString mapToSelect = AsciiString::TheEmptyString );		/// Read a list of maps from the run directory and fill in the listbox.  Return the selected index
 Int populateMapListboxNoReset( GameWindow *listbox, Bool useSystemMaps, Bool isMultiplayer, AsciiString mapToSelect = AsciiString::TheEmptyString );		/// Read a list of maps from the run directory and fill in the listbox.  Return the selected index
 
-// Fills the listbox with every map (system and user dirs combined) whose
-// display name contains nameFilter as a case-insensitive substring AND whose
-// supported player count equals playerCountFilter. An empty nameFilter
-// matches every name; a playerCountFilter <= 0 matches every player count.
-// Used by the LAN map-select search box and player-count dropdown.
-Int populateMapListboxFiltered( GameWindow *listbox, Bool isMultiplayer, const UnicodeString& nameFilter, Int playerCountFilter = 0, AsciiString mapToSelect = AsciiString::TheEmptyString );
+// How populateMapListboxFiltered treats the system/user split.
+enum MapOriginFilter
+{
+	MAPORIGIN_ANY = -1,      ///< system and user maps in one merged list (the LAN screen)
+	MAPORIGIN_USER = 0,      ///< only maps under the user maps directory
+	MAPORIGIN_OFFICIAL = 1,  ///< only maps that shipped with the game
+};
+
+// Fills the listbox with every map whose display name contains nameFilter as a
+// case-insensitive substring AND whose supported player count equals
+// playerCountFilter. An empty nameFilter matches every name; a
+// playerCountFilter <= 0 matches every player count. originFilter restricts the
+// list to one side of the system/user split, for the screens that still offer
+// that choice; MAPORIGIN_ANY merges both.
+// Used by the map-select search boxes and player-count dropdowns.
+Int populateMapListboxFiltered( GameWindow *listbox, Bool isMultiplayer, const UnicodeString& nameFilter, Int playerCountFilter = 0, AsciiString mapToSelect = AsciiString::TheEmptyString, Int originFilter = MAPORIGIN_ANY );
 Bool isValidMap( AsciiString mapName, Bool isMultiplayer );						/// Validate a map
 Image *getMapPreviewImage( AsciiString mapName );
 AsciiString getDefaultMap( Bool isMultiplayer );											/// Find a valid map
