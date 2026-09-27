@@ -59,6 +59,7 @@
 #include "GameClient/WindowLayout.h"
 #include "GameClient/Gadget.h"
 #include "GameClient/GameWindowManager.h"
+#include "Common/ReleaseLog.h"
 #include "GameClient/GameWindowGlobal.h"
 #include "GameClient/GadgetStaticText.h"
 #include "GameClient/GadgetTabControl.h"
@@ -257,8 +258,19 @@ static void readUntilSemicolon( File *fp, char *buffer, int maxBufLen )
 	while( i < maxBufLen )
 	{
 
+		// TheSuperHackers @bugfix bill-rich 26/09/2026 Stop at the end of the
+		// file. A failed read leaves the byte as it was, so a layout whose last
+		// field never reaches its semicolon used to sit here reading nothing
+		// forever: with the stale byte a space and nothing written yet, the
+		// index never advances and the loop never ends. The game froze with the
+		// main thread spinning, no crash dump and nothing in the log.
 		// get next character
-		fp->read(buffer + i, 1);
+		if( fp->read(buffer + i, 1) != 1 )
+		{
+			ReleaseLog("Layout parse: end of file before the closing semicolon.");
+			buffer[ i ] = '\000';
+			return;
+		}
 
 		// make all whitespace characters spaces
 		if( isspace( (unsigned char)buffer[ i ] ) )
@@ -597,24 +609,35 @@ static Bool parseFont( const char *token, WinInstanceData *instData,
 	Int fontSize;
 	Int fontBold;
 
+	// TheSuperHackers @bugfix bill-rich 26/09/2026 Bounded search, and it has to
+	// run before strtok: strtok writes a terminator over the first separator, so
+	// a search afterwards would only ever see the label. The old code walked
+	// through that terminator, and off the end of the buffer when the value
+	// carried no quote at all, which a layout that ends early can now produce.
+	ptr = strchr( buffer, '"' );
+	if( ptr == nullptr )
+		return FALSE;
+
 	// "NAME"
 	c = strtok( buffer, seps );  // label
-	// scan to the first " mark
-	ptr = buffer;
-	while( *ptr != '"' )
-		ptr++;
 	ptr++;  // skip the "
 	c = strtok( ptr, stringSeps );  // value
+	if( c == nullptr )
+		return FALSE;
 	strlcpy(fontName, c, ARRAY_SIZE(fontName));
 
 	// "SIZE"
 	c = strtok( nullptr, seps );  // label
 	c = strtok( nullptr, seps );  // value
+	if( c == nullptr )
+		return FALSE;
 	scanInt( c, fontSize );
 
 	// "BOLD"
 	c = strtok( nullptr, seps );  // label
 	c = strtok( nullptr, seps );  // value
+	if( c == nullptr )
+		return FALSE;
 	scanInt( c, fontBold );
 
 	if( TheFontLibrary )
@@ -639,11 +662,16 @@ static Bool parseName( const char *token, WinInstanceData *instData,
 	const char *stringSeps = "\"";
 
 	// scan to the first " mark
-	ptr = buffer;
-	while( *ptr != '"' )
-		ptr++;
+	// TheSuperHackers @bugfix bill-rich 26/09/2026 Bounded search. This used to
+	// walk past the end of the buffer when the value carried no quote, which a
+	// layout that ends early can now produce.
+	ptr = strchr( buffer, '"' );
+	if( ptr == nullptr )
+		return FALSE;
 	ptr++;  // skip the first "
 	c = strtok( ptr, stringSeps );  // name value
+	if( c == nullptr )
+		return FALSE;
 	instData->m_decoratedNameString = c;
 
 	// given the name assign a window ID from the
@@ -694,11 +722,16 @@ static Bool parseSystemCallback( const char *token, WinInstanceData *instData,
 	const char *stringSeps = "\"";
 
 	// scan to the first " mark
-	ptr = buffer;
-	while( *ptr != '"' )
-		ptr++;
+	// TheSuperHackers @bugfix bill-rich 26/09/2026 Bounded search. This used to
+	// walk past the end of the buffer when the value carried no quote, which a
+	// layout that ends early can now produce.
+	ptr = strchr( buffer, '"' );
+	if( ptr == nullptr )
+		return FALSE;
 	ptr++;  // skip the first "
 	c = strtok( ptr, stringSeps );  // name value
+	if( c == nullptr )
+		return FALSE;
 
 	// save a pointer of the function address
 	DEBUG_ASSERTCRASH( TheNameKeyGenerator && TheFunctionLexicon, ("Invalid singletons") );
@@ -721,11 +754,16 @@ static Bool parseInputCallback( const char *token, WinInstanceData *instData,
 	const char *stringSeps = "\"";
 
 	// scan to the first " mark
-	ptr = buffer;
-	while( *ptr != '"' )
-		ptr++;
+	// TheSuperHackers @bugfix bill-rich 26/09/2026 Bounded search. This used to
+	// walk past the end of the buffer when the value carried no quote, which a
+	// layout that ends early can now produce.
+	ptr = strchr( buffer, '"' );
+	if( ptr == nullptr )
+		return FALSE;
 	ptr++;  // skip the first "
 	c = strtok( ptr, stringSeps );  // name value
+	if( c == nullptr )
+		return FALSE;
 
 	// save a pointer of the function address
 	DEBUG_ASSERTCRASH( TheNameKeyGenerator && TheFunctionLexicon, ("Invalid singletons") );
@@ -748,11 +786,16 @@ static Bool parseTooltipCallback( const char *token, WinInstanceData *instData,
 	const char *stringSeps = "\"";
 
 	// scan to the first " mark
-	ptr = buffer;
-	while( *ptr != '"' )
-		ptr++;
+	// TheSuperHackers @bugfix bill-rich 26/09/2026 Bounded search. This used to
+	// walk past the end of the buffer when the value carried no quote, which a
+	// layout that ends early can now produce.
+	ptr = strchr( buffer, '"' );
+	if( ptr == nullptr )
+		return FALSE;
 	ptr++;  // skip the first "
 	c = strtok( ptr, stringSeps );  // name value
+	if( c == nullptr )
+		return FALSE;
 
 	// save a pointer of the function address
 	DEBUG_ASSERTCRASH( TheNameKeyGenerator && TheFunctionLexicon, ("Invalid singletons") );
@@ -775,11 +818,16 @@ static Bool parseDrawCallback( const char *token, WinInstanceData *instData,
 	const char *stringSeps = "\"";
 
 	// scan to the first " mark
-	ptr = buffer;
-	while( *ptr != '"' )
-		ptr++;
+	// TheSuperHackers @bugfix bill-rich 26/09/2026 Bounded search. This used to
+	// walk past the end of the buffer when the value carried no quote, which a
+	// layout that ends early can now produce.
+	ptr = strchr( buffer, '"' );
+	if( ptr == nullptr )
+		return FALSE;
 	ptr++;  // skip the first "
 	c = strtok( ptr, stringSeps );  // name value
+	if( c == nullptr )
+		return FALSE;
 
 	// save a pointer of the function address
 	DEBUG_ASSERTCRASH( TheNameKeyGenerator && TheFunctionLexicon, ("Invalid singletons") );
@@ -802,11 +850,16 @@ static Bool parseHeaderTemplate( const char *token, WinInstanceData *instData,
 	const char *stringSeps = "\"";
 
 	// scan to the first " mark
-	ptr = buffer;
-	while( *ptr != '"' )
-		ptr++;
+	// TheSuperHackers @bugfix bill-rich 26/09/2026 Bounded search. This used to
+	// walk past the end of the buffer when the value carried no quote, which a
+	// layout that ends early can now produce.
+	ptr = strchr( buffer, '"' );
+	if( ptr == nullptr )
+		return FALSE;
 	ptr++;  // skip the first "
 	c = strtok( ptr, stringSeps );  // name value
+	if( c == nullptr )
+		return FALSE;
 
 	// save a pointer of the function address
 	DEBUG_ASSERTCRASH( TheNameKeyGenerator && TheFunctionLexicon, ("Invalid singletons") );
@@ -977,17 +1030,20 @@ static Bool parseRadioButtonData( const char *token, WinInstanceData *instData,
 static Bool parseTooltipText( const char *token, WinInstanceData *instData,
 											 char *buffer, void *data )
 {
-	char *ptr = buffer;
 	char *c;
 	const char *stringSeps = "\n\r\t\"";
 
-	// scan to the first " mark
-	while( *ptr != '"' )
-		ptr++;
+	// scan to the first " mark, without running off the end of a value that
+	// carries no quote at all
+	char *ptr = strchr( buffer, '"' );
+	if( ptr == nullptr )
+		return FALSE;
 	ptr++;  // skip the "
 	if(strlen( ptr ) == 1 )
 		return TRUE;
 	c = strtok( ptr, stringSeps );  // value
+	if( c == nullptr )
+		return FALSE;
 	if( strlen( c ) >= MAX_TEXT_LABEL )
 	{
 
@@ -1029,15 +1085,18 @@ static Bool parseTooltipDelay( const char *token, WinInstanceData *instData,
 static Bool parseText( const char *token, WinInstanceData *instData,
 											 char *buffer, void *data )
 {
-	char *ptr = buffer;
 	char *c;
 	const char *stringSeps = "\n\r\t\"";
 
-	// scan to the first " mark
-	while( *ptr != '"' )
-		ptr++;
+	// scan to the first " mark, without running off the end of a value that
+	// carries no quote at all
+	char *ptr = strchr( buffer, '"' );
+	if( ptr == nullptr )
+		return FALSE;
 	ptr++;  // skip the "
 	c = strtok( ptr, stringSeps );  // value
+	if( c == nullptr )
+		return FALSE;
 	if( strlen( c ) >= MAX_TEXT_LABEL )
 	{
 
@@ -2389,8 +2448,17 @@ static GameWindow *parseWindow( File *inFile, char *buffer )
 	while( TRUE )
 	{
 
+		// TheSuperHackers @bugfix bill-rich 26/09/2026 Stop at the end of the
+		// data. scanString clears the string and returns FALSE there, and the
+		// loop used to ignore that: an empty token matches no field and no
+		// keyword, so a layout that ends early spun here forever, freezing the
+		// game with no crash and nothing in the log.
 		// get token
-		inFile->scanString(asciibuf);
+		if( inFile->scanString(asciibuf) == FALSE )
+		{
+			ReleaseLog("Layout parse: unexpected end of data inside a window block.");
+			goto cleanupAndExit;
+		}
 
 		// parse field
 		for( parse = gameWindowFieldList; parse->parse; parse++ )
@@ -2593,8 +2661,13 @@ Bool parseLayoutBlock( File *inFile, char *buffer, UnsignedInt version, WindowLa
 	while( TRUE )
 	{
 
+		// TheSuperHackers @bugfix bill-rich 26/09/2026 As above: end of data is
+		// a broken layout, not something to spin on.
 		// get next token
-		inFile->scanString(asciitoken);
+		if (inFile->scanString(asciitoken) == FALSE) {
+			ReleaseLog("Layout parse: unexpected end of data inside the layout block.");
+			return FALSE;
+		}
 
 		// check for end
 		if (asciitoken.compare("ENDLAYOUTBLOCK") == 0) {
@@ -2880,6 +2953,16 @@ GameWindow *GameWindowManager::winCreateFromScript( AsciiString filenameString,
 
       // Parse window descriptions until the last END is read
       window = parseWindow( inFile, buffer );
+
+			// TheSuperHackers @bugfix bill-rich 26/09/2026 A window that failed to
+			// parse used to be stored in the layout's list anyway, so every later
+			// walk of that list met a null. Stop reading the file instead: the
+			// caller already treats an empty result as a failed layout.
+			if( window == nullptr )
+			{
+				ReleaseLog("Layout parse: '%s' has a window that could not be built.", filename);
+				break;
+			}
 
 			// save first window created
 			if( firstWindow == nullptr )

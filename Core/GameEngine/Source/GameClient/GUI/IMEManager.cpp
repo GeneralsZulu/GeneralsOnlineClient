@@ -564,10 +564,13 @@ void IMEManager::init()
 	m_oldContext = ImmGetContext( ApplicationHWnd );
 	m_disabled = 0;
 	m_candidateWindow = TheWindowManager->winCreateFromScript( "IMECandidateWindow.wnd");
-	m_candidateWindow->winSetStatus(WIN_STATUS_ABOVE);
 
+	// TheSuperHackers @bugfix bill-rich 26/09/2026 The status was set before the
+	// null check right below it, so a layout that failed to load killed the game
+	// here during start up, before anything could be logged.
 	if ( m_candidateWindow )
 	{
+		m_candidateWindow->winSetStatus(WIN_STATUS_ABOVE);
 		m_candidateWindow->winHide( TRUE );
 
 		// find text area window

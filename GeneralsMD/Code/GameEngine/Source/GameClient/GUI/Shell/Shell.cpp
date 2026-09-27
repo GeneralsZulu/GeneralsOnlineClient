@@ -34,6 +34,7 @@
 #include "Common/RandomValue.h"
 #include "Common/Recorder.h"
 #include "GameClient/Shell.h"
+#include "Common/ReleaseLog.h"
 #include "GameClient/WindowLayout.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/GameWindowTransitions.h"
@@ -716,6 +717,28 @@ void Shell::doPush(AsciiString layoutFile)
 	// create new layout and load from window manager
 	newScreen = TheWindowManager->winCreateLayout(layoutFile);
 	DEBUG_ASSERTCRASH(newScreen != NULL, ("Shell unable to load pending push layout"));
+
+	// TheSuperHackers @bugfix bill-rich 26/09/2026 A layout that fails to load
+	// used to take the game down here, on the next line and again in runInit.
+	// Say which file it was and leave the current screen up: the player gets a
+	// menu that does not open rather than a client that dies.
+	if (newScreen == NULL)
+	{
+		ReleaseLog("Shell: could not load the layout '%s'; returning to the previous screen.", layoutFile.str());
+
+		// push() already shut the previous screen down and hid it, so simply
+		// returning would leave the player looking at an empty shell with no
+		// way out. Bring that screen back, the way a pop does.
+		WindowLayout *previous = top();
+		if (previous != NULL)
+		{
+			previous->hide(FALSE);
+			previous->runInit(NULL);
+			previous->bringForward();
+		}
+
+		return;
+	}
 
 	// link screen to the top
 	linkScreen(newScreen);
