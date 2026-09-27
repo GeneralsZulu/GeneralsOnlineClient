@@ -85,6 +85,14 @@ void ShowInGameChat( Bool immediate )
 		chatTextEntry = TheWindowManager->winGetWindowFromId( nullptr, textEntryChatID );
 		GadgetTextEntrySetText( chatTextEntry, UnicodeString::TheEmptyString );
 
+		// A layout that starts hidden would leave the box invisible while it
+		// still holds focus, so the player types into nothing. Show it the
+		// same way the re-open path above does.
+		chatWindow->winHide(FALSE);
+		chatWindow->winEnable(TRUE);
+		chatTextEntry->winHide(FALSE);
+		chatTextEntry->winEnable(TRUE);
+
 		static NameKeyType chatTypeStaticTextID = TheNameKeyGenerator->nameToKey( "InGameChat.wnd:StaticTextChatType" );
 		chatTypeStaticText = TheWindowManager->winGetWindowFromId( nullptr, chatTypeStaticTextID );
 	}
@@ -203,7 +211,10 @@ void ToggleInGameChat( Bool immediate )
 		return;
 
 #if defined(GENERALS_ONLINE)
-	if (TheNGMPGame == nullptr)
+	// TheNGMPGame only exists for an online match. A LAN match has none, so
+	// asking for it alone shuts chat off for LAN play; fall back to the retail
+	// multiplayer check there, which is also what makes !surrender reachable.
+	if (TheNGMPGame == nullptr && !TheGameInfo->isMultiPlayer() && TheGlobalData->m_netMinPlayers)
 #else
 	if (!TheGameInfo->isMultiPlayer() && TheGlobalData->m_netMinPlayers)
 #endif
