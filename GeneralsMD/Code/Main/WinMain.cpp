@@ -837,6 +837,32 @@ Int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 		{
 			*pEnd = 0;
 		}
+
+		// TheSuperHackers @feature bill-rich 25/09/2026 A build installed in a
+		// subfolder of the game, so it cannot disturb the files of another
+		// client, still has to run with the game folder as its working
+		// directory: that is where the engine looks for the retail archives.
+		// If the folder holding this exe has no game data but its parent does,
+		// step up one level. Anything else keeps the old behaviour.
+		{
+			Char probe[_MAX_PATH];
+			if (_snprintf(probe, ARRAY_SIZE(probe), "%s\\INIZH.big", buffer) > 0
+				&& GetFileAttributes(probe) == INVALID_FILE_ATTRIBUTES)
+			{
+				Char parent[_MAX_PATH];
+				strlcpy(parent, buffer, ARRAY_SIZE(parent));
+				if (Char* pParentEnd = strrchr(parent, '\\'))
+				{
+					*pParentEnd = 0;
+					if (_snprintf(probe, ARRAY_SIZE(probe), "%s\\INIZH.big", parent) > 0
+						&& GetFileAttributes(probe) != INVALID_FILE_ATTRIBUTES)
+					{
+						strlcpy(buffer, parent, ARRAY_SIZE(buffer));
+					}
+				}
+			}
+		}
+
 		::SetCurrentDirectory(buffer);
 
 
