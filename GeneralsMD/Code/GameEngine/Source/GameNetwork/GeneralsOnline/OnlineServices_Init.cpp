@@ -195,6 +195,11 @@ std::string NGMP_OnlineServicesManager::GetAPIEndpoint(const char* szEndpoint)
 	}
 	else // PROD
 	{
+#if defined(ZULU_GO_SELFHOST_BASE)
+		// Self hosted: one base for everything, and no alternative endpoint,
+		// which would otherwise send a player back to the public service.
+		return std::format("{}/env/prod/contract/1/{}", ZULU_GO_SELFHOST_BASE, szEndpoint);
+#else
 		if (NGMP_OnlineServicesManager::Settings.Network_UseAlternativeEndpoint())
 		{
 			return std::format("https://api-ru.playgenerals.online/env/prod/contract/1/{}", szEndpoint);
@@ -203,6 +208,7 @@ std::string NGMP_OnlineServicesManager::GetAPIEndpoint(const char* szEndpoint)
 		{
 			return std::format("https://api.playgenerals.online/env/prod/contract/1/{}", szEndpoint);
 		}
+#endif
 	}
 }
 
@@ -842,7 +848,12 @@ void NGMP_OnlineServicesManager::OnLogin(ELoginResult loginResult, const char* s
 		m_pWebSocket = std::make_shared<WebSocket>();
 
 		// TODO_NGMP: This should come from the service, if the service was russia-aware
+#if defined(ZULU_GO_SELFHOST_BASE)
+		// The address the service handed us is the only one that exists here.
+		std::string strWebsocketAddr = std::string(szWSAddr);
+#else
 		std::string strWebsocketAddr = NGMP_OnlineServicesManager::Settings.Network_UseAlternativeEndpoint() ? "wss://api-ru.playgenerals.online/ws" : std::string(szWSAddr);
+#endif
 
         m_pWebSocket->Connect(strWebsocketAddr.c_str(), false, [=]()
             {
@@ -880,6 +891,19 @@ void NGMP_OnlineServicesManager::Init()
 	m_pHTTPManager->Initialize();
 
     std::string strPlugin = NGMP_OnlineServicesManager::Settings.GetAnticheatPlugin();
+
+#if defined(ZULU_GO_SELFHOST_BASE)
+	// TheSuperHackers @bugfix bill-rich 26/09/2026 The anticheat plugin belongs
+	// to the public service and answers to it. A self hosted build shares the
+	// settings file with the public client, so the plugin name is already set
+	// on any machine that plays there, and loading it here points it at a
+	// service that never asked for it. Leave it alone.
+	if (!strPlugin.empty())
+	{
+		NetworkLog(ELogVerbosity::LOG_RELEASE, "Anticheat plugin '%s' not loaded: this build does not use the public service.", strPlugin.c_str());
+	}
+	strPlugin.clear();
+#endif
 
 	// Empty name means no anticheat plugin configured; skip loading.
 	if (!strPlugin.empty())

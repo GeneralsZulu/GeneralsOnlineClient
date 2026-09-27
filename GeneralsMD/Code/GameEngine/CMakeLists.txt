@@ -1269,3 +1269,12 @@ target_precompile_headers(z_gameengine PRIVATE
 
 add_compile_definitions(_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
 add_compile_definitions(GENERALS_ONLINE)
+
+# Point this build at a self-hosted GeneralsOnline Services instance instead of
+# the public one, e.g. -DZULU_GO_SELFHOST_BASE="https://host.example.org/go".
+# The API endpoints and the login page both hang off that base. Leave it unset
+# for a normal build.
+if(DEFINED ZULU_GO_SELFHOST_BASE AND NOT ZULU_GO_SELFHOST_BASE STREQUAL "")
+    add_compile_definitions(ZULU_GO_SELFHOST_BASE="${ZULU_GO_SELFHOST_BASE}")
+    message(STATUS "GeneralsOnline services: self hosted at ${ZULU_GO_SELFHOST_BASE}")
+endif()

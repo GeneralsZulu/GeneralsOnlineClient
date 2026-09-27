@@ -101,6 +101,12 @@ static int FRAME_GROUPING_CAP = 64;
 #define GENERALS_ONLINE_USE_SENTRY 1
 #endif
 
+// A self-hosted build reports to nobody: the crash reporting project belongs to
+// the public service, and a private build's crashes are not theirs to carry.
+#if defined(ZULU_GO_SELFHOST_BASE) && defined(GENERALS_ONLINE_USE_SENTRY)
+#undef GENERALS_ONLINE_USE_SENTRY
+#endif
+
 #define GENERALS_ONLINE_WIDESCREEN 1
 
 #if defined(GENERALS_ONLINE_WIDESCREEN)

@@ -15,7 +15,12 @@
 
 #pragma comment(lib, "Crypt32.lib")
 
-#if defined(USE_TEST_ENV)
+#if defined(ZULU_GO_SELFHOST_BASE)
+// A self hosted build shares the user data folder with the public client, so it
+// keeps its own credentials file. Writing the public one would sign the player
+// out of the service this build never talks to.
+#define CREDENTIALS_FILENAME "credentials_selfhost.json"
+#elif defined(USE_TEST_ENV)
 #define CREDENTIALS_FILENAME "credentials_env_test.json"
 #elif !defined(DEBUG) || defined(USE_DEBUG_ON_LIVE_SERVER)
 #define CREDENTIALS_FILENAME "credentials.json"
@@ -435,7 +440,10 @@ void NGMP_OnlineServices_AuthInterface::DoFullLoginFlow()
 						m_strCode = authResp.login_code;
 						NetworkLog(ELogVerbosity::LOG_DEBUG, "Login Code is %s", m_strCode.c_str());
 
-#if defined(USE_TEST_ENV)
+#if defined(ZULU_GO_SELFHOST_BASE)
+                        // The self hosted service serves its own sign in page.
+                        std::string strURI = std::format("{}/login?gamecode={}", ZULU_GO_SELFHOST_BASE, m_strCode.c_str());
+#elif defined(USE_TEST_ENV)
                         std::string strURI = std::format("http://www.playgenerals.online/login/?gamecode={}&env=test", m_strCode.c_str());
 #else
                         std::string strURI = std::format("http://www.playgenerals.online/login/?gamecode={}", m_strCode.c_str());
