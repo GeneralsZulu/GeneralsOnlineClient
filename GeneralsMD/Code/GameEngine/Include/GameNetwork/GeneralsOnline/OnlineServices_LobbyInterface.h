@@ -443,10 +443,25 @@ public:
 	{
 		m_CurrentLobby = LobbyEntry();
 
-		std::scoped_lock<std::mutex> lock(m_rosterCallbackMutex);
-		if (m_RosterNeedsRefreshCallback != nullptr)
+		InvokeRosterNeedsRefreshCallback();
+	}
+
+	// TheSuperHackers @bugfix bill-rich 26/09/2026 Call the roster callback with
+	// the lock released. It redraws the lobby, and anything that redraw reaches
+	// which comes back into this interface, a screen teardown deregistering the
+	// callback above all, would deadlock on this non-recursive mutex and hang
+	// the client with no crash and nothing in the log.
+	void InvokeRosterNeedsRefreshCallback()
+	{
+		std::function<void()> cb;
 		{
-			m_RosterNeedsRefreshCallback();
+			std::scoped_lock<std::mutex> lock(m_rosterCallbackMutex);
+			cb = m_RosterNeedsRefreshCallback;
+		}
+
+		if (cb != nullptr)
+		{
+			cb();
 		}
 	}
 

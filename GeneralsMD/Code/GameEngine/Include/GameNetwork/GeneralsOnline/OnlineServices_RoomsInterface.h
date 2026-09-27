@@ -212,11 +212,24 @@ public:
 	void ResetCachedRoomData()
 	{
 		m_mapMembers.clear();
-	
-		std::scoped_lock<std::mutex> lock(m_rosterCallbackMutex);
-		if (m_RosterNeedsRefreshCallback != nullptr)
+
+		InvokeRosterNeedsRefreshCallback();
+	}
+
+	// TheSuperHackers @bugfix bill-rich 26/09/2026 Call the roster callback with
+	// the lock released, so a redraw that comes back into this interface cannot
+	// deadlock on this non-recursive mutex.
+	void InvokeRosterNeedsRefreshCallback()
+	{
+		std::function<void()> cb;
 		{
-			m_RosterNeedsRefreshCallback();
+			std::scoped_lock<std::mutex> lock(m_rosterCallbackMutex);
+			cb = m_RosterNeedsRefreshCallback;
+		}
+
+		if (cb != nullptr)
+		{
+			cb();
 		}
 	}
 

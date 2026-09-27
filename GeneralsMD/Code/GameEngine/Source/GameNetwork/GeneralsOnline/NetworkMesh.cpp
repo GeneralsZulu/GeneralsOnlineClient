@@ -612,9 +612,15 @@ NetworkMesh::NetworkMesh()
 	// mtx_do_lock.
 	g_bNetworkMeshDestroying.store(true);
 
+	// TheSuperHackers @info bill-rich 26/09/2026 Breadcrumbs around the socket
+	// library calls. A client that freezes here writes no crash dump and its
+	// last log line is the one before this function, which says nothing about
+	// which of the two calls blocked.
 	// try a shutdown
 	g_bNetworkMeshDestroying.store(true);
+	NetworkLog(ELogVerbosity::LOG_RELEASE, "[Mesh] Shutting the socket library down");
 	GameNetworkingSockets_Kill();
+	NetworkLog(ELogVerbosity::LOG_RELEASE, "[Mesh] Socket library shut down");
 
 	NGMP_OnlineServicesManager* pOnlineServicesMgr = NGMP_OnlineServicesManager::GetInstance();
 	if (pOnlineServicesMgr == nullptr)
@@ -653,11 +659,13 @@ NetworkMesh::NetworkMesh()
 
 	// initialize Steam Sockets
 	SteamDatagramErrMsg errMsg;
+	NetworkLog(ELogVerbosity::LOG_RELEASE, "[Mesh] Starting the socket library");
 	if (!GameNetworkingSockets_Init(&identityLocal, errMsg))
 	{
 		NetworkLog(ELogVerbosity::LOG_RELEASE, "GameNetworkingSockets_Init failed.  %s", errMsg);
 		return;
 	}
+	NetworkLog(ELogVerbosity::LOG_RELEASE, "[Mesh] Socket library started");
 
 	// TODO_STEAM: Dont hardcode, get everything from service
 	SteamNetworkingUtils()->SetGlobalConfigValueString(k_ESteamNetworkingConfig_P2P_STUN_ServerList, "stun:stun.playgenerals.online:53,stun:stun.playgenerals.online:3478,stun.l.google.com:19302,stun1.l.google.com:19302,stun2.l.google.com:19302,stun3.l.google.com:19302,stun4.l.google.com:19302");

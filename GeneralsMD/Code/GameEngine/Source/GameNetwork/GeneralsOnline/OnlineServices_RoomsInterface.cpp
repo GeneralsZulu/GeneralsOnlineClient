@@ -1836,10 +1836,9 @@ void NGMP_OnlineServices_RoomsInterface::OnRosterUpdated(std::unordered_map<uint
 		ReportRoomJoinFailure(roomJoinFailure);
 	}
 
-	std::scoped_lock<std::mutex> lock(m_rosterCallbackMutex);
-	if (refreshRoster && m_RosterNeedsRefreshCallback != nullptr)
+	if (refreshRoster)
 	{
-		m_RosterNeedsRefreshCallback();
+		InvokeRosterNeedsRefreshCallback();
 	}
 }
 

@@ -1343,11 +1343,7 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 									UpdateCurrentLobby_HasMap();
 								}
 
-								std::scoped_lock<std::mutex> lock(m_rosterCallbackMutex);
-								if (m_RosterNeedsRefreshCallback != nullptr)
-								{
-									m_RosterNeedsRefreshCallback();
-								}
+								InvokeRosterNeedsRefreshCallback();
 							}
 						}
 
@@ -1836,10 +1832,15 @@ void NGMP_OnlineServices_LobbyInterface::OnJoinedOrCreatedLobby(bool bAlreadyUpd
 	AnticheatPlugInterface::BeginSession();
 	NetworkLog(ELogVerbosity::LOG_RELEASE, "[AC] Begin Session End");
 
+	// TheSuperHackers @info bill-rich 26/09/2026 Breadcrumbs through the lobby
+	// entry path. A freeze here leaves no crash dump and no other trace, so the
+	// release log has to say which of these calls it was inside.
 	// join the network mesh too
 	if (m_pLobbyMesh == nullptr)
 	{
+		NetworkLog(ELogVerbosity::LOG_RELEASE, "[Lobby] Creating network mesh");
 		m_pLobbyMesh = new NetworkMesh();
+		NetworkLog(ELogVerbosity::LOG_RELEASE, "[Lobby] Network mesh created");
 	}
 
 	m_bMarkedGameAsFinished = false;
@@ -1853,10 +1854,16 @@ void NGMP_OnlineServices_LobbyInterface::OnJoinedOrCreatedLobby(bool bAlreadyUpd
 	// must be done in a callback, this is an async function
 	if (!bAlreadyUpdatedDetails)
 	{
+		NetworkLog(ELogVerbosity::LOG_RELEASE, "[Lobby] Updating room data cache");
 		UpdateRoomDataCache([=](bool bSuccess)
 			{
+				NetworkLog(ELogVerbosity::LOG_RELEASE, "[Lobby] Room data cache updated: %d", bSuccess ? 1 : 0);
 				fnCallback(bSuccess);
 			});
+	}
+	else
+	{
+		NetworkLog(ELogVerbosity::LOG_RELEASE, "[Lobby] Lobby entry complete");
 	}
 
 
