@@ -105,6 +105,9 @@ void NGMPGame::SyncWithLobby(LobbyEntry& lobby)
 	// superweapon
 	setSuperweaponRestriction(lobby.limit_superweapons);
 
+	// enforce random
+	setEnforceRandom(lobby.enforce_random);
+
 	// vanilla teams
 	setOldFactionsOnly(lobby.vanilla_teams);
 

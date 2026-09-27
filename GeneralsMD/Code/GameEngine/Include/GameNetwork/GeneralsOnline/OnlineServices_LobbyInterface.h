@@ -63,6 +63,10 @@ struct LobbyEntry
 	bool vanilla_teams = false;
 	uint32_t starting_cash = 0;
 	bool limit_superweapons = false;
+	// TheSuperHackers @feature bill-rich 27/09/2026 enforce-random lobby rule: every
+	// occupied slot's faction and team stay Random until the host clears it. The
+	// Randomize roll still resolves them; see UpdateCurrentLobby_EnforceRandom.
+	bool enforce_random = false;
 	bool track_stats = false;
 	bool allow_observers = false;
 	uint16_t max_cam_height = 0;
@@ -219,6 +223,7 @@ public:
 	// updates
 	void UpdateCurrentLobby_Map(AsciiString strMap, AsciiString strMapPath, bool bIsOfficial, int newMaxPlayers);
 	void UpdateCurrentLobby_LimitSuperweapons(bool bLimitSuperweapons);
+	void UpdateCurrentLobby_EnforceRandom(bool bEnforceRandom);
 	void UpdateCurrentLobby_StartingCash(UnsignedInt startingCashValue);
 
 	void UpdateCurrentLobby_HasMap();

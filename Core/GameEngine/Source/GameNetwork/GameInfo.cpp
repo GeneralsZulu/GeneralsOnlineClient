@@ -327,6 +327,7 @@ void GameInfo::reset()
   m_superweaponRestriction = 0;
   m_startingCash = TheGlobalData->m_defaultStartingCash;
 	m_resumeHandoffFrame = 0;
+	m_enforceRandom = FALSE;
 
 	for (Int i=0; i<MAX_SLOTS; ++i)
 	{
@@ -995,6 +996,13 @@ AsciiString GameInfoToAsciiString( const GameInfo *game )
 		optionsString.concat(resume);
 	}
 
+	// Enforce-random lobby flag. Only emitted when set so games without it
+	// still round-trip bit-identically through the serializer.
+	if (game->getEnforceRandom())
+	{
+		optionsString.concat("ER=1;");
+	}
+
 	//add player info for each slot
 	optionsString.concat(slotListID);
 	optionsString.concat('=');
@@ -1089,6 +1097,7 @@ Bool ParseAsciiStringToGameInfo(GameInfo *game, AsciiString options)
   Money startingCash = TheGlobalData->m_defaultStartingCash;
   UnsignedShort restriction = 0; // Always the default
 	UnsignedInt resumeHandoffFrame = 0;
+	Bool enforceRandom = FALSE;
 
 	Bool sawMap = FALSE;
 	Bool sawMapCRC = FALSE;
@@ -1185,6 +1194,10 @@ Bool ParseAsciiStringToGameInfo(GameInfo *game, AsciiString options)
 			seed = atoi(val.str());
 			sawSeed = true;
 //			DEBUG_LOG(("ParseAsciiStringToGameInfo - random seed is %d", seed));
+		}
+		else if (key.compare("ER") == 0)
+		{
+			enforceRandom = (atoi(val.str()) != 0);
 		}
 		else if (key.compare("C") == 0)
 		{
@@ -1588,6 +1601,7 @@ Bool ParseAsciiStringToGameInfo(GameInfo *game, AsciiString options)
 		game->setStartingCash(startingCash);
 		game->setOldFactionsOnly(oldFactionsOnly);
 		game->setResumeHandoffFrame(resumeHandoffFrame);
+		game->setEnforceRandom(enforceRandom);
 
 		return true;
 	}

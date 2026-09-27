@@ -77,7 +77,8 @@ enum class ELobbyUpdateField
 	JOINABILITY = 18,
 	HOST_ACTION_BULK_SLOT_UPDATE = 19,
 	HOST_ACTION_ARM_RESUME = 20,            // TheSuperHackers @feature bill-rich 15/09/2026 resume-from-replay arming (see ResumeFromReplay)
-	LOCAL_PLAYER_HAS_RESUME_REPLAY = 21     // TheSuperHackers @feature bill-rich 24/09/2026 this member holds a usable copy of the resume source
+	LOCAL_PLAYER_HAS_RESUME_REPLAY = 21,    // TheSuperHackers @feature bill-rich 24/09/2026 this member holds a usable copy of the resume source
+	LOBBY_ENFORCE_RANDOM = 22               // TheSuperHackers @feature bill-rich 27/09/2026 lock every slot to a random faction and team
 };
 
 std::string Base64Encode(const std::vector<uint8_t>& data);
@@ -176,6 +177,29 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_LimitSuperweapons(bo
 	std::string strPostData = j.dump();
 
 	// convert
+	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendPOSTRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, strPostData.c_str(), [=](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
+		{
+
+		});
+}
+
+void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_EnforceRandom(bool bEnforceRandom)
+{
+	// reset autostart if host changes anything (because ready flag will reset too)
+#if !defined(GENERALS_ONLINE_DISABLE_AUTO_ACCEPT)
+	ClearAutoReadyCountdown();
+#endif
+	if (TheNGMPGame && TheNGMPGame->IsCountdownStarted())
+		TheNGMPGame->StopCountdown();
+
+	std::string strURI = std::format("{}/{}", NGMP_OnlineServicesManager::GetAPIEndpoint("Lobby"), m_CurrentLobby.lobbyID);
+	std::map<std::string, std::string> mapHeaders;
+
+	nlohmann::json j;
+	j["field"] = ELobbyUpdateField::LOBBY_ENFORCE_RANDOM;
+	j["enforce_random"] = bEnforceRandom;
+	std::string strPostData = j.dump();
+
 	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendPOSTRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, strPostData.c_str(), [=](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
 		{
 
@@ -885,6 +909,8 @@ void NGMP_OnlineServices_LobbyInterface::SearchForLobbies(std::function<void()> 
 				lobbyEntryIter["IsVanillaTeamsOnly"].get_to(lobbyEntry.vanilla_teams);
 				lobbyEntryIter["StartingCash"].get_to(lobbyEntry.starting_cash);
 				lobbyEntryIter["IsLimitSuperweapons"].get_to(lobbyEntry.limit_superweapons);
+						if (lobbyEntryIter.contains("IsEnforceRandom"))
+							lobbyEntryIter["IsEnforceRandom"].get_to(lobbyEntry.enforce_random);
 				lobbyEntryIter["IsTrackingStats"].get_to(lobbyEntry.track_stats);
 				lobbyEntryIter["IsPassworded"].get_to(lobbyEntry.passworded);
 				lobbyEntryIter["AllowObservers"].get_to(lobbyEntry.allow_observers);
@@ -1168,6 +1194,8 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 							lobbyEntryIter["ResumeReplayGeneration"].get_to(lobbyEntry.resume_replay_generation);
 						lobbyEntryIter["StartingCash"].get_to(lobbyEntry.starting_cash);
 						lobbyEntryIter["IsLimitSuperweapons"].get_to(lobbyEntry.limit_superweapons);
+						if (lobbyEntryIter.contains("IsEnforceRandom"))
+							lobbyEntryIter["IsEnforceRandom"].get_to(lobbyEntry.enforce_random);
 						lobbyEntryIter["IsTrackingStats"].get_to(lobbyEntry.track_stats);
 						lobbyEntryIter["IsPassworded"].get_to(lobbyEntry.passworded);
 						lobbyEntryIter["AllowObservers"].get_to(lobbyEntry.allow_observers);
