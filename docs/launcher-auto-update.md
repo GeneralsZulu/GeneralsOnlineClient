@@ -88,6 +88,47 @@ launcher wait for the elevated installer (`ShellExecuteEx` with
 post-install `Exec` is removed so it doesn't race the calling
 launcher.
 
+## Two products from one source
+
+`ZuluGOLauncher.exe` is the same binary built a second time for the
+Zulu GO side-by-side test build (`installer/ZuluGO.nsi`). Everything
+that differs is a value, not a code path: `zulu_add_launcher()` in
+`launcher/CMakeLists.txt` configures `launcher/LauncherProduct.h.in`
+once per target, and `ZuluLauncher.cpp` reads the result. The Zulu
+target's values are exactly the strings that used to be hardcoded in
+the .cpp.
+
+Two of those values change behaviour, and both exist because Zulu GO
+installs into a `ZuluGO` **subfolder** of the Zero Hour folder with its
+launcher inside that subfolder, where Zulu installs into the Zero Hour
+folder itself:
+
+| value | Zulu | Zulu GO |
+|---|---|---|
+| `MOD_BIG_NAME` | *(empty — no `-mod`)* | `Zulu.modbig` |
+| `INSTALL_TO_PARENT` | `0` — `/D=` is our own dir | `1` — `/D=` is our parent |
+
+`MOD_BIG_NAME` makes the launcher prepend
+`-mod "<launcher dir>\Zulu.modbig"` to whatever argv it was handed.
+It has to be absolute: `parseMod()` prefixes any `-mod` without a drive
+letter or leading separator with the *user data* directory, so a
+relative name is looked for under `Documents\...\Zero Hour Data` and
+silently mounts nothing. Ours goes first so a caller-supplied `-mod`
+still wins (`parseMod` overwrites, last one on the line takes effect).
+
+`INSTALL_TO_PARENT` is the one that bites if it is wrong: the update
+hand-off passes `/S /D=<dir>`, and passing our own directory from a
+subfolder install nests another `ZuluGO` inside on every update.
+
+Zulu GO keeps the `-replaytheater` early exit. It is not product
+specific — it exists so that "watch a replay" never sits through an
+install that would swap the data out mid-session — and the resolver
+degrades cleanly on GO: `ZuluGO.nsi` ships no `ReplayData` folder, so
+the theater reports "the replay data map is missing" instead of
+guessing. Its `@default` branch does follow the product config, using
+the absolute `-mod` rather than the bare `Zulu.big` that only works
+when the archive sits next to the game.
+
 ## Code surface
 
 - `launcher/ZuluLauncher.cpp` — ~380 lines. Manifest, version
@@ -95,9 +136,10 @@ launcher.
   fields are read), WinHTTP download with progress, ShellExecuteEx
   wait-handoff, fallthrough to `CreateProcess(generalszh.exe, ...)`
   with original argv.
-- `launcher/CMakeLists.txt` / `launcher/ZuluLauncher.rc.in` /
-  `launcher/ZuluLauncher.manifest` — build, version-resource, and
-  manifest plumbing.
+- `launcher/CMakeLists.txt` / `launcher/LauncherProduct.h.in` /
+  `launcher/ZuluLauncher.rc.in` / `launcher/ZuluLauncher.manifest` —
+  build, per-product config, version-resource, and manifest plumbing.
+  The .rc.in and the .cpp are shared by both launcher targets.
 - `installer/Zulu.nsi` — removes the silent post-install `Exec`
   and adds the manifest-publishing step.
 - `Makefile` — `installer-release` target publishes the manifest

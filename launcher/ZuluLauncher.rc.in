@@ -3,6 +3,10 @@
 // Versions and identifiers track the same ZULU_VERSION_* values the game
 // exe uses, so a single source-of-truth (APPVERSION in installer/Zulu.nsi)
 // stamps both binaries.
+//
+// Configured once per launcher product by zulu_add_launcher() in
+// launcher/CMakeLists.txt; the ZULU_LAUNCHER_* names below are the only
+// things that differ between the Zulu and Zulu GO version resources.
 
 // Reuse the game's icon so the launcher's shortcut looks identical to the
 // previous direct-to-game shortcut. The path is relative to this generated
@@ -27,12 +31,12 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "Bill Rich"
-            VALUE "FileDescription",  "Zulu Launcher"
+            VALUE "FileDescription",  "@ZULU_LAUNCHER_FILE_DESCRIPTION@"
             VALUE "FileVersion",      "@ZULU_VERSION_MAJOR@.@ZULU_VERSION_MINOR@.@ZULU_VERSION_BUILDNUM@"
-            VALUE "InternalName",     "ZuluLauncher"
+            VALUE "InternalName",     "@ZULU_LAUNCHER_INTERNAL_NAME@"
             VALUE "LegalCopyright",   "Licensed under GPLv3"
-            VALUE "OriginalFilename", "ZuluLauncher.exe"
-            VALUE "ProductName",      "Zulu"
+            VALUE "OriginalFilename", "@ZULU_LAUNCHER_ORIGINAL_FILENAME@"
+            VALUE "ProductName",      "@ZULU_LAUNCHER_PRODUCT_NAME@"
             VALUE "ProductVersion",   "@ZULU_VERSION_MAJOR@.@ZULU_VERSION_MINOR@.@ZULU_VERSION_BUILDNUM@"
         END
     END

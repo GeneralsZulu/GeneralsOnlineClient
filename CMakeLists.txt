@@ -116,9 +116,10 @@ if(RTS_BUILD_GENERALS)
     add_subdirectory(Generals)
 endif()
 
-# Standalone Zulu launcher (auto-updater shim). Independent of the game
-# build flags so it gets built even if RTS_BUILD_ZEROHOUR is off — the
-# installer pipeline always wants this binary.
+# Standalone launchers (auto-updater shims): ZuluLauncher.exe and, from the
+# same source, ZuluGOLauncher.exe. Independent of the game build flags so
+# they get built even if RTS_BUILD_ZEROHOUR is off — the installer pipeline
+# always wants these binaries.
 add_subdirectory(launcher)
 
 feature_summary(WHAT ENABLED_FEATURES DESCRIPTION "Enabled features:")

@@ -32,6 +32,7 @@
 #include <string.h>
 
 #include "BuildVariant.h"
+#include "LauncherProduct.h"
 
 // VC6 SDK predates these definitions.
 #ifndef INVALID_FILE_ATTRIBUTES
@@ -67,23 +68,32 @@ typedef BOOL (WINAPI *FnCryptDestroyHash)(LocalHCRYPTHASH);
 // Both manifests live under the same kAllowedURLPrefix, so the post-download
 // URL pin still applies to both code paths.
 static const char *kLatestJsonURLRelease =
-    "https://storage.googleapis.com/zulu-installer/latest.json";
+    ZULU_PRODUCT_LATEST_JSON_URL_RELEASE;
 static const char *kLatestJsonURLDev =
-    "https://storage.googleapis.com/zulu-installer/latest-dev.json";
+    ZULU_PRODUCT_LATEST_JSON_URL_DEV;
 // Defense-in-depth: refuse to download/run anything whose URL isn't a public
 // object in our installer bucket. HTTPS to that bucket already authenticates
 // the origin; this pin just prevents a tampered manifest from pointing the
 // elevated installer hand-off at an arbitrary external host.
 static const char *kAllowedURLPrefix =
-    "https://storage.googleapis.com/zulu-installer/";
-static const char *kGameExeName  = "generalszh_zulu.exe";
+    ZULU_PRODUCT_ALLOWED_URL_PREFIX;
+static const char *kGameExeName  = ZULU_PRODUCT_GAME_EXE_NAME;
 // Must match LAUNCHERNAME in installer/Zulu.nsi: the installer renames the
 // running launcher to "<this>.old" so it can write the new one, and we sweep
 // that leftover on the next start.
-static const char *kLauncherExeName = "ZuluLauncher.exe";
-static const char *kInstallerLeafRelease = "Zulu_Setup_update.exe";
-static const char *kInstallerLeafDev     = "Zulu_Setup_Dev_update.exe";
-static const char *kAppName       = "Zulu";
+static const char *kLauncherExeName = ZULU_PRODUCT_LAUNCHER_EXE_NAME;
+static const char *kInstallerLeafRelease = ZULU_PRODUCT_INSTALLER_LEAF_RELEASE;
+static const char *kInstallerLeafDev     = ZULU_PRODUCT_INSTALLER_LEAF_DEV;
+static const char *kAppName       = ZULU_PRODUCT_APP_NAME;
+static const char *kUserAgent     = ZULU_PRODUCT_HTTP_USER_AGENT;
+
+// Bare file name of the data archive this product mounts with -mod, or ""
+// when it passes none. See ZULU_PRODUCT_MOD_BIG_NAME.
+static const char *kModBigName    = ZULU_PRODUCT_MOD_BIG_NAME;
+
+// Whether the installer hand-off targets the parent of our own directory.
+// See ZULU_PRODUCT_INSTALL_TO_PARENT.
+static const bool kInstallToParent = (ZULU_PRODUCT_INSTALL_TO_PARENT != 0);
 
 static bool isDevBuild() {
     return strcmp(ZULU_BUILD_VARIANT_KIND, "dev") == 0;
@@ -237,7 +247,7 @@ static DWORD urlFlags(const char *url) {
 // Returns NULL on any failure (offline, 404, TLS error). Callers fall
 // through and just launch the game; an update check should never block play.
 static char *httpGet(const char *url, DWORD *outSize) {
-    HINTERNET hI = InternetOpenA("ZuluLauncher",
+    HINTERNET hI = InternetOpenA(kUserAgent,
         INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
     if (!hI) return NULL;
     applyTimeouts(hI, 10000);
@@ -280,7 +290,7 @@ static char *httpGet(const char *url, DWORD *outSize) {
 // Streams url -> filePath. Deletes the file on any failure so we don't
 // leave a half-written .exe in %TEMP%.
 static bool httpDownloadToFile(const char *url, const char *filePath) {
-    HINTERNET hI = InternetOpenA("ZuluLauncher",
+    HINTERNET hI = InternetOpenA(kUserAgent,
         INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
     if (!hI) return false;
     applyTimeouts(hI, 30000);
@@ -323,6 +333,27 @@ static void getInstallDir(char *out, DWORD outSize) {
     if (lastSlash) *lastSlash = 0;
 }
 
+// The -mod argument this product needs the game started with, or an empty
+// string for a product that needs none (Zulu: the game is in the Zero Hour
+// folder and finds Zulu.big on its own search path).
+//
+// Absolute on purpose, and quoted. parseMod() in CommandLine.cpp prefixes
+// any -mod argument without a drive letter or leading separator with the
+// *user data* directory -- Documents\...\Zero Hour Data -- not the working
+// directory, so a relative "Zulu.modbig" is looked for in the wrong place
+// and silently mounts nothing. The install path routinely has spaces in it,
+// hence the quotes.
+static void getProductModArg(char *out, DWORD outSize) {
+    if (kModBigName[0] == 0) {
+        out[0] = 0;
+        return;
+    }
+    char installDir[MAX_PATH];
+    getInstallDir(installDir, sizeof(installDir));
+    _snprintf(out, outSize - 1, "-mod \"%s\\%s\"", installDir, kModBigName);
+    out[outSize - 1] = 0;
+}
+
 // Returns the substring of GetCommandLine() AFTER the launcher's own exe.
 // Shortcuts will pass "-mod Zulu.big" (or whatever the user adds); we
 // forward that verbatim to the game.
@@ -356,6 +387,17 @@ static bool launchGameEx(const char *gameExe, const char *extraArgs, HANDLE *wai
     workDir[sizeof(workDir) - 1] = 0;
     char *lastSlash = strrchr(workDir, '\\');
     if (lastSlash) *lastSlash = 0;
+
+#if ZULU_PRODUCT_INSTALL_TO_PARENT
+    // This product's game exe lives in a subfolder of the game installation,
+    // and it imports DLLs that only exist in the installation root (the Bink
+    // and Miles runtimes). The loader resolves those before any of the game's
+    // own code runs, so the working directory has to be the root, not the
+    // folder holding the exe: started from the subfolder the process dies at
+    // load time with no window and nothing in any log.
+    char *parentSlash = strrchr(workDir, '\\');
+    if (parentSlash) *parentSlash = 0;
+#endif
 
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
@@ -637,7 +679,10 @@ static bool pickReplay(const char *replaysDir, char *out, DWORD outSize) {
     ofn.lpstrFile = file;
     ofn.nMaxFile = sizeof(file);
     ofn.lpstrInitialDir = replaysDir;
-    ofn.lpstrTitle = "Zulu Replay Theater - choose a replay";
+    char title[128];
+    _snprintf(title, sizeof(title) - 1, "%s Replay Theater - choose a replay", kAppName);
+    title[sizeof(title) - 1] = 0;
+    ofn.lpstrTitle = title;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_EXPLORER;
     if (!GetOpenFileNameA(&ofn)) return false;
 
@@ -702,8 +747,8 @@ static int runReplayTheater(const char *gameExe) {
                 "The replay data map is missing, so Replay Theater cannot tell which "
                 "version's data this replay needs.\n\n"
                 "Looked for:\n%s\n\n"
-                "That folder ships with Zulu; reinstalling will restore it.",
-                csvPath);
+                "That folder ships with %s; reinstalling will restore it.",
+                csvPath, kAppName);
             msg[sizeof(msg) - 1] = 0;
             MessageBoxA(NULL, msg, kAppName, MB_OK | MB_ICONWARNING);
             continue;
@@ -738,16 +783,25 @@ static int runReplayTheater(const char *gameExe) {
             _snprintf(args, sizeof(args) - 1,
                 "-watchReplay \"%s\" -replaytheater", relativePath);
         } else {
+            // This release's own data. Zulu's archive sits next to the game
+            // in the Zero Hour folder, so the bare relative name the game
+            // already resolves is enough; a product whose archive lives in a
+            // subfolder (Zulu GO) needs its absolute -mod instead.
+            char defaultMod[MAX_PATH + 32];
+            getProductModArg(defaultMod, sizeof(defaultMod));
             _snprintf(args, sizeof(args) - 1,
-                "-mod Zulu.big -watchReplay \"%s\" -replaytheater", relativePath);
+                "%s -watchReplay \"%s\" -replaytheater",
+                (defaultMod[0] != 0) ? (const char *)defaultMod : "-mod Zulu.big",
+                relativePath);
         }
         args[sizeof(args) - 1] = 0;
 
         HANDLE gameProcess = NULL;
         if (!launchGameEx(gameExe, args, &gameProcess)) {
-            MessageBoxA(NULL,
-                "Could not launch generalszh_zulu.exe.",
-                kAppName, MB_OK | MB_ICONERROR);
+            char err[MAX_PATH + 64];
+            _snprintf(err, sizeof(err) - 1, "Could not launch %s.", kGameExeName);
+            err[sizeof(err) - 1] = 0;
+            MessageBoxA(NULL, err, kAppName, MB_OK | MB_ICONERROR);
             return 1;
         }
 
@@ -770,6 +824,42 @@ int APIENTRY WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
     const char *fwdArgs = extractArgsAfterExe(GetCommandLineA());
 
+    // Directory to hand the installer as NSIS /D=. This is the product's
+    // install ROOT, which is not always the directory we are sitting in:
+    //   Zulu   installs into the Zero Hour folder and its launcher sits
+    //          there, so the root is our own directory.
+    //   ZuluGO installs into <ZeroHour>\ZuluGO and its launcher sits in
+    //          that subfolder, so the root is our PARENT. Passing our own
+    //          directory here would lay the next update down in
+    //          <ZeroHour>\ZuluGO\ZuluGO, and again one level deeper on
+    //          every update after that.
+    char installTargetDir[MAX_PATH];
+    strncpy(installTargetDir, installDir, sizeof(installTargetDir));
+    installTargetDir[sizeof(installTargetDir) - 1] = 0;
+    if (kInstallToParent) {
+        char *lastSlash = strrchr(installTargetDir, '\\');
+        if (lastSlash) *lastSlash = 0;
+    }
+
+    // Arguments the game is started with: this product's -mod first (empty
+    // for Zulu, which passes none), then whatever we were given ourselves,
+    // verbatim. Ours leads deliberately -- parseMod() overwrites m_modBIG
+    // each time it runs, so the LAST -mod on the line wins and a caller who
+    // passes one of their own still overrides the product default.
+    const char *launchArgs = fwdArgs;
+    char productModArg[MAX_PATH + 32];
+    char gameArgs[4096];
+    getProductModArg(productModArg, sizeof(productModArg));
+    if (productModArg[0] != 0) {
+        if (fwdArgs && *fwdArgs) {
+            _snprintf(gameArgs, sizeof(gameArgs) - 1, "%s %s", productModArg, fwdArgs);
+        } else {
+            _snprintf(gameArgs, sizeof(gameArgs) - 1, "%s", productModArg);
+        }
+        gameArgs[sizeof(gameArgs) - 1] = 0;
+        launchArgs = gameArgs;
+    }
+
     // Sweep the previous launcher an update moved aside. The installer renames
     // the running exe out of the way so the new one can be written (see
     // Zulu.nsi), and cannot delete it while that process still holds it -- by
@@ -790,10 +880,13 @@ int APIENTRY WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     }
 
     if (GetFileAttributesA(gameExe) == INVALID_FILE_ATTRIBUTES) {
-        MessageBoxA(NULL,
-            "Could not find generalszh_zulu.exe next to the launcher.\n"
-            "Please reinstall Zulu.",
-            kAppName, MB_OK | MB_ICONERROR);
+        char missing[MAX_PATH + 128];
+        _snprintf(missing, sizeof(missing) - 1,
+            "Could not find %s next to the launcher.\n"
+            "Please reinstall %s.",
+            kGameExeName, kAppName);
+        missing[sizeof(missing) - 1] = 0;
+        MessageBoxA(NULL, missing, kAppName, MB_OK | MB_ICONERROR);
         return 1;
     }
 
@@ -862,21 +955,26 @@ int APIENTRY WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
         char msg[512];
         if (devBuild) {
             _snprintf(msg, sizeof(msg) - 1,
-                "A new Zulu dev build is available.\n\n"
+                "A new %s dev build is available.\n\n"
                 "Installed game exe SHA: %.12s...\n"
                 "Latest game exe SHA:    %.12s...\n\n"
                 "Download and install the update now?",
-                installedSha, latestExeSha);
+                kAppName, installedSha, latestExeSha);
         } else {
             const bool rollback = semVerCompare(latest, installed) < 0;
+            char headline[160];
+            _snprintf(headline, sizeof(headline) - 1,
+                rollback
+                    ? "%s has been rolled back to an earlier release."
+                    : "A newer %s release is available.",
+                kAppName);
+            headline[sizeof(headline) - 1] = 0;
             _snprintf(msg, sizeof(msg) - 1,
                 "%s\n\n"
                 "Installed:  %u.%u.%u\n"
                 "Published:  %s\n\n"
                 "Download and install it now?",
-                rollback
-                    ? "Zulu has been rolled back to an earlier release."
-                    : "A newer Zulu release is available.",
+                headline,
                 installed.major, installed.minor, installed.build,
                 latestVersion);
         }
@@ -900,7 +998,7 @@ int APIENTRY WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
                 // and is honored even in silent mode. The installer's
                 // manifest already requests admin, so this triggers UAC.
                 char params[MAX_PATH + 64];
-                _snprintf(params, sizeof(params) - 1, "/S /D=%s", installDir);
+                _snprintf(params, sizeof(params) - 1, "/S /D=%s", installTargetDir);
                 params[sizeof(params) - 1] = 0;
                 SHELLEXECUTEINFOA sei;
                 ZeroMemory(&sei, sizeof(sei));
@@ -940,17 +1038,23 @@ int APIENTRY WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
                         // is unchanged across the in-place upgrade so
                         // fwdArgs flows straight into the new binary.
                     } else {
-                        MessageBoxA(NULL,
-                            "Zulu installer reported a failure. The "
+                        char warn[256];
+                        _snprintf(warn, sizeof(warn) - 1,
+                            "%s installer reported a failure. The "
                             "game will be launched at the previously "
                             "installed version.",
-                            kAppName, MB_OK | MB_ICONWARNING);
+                            kAppName);
+                        warn[sizeof(warn) - 1] = 0;
+                        MessageBoxA(NULL, warn, kAppName, MB_OK | MB_ICONWARNING);
                     }
                 } else {
-                    MessageBoxA(NULL,
-                        "Could not start the Zulu installer. The game will be "
+                    char warn[256];
+                    _snprintf(warn, sizeof(warn) - 1,
+                        "Could not start the %s installer. The game will be "
                         "launched at the installed version.",
-                        kAppName, MB_OK | MB_ICONWARNING);
+                        kAppName);
+                    warn[sizeof(warn) - 1] = 0;
+                    MessageBoxA(NULL, warn, kAppName, MB_OK | MB_ICONWARNING);
                 }
             } else {
                 MessageBoxA(NULL,
@@ -962,10 +1066,11 @@ int APIENTRY WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
         }
     }
 
-    if (!launchGame(gameExe, fwdArgs)) {
-        MessageBoxA(NULL,
-            "Could not launch generalszh_zulu.exe.",
-            kAppName, MB_OK | MB_ICONERROR);
+    if (!launchGame(gameExe, launchArgs)) {
+        char err[MAX_PATH + 64];
+        _snprintf(err, sizeof(err) - 1, "Could not launch %s.", kGameExeName);
+        err[sizeof(err) - 1] = 0;
+        MessageBoxA(NULL, err, kAppName, MB_OK | MB_ICONERROR);
         return 1;
     }
     return 0;
