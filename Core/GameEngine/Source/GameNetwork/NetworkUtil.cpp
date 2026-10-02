@@ -40,9 +40,7 @@
 // large run-ahead cannot become the floor on loss recovery.
 //
 // NET_LEGACY_TIMING puts all of that back the way retail had it, for A/B runs.
-// TheSuperHackers @todo bill-rich 24/09/2026 Nothing sets this yet: the
-// "-netlegacy" command-line switch that flips it lives in CommandLine.cpp,
-// which is outside this change.
+// It is flipped by the "-netlegacy" command-line switch in CommandLine.cpp.
 Bool NET_LEGACY_TIMING = FALSE;
 
 #ifdef DEBUG_LOGGING

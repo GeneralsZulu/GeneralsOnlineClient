@@ -83,6 +83,17 @@ static constexpr const Int NET_RUNAHEAD_LAT_PERCENTILE = 95;
 static constexpr const Int NET_RUNAHEAD_JITTER_CAP_MS = 250;
 static constexpr const Int NET_RUNAHEAD_DECAY_TICKS = 6;
 
+// TheSuperHackers @bugfix bill-rich 01/10/2026 How long the simulation may sit
+// on a frame before we ask for the frame data that never arrived, and how often
+// to repeat that ask while still waiting. Both want to be well inside the
+// disconnect screen's own recovery, which does not re-serve anything until
+// NetworkDisconnectTime + NetworkDisconnectScreenNotifyTime (5s + 15s) have
+// passed. Run-ahead already absorbs ordinary jitter, so a stall this long means
+// something really is missing rather than merely late.
+// See ConnectionManager::requestMissingFrameData.
+static constexpr const Int NET_RESEND_REQUEST_MS = 500;
+static constexpr const Int NET_RESEND_REQUEST_REPEAT_MS = 500;
+
 // ReleaseLog telemetry pacing. See ConnectionManager::emitNetStats.
 static constexpr const Int NET_STATS_INTERVAL_MS = 10000;
 static constexpr const Int NET_HITCH_MS = 200;

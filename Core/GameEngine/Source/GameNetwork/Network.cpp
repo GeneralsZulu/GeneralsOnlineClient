@@ -875,6 +875,15 @@ void Network::update()
 			m_stallStartMs = nowMs ? nowMs : 1;
 			m_stallMask = m_conMgr->getNotReadyMask(TheGameLogic->getFrame());
 		}
+
+		// TheSuperHackers @bugfix bill-rich 01/10/2026 Once we have been sitting on
+		// this frame long enough that something is genuinely missing rather than
+		// merely late, go and ask for it. Nothing used to: a frame that never
+		// arrived was recovered only by the disconnect screen, 20 seconds later.
+		if (inGame && !resumeFrozen && (m_stallStartMs != 0)
+				&& ((nowMs - m_stallStartMs) >= (UnsignedInt)NET_RESEND_REQUEST_MS)) {
+			m_conMgr->requestMissingFrameData(TheGameLogic->getFrame());
+		}
 	}
 
 	if (inGame) {

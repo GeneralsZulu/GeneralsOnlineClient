@@ -158,6 +158,11 @@ public:
 	// TheSuperHackers @feature bill-rich 24/09/2026 Lockstep health telemetry
 	// (ReleaseLog NETSTAT / NETSTALL lines).
 	UnsignedInt getNotReadyMask(UnsignedInt frame);					///< Bit per slot whose frame data we are still waiting on.
+
+	// TheSuperHackers @bugfix bill-rich 01/10/2026 Ask for frame data that simply
+	// never turned up, rather than waiting for the disconnect screen to do it 20
+	// seconds later. Called from Network::update while the simulation is stalled.
+	void requestMissingFrameData(UnsignedInt frame);
 	void noteStall(UnsignedInt frame, UnsignedInt durationMs, UnsignedInt notReadyMask);
 	void noteHitch(UnsignedInt gapMs);
 	void emitNetStats(UnsignedInt frame, Int runAhead, Int frameRate);
@@ -198,7 +203,7 @@ private:
 	void getMinimumFps(Int &minFps, Int &minFpsPlayer);			///< Returns the smallest FPS in the m_fpsAverages list.
 	Real getMaximumLatency(); ///< Returns the average of the two highest average latencies between players.
 
-	void requestFrameDataResend(Int playerID, UnsignedInt frame); ///< request of this player that he send the specified frame's data.
+	void requestFrameDataResend(Int playerID, UnsignedInt frame, const char *reason); ///< request of this player that he send the specified frame's data.
 
 	// TheSuperHackers @feature bill-rich 24/09/2026 The latency this machine
 	// reports for run-ahead sizing: jitter aware unless something else is already
@@ -261,6 +266,8 @@ private:
 	};
 	NetStats m_netStats;
 	UnsignedInt m_lastStallLogMs;
+	UnsignedInt m_lastResendRequestFrame;	///< Frame the last stall-driven resend request was for.
+	UnsignedInt m_lastResendRequestMs;		///< When it went out, so we do not ask every tick.
 	void resetNetStats();
 
 	// -----------------------------------------------------------------------------

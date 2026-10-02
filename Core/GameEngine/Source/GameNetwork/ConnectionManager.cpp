@@ -338,6 +338,8 @@ void ConnectionManager::init()
 	m_runAheadLowerTicks = 0;
 	m_frameGroupingMs = 0;
 	m_lastStallLogMs = 0;
+	m_lastResendRequestFrame = 0;
+	m_lastResendRequestMs = 0;
 	resetNetStats();
 
 	m_frameMetrics.init();
@@ -1856,11 +1858,18 @@ void ConnectionManager::initTransport() {
 
 	delete m_transport;
 
+	// TheSuperHackers @feature bill-rich 01/10/2026 Online and LAN run different
+	// transports under the same lockstep code: the GeneralsOnline mesh delivers
+	// reliably and in order, UDPTransport does not. Say which one we got, because
+	// a stall means very different things on each and the logs are otherwise
+	// silent about it.
+	Bool reliableTransport = FALSE;
 #if defined(GENERALS_ONLINE)
 	// support lan + our new transport
 	if (TheLAN == nullptr)
 	{
 		m_transport = new NextGenTransport;
+		reliableTransport = TRUE;
 	}
 	else
 	{
@@ -1869,6 +1878,7 @@ void ConnectionManager::initTransport() {
 #else
 	m_transport = new UDPTransport;
 #endif
+	ReleaseLog("NETTRANSPORT %s", reliableTransport ? "reliable/ordered" : "datagram");
 	m_transport->reset();
 	m_transport->init(m_localAddr, m_localPort);
 }
@@ -1999,7 +2009,7 @@ Bool ConnectionManager::allCommandsReady(UnsignedInt frame, Bool justTesting /* 
 			if (frameRetVal == FRAMEDATA_NOTREADY) {
 				retval = FALSE;
 			} else if (frameRetVal == FRAMEDATA_RESEND) {
-				requestFrameDataResend(i, frame);
+				requestFrameDataResend(i, frame, "frame data inconsistent");
 				retval = FALSE;
 			}
 		}
@@ -2983,9 +2993,69 @@ UnsignedInt ConnectionManager::getNextPacketRouterSlot(UnsignedInt playerID) {
 	return MAX_SLOTS; // No valid next packet router; caller checks for >= MAX_SLOTS
 }
 
-void ConnectionManager::requestFrameDataResend(Int playerID, UnsignedInt frame) {
+/**
+ * TheSuperHackers @bugfix bill-rich 01/10/2026 Ask for frame data that never
+ * arrived.
+ *
+ * requestFrameDataResend only ever fired for FRAMEDATA_RESEND, a frame whose
+ * command count disagrees with the count we were told to expect. A frame that
+ * is merely *missing* returns FRAMEDATA_NOTREADY, and that asked for nothing at
+ * all: the simulation sat on the frame until the disconnect screen's own
+ * re-notify shook it loose, which does not happen until NetworkDisconnectTime +
+ * NetworkDisconnectScreenNotifyTime (5s + 15s) have elapsed. That is why every
+ * stall in the 2026-09-30 session was 20.1s +/- 0.3s, in both the online games
+ * and the 1.6.3 one, and why their logs carry rreq=0/0 throughout: nobody ever
+ * asked for the frame they were stuck on.
+ *
+ * The request goes to the packet router rather than to the player whose data is
+ * missing. Every game command is routed through it, so it holds frame data for
+ * everyone, and it is the one peer a guest exchanges traffic with continuously.
+ * Asking the silent player directly means asking over the link that is already
+ * failing -- which is exactly the link that stranded the data in the first
+ * place.
+ */
+void ConnectionManager::requestMissingFrameData(UnsignedInt frame) {
+	const UnsignedInt notReady = getNotReadyMask(frame);
+	if (notReady == 0) {
+		return;
+	}
+
+	// One ask per frame per NET_RESEND_REQUEST_REPEAT_MS. The server side of this
+	// serves the whole run-ahead window, so repeating it every tick would put far
+	// more on the wire than the stall it is trying to clear.
+	const UnsignedInt now = timeGetTime();
+	if ((m_lastResendRequestMs != 0)
+			&& (m_lastResendRequestFrame == frame)
+			&& ((now - m_lastResendRequestMs) < (UnsignedInt)NET_RESEND_REQUEST_REPEAT_MS)) {
+		return;
+	}
+
+	Int target = m_packetRouterSlot;
+	if ((target < 0) || (target >= MAX_SLOTS) || (target == (Int)m_localSlot)
+			|| (m_connections[target] == nullptr)) {
+		// We are the packet router, or it has gone away: no one is better placed
+		// than the player we are actually waiting on, so ask them.
+		Int i;
+		target = -1;
+		for (i = 0; i < MAX_SLOTS; ++i) {
+			if (((notReady & (1 << i)) != 0) && (m_connections[i] != nullptr)) {
+				target = i;
+				break;
+			}
+		}
+		if (target < 0) {
+			return;
+		}
+	}
+
+	m_lastResendRequestFrame = frame;
+	m_lastResendRequestMs = now ? now : 1;
+	requestFrameDataResend(target, frame, "frame data missing");
+}
+
+void ConnectionManager::requestFrameDataResend(Int playerID, UnsignedInt frame, const char *reason) {
 	++m_netStats.resendReqTx;
-	ReleaseLog("NETRESEND requesting frame=%u from slot=%d (frame data inconsistent)", frame, playerID);
+	ReleaseLog("NETRESEND requesting frame=%u from slot=%d (%s)", frame, playerID, reason);
 	NetFrameResendRequestCommandMsg *msg = newInstance(NetFrameResendRequestCommandMsg);
 	msg->setPlayerID(m_localSlot);
 	msg->setFrameToResend(frame);
