@@ -381,6 +381,7 @@ public:
 		for (Int i = 0; i< MAX_SLOTS; ++i)
 			setSlotPointer(i, &m_skirmishSlot[i]);
 	}
+	virtual ~SkirmishGameInfo() override {}
 };
 
 extern SkirmishGameInfo *TheSkirmishGameInfo;
