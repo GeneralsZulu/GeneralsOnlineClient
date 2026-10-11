@@ -81,25 +81,35 @@ void NGMPGame::SyncWithLobby(LobbyEntry& lobby)
 	// is it official?
 
 
+	// TheSuperHackers @feature bill-rich 02/10/2026 Prefer the CRC the host sent over
+	// the one our own copy happens to have. Two things turn on it: a member whose copy
+	// of this map is a different build no longer claims to have it (setMapCRC compares
+	// the two and sets availability itself), and a member who does not have the map at
+	// all now knows which map to fetch from the cncstats store, which is keyed by CRC.
+	// A 0 means the host's client is too old to send one, and then nothing changes.
 	if (itOfficial != TheMapCache->end())
 	{
 		TheNGMPGame->getGameSpySlot(0)->setMapAvailability(TRUE);
-		TheNGMPGame->setMapCRC(itOfficial->second.m_CRC);
 		TheNGMPGame->setMapSize(itOfficial->second.m_filesize);
 
 		setMap(asciiMapOfficial);
+		TheNGMPGame->setMapCRC(lobby.map_crc != 0 ? lobby.map_crc : itOfficial->second.m_CRC);
 	}
 	else if (itCustom != TheMapCache->end())
 	{
 		TheNGMPGame->getGameSpySlot(0)->setMapAvailability(TRUE);
-		TheNGMPGame->setMapCRC(itCustom->second.m_CRC);
 		TheNGMPGame->setMapSize(itCustom->second.m_filesize);
 
 		setMap(asciiMapCustom);
+		TheNGMPGame->setMapCRC(lobby.map_crc != 0 ? lobby.map_crc : itCustom->second.m_CRC);
 	}
-	else // fallback
+	else // fallback: we do not have this map. map_path is already a full local path
+	     // (the lobby parse prefixes "maps\\" or the user maps dir), so it is both the
+	     // name to show and where a download should land; keep the host's CRC so the
+	     // lobby screen knows what to fetch.
 	{
 		setMap(lobby.map_path.c_str());
+		TheNGMPGame->setMapCRC(lobby.map_crc);
 	}
 
 	// superweapon

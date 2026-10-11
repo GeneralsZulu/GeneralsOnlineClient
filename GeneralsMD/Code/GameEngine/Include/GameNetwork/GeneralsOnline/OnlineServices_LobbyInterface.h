@@ -58,6 +58,11 @@ struct LobbyEntry
 	std::string map_name;
 	std::string map_path;
 	bool map_official = false;
+	// TheSuperHackers @feature bill-rich 02/10/2026 CRC of the lobby's map as the host
+	// computed it, so a member who does not have the map can pull exactly that map
+	// from the cncstats store (which is keyed by CRC). 0 when the host's client is old
+	// enough not to send it, which just means no download is attempted.
+	uint32_t map_crc = 0;
 	int current_players = 0;
 	int max_players = 0;
 	bool vanilla_teams = false;
@@ -221,7 +226,7 @@ public:
 	
 
 	// updates
-	void UpdateCurrentLobby_Map(AsciiString strMap, AsciiString strMapPath, bool bIsOfficial, int newMaxPlayers);
+	void UpdateCurrentLobby_Map(AsciiString strMap, AsciiString strMapPath, bool bIsOfficial, int newMaxPlayers, uint32_t mapCRC = 0);
 	void UpdateCurrentLobby_LimitSuperweapons(bool bLimitSuperweapons);
 	void UpdateCurrentLobby_EnforceRandom(bool bEnforceRandom);
 	void UpdateCurrentLobby_StartingCash(UnsignedInt startingCashValue);
@@ -278,7 +283,7 @@ public:
 	UnicodeString m_PendingCreation_LobbyName;
 	UnicodeString m_PendingCreation_InitialMapDisplayName;
 	AsciiString m_PendingCreation_InitialMapPath;
-	void CreateLobby(UnicodeString strLobbyName, UnicodeString strInitialMapName, AsciiString strInitialMapPath, bool bIsOfficial, int initialMaxSize, bool bVanillaTeamsOnly, bool bTrackStats, uint32_t startingCash, bool bPassworded, std::string strPassword, bool bAllowObservers);
+	void CreateLobby(UnicodeString strLobbyName, UnicodeString strInitialMapName, AsciiString strInitialMapPath, bool bIsOfficial, int initialMaxSize, bool bVanillaTeamsOnly, bool bTrackStats, uint32_t startingCash, bool bPassworded, std::string strPassword, bool bAllowObservers, uint32_t mapCRC = 0);
 
 	void OnJoinedOrCreatedLobby(bool bAlreadyUpdatedDetails, std::function<void(bool)> fnCallback);
 

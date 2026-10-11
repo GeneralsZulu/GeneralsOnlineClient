@@ -109,15 +109,13 @@ static GameWindow *winMapWindow = nullptr;
 #include "GameNetwork/GeneralsOnline/NGMPGame.h"
 extern NGMPGame* TheNGMPGame;
 
-// Which side of the system/user split the list is showing. There is no
-// GadgetRadioGet..., and the search box and the dropdown both need to know, so
-// the screen tracks it: set once at init and again whenever a radio is clicked.
-static Bool s_usesSystemMaps = TRUE;
-
-// Unlike the LAN screen, this one keeps the system/user radio pair: a stats
-// match is restricted to official maps, and that restriction is expressed by
-// forcing the System selection. So the filter runs inside whichever side is
-// selected rather than merging the two.
+// TheSuperHackers @feature bill-rich 02/10/2026 One list, like the LAN screen:
+// official and user maps together, searched together. The screen used to show one
+// side of the System/User split at a time, which made a search miss any map on the
+// other side -- and the split only ever existed to express "a stats match is
+// official maps only", a restriction this build does not have. The two radio
+// buttons are hidden at init; the code below still answers them so an older
+// layout that shows them keeps working (both then mean "show everything").
 static void repopulateMapList()
 {
 	if (!mapList)
@@ -127,7 +125,7 @@ static void repopulateMapList()
 	populateMapListboxFiltered( mapList, TRUE, getCurrentNameFilter(),
 	                            getCurrentPlayerCountFilter(),
 	                            TheNGMPGame->getMap(),
-	                            s_usesSystemMaps ? MAPORIGIN_OFFICIAL : MAPORIGIN_USER );
+	                            MAPORIGIN_ANY );
 }
 
 
@@ -170,9 +168,10 @@ static const char *gadgetsToHide[] =
 	"StartingCashLabel",
 	"ComboBoxStartingCash",
 	"CheckboxEnforceRandom",
-	"CheckBoxUseStats",
 	"CheckBoxLimitArmies",
 	"ButtonRandomize",
+	// Radarvan Pick took Record Stats' place in that row, so it is covered too.
+	"ButtonMapVote",
 
 	nullptr
 };
@@ -209,18 +208,19 @@ void WOLMapSelectMenuInit( WindowLayout *layout, void *userData )
 
 	TheWindowManager->winSetFocus( parent );
 
-	CustomMatchPreferences pref;
-	Bool usesSystemMapDir = pref.usesSystemMapDir();
 	winMapPreviewID = TheNameKeyGenerator->nameToKey( "WOLMapSelectMenu.wnd:WinMapPreview" );
 	winMapPreview = TheWindowManager->winGetWindowFromId(parent, winMapPreviewID);
 
+#if !defined(GENERALS_ONLINE_ALLOW_ALL_SETTINGS_FOR_STATS_MATCHES)
+	// Which side of the System/User split to preselect. Only the stats-match build
+	// still has a split to preselect; the list this build shows holds both.
+	CustomMatchPreferences pref;
+	Bool usesSystemMapDir = pref.usesSystemMapDir();
 	const MapMetaData *mmd = TheMapCache->findMap(TheNGMPGame->getMap());
 	if (mmd)
 	{
 		usesSystemMapDir = mmd->m_isOfficial;
 	}
-
-#if !defined(GENERALS_ONLINE_ALLOW_ALL_SETTINGS_FOR_STATS_MATCHES)
 	bool bUseStats = TheNGMPGame->getUseStats();
 	//if stats are enabled, only official maps can be used
 	if(bUseStats)
@@ -302,7 +302,23 @@ void WOLMapSelectMenuInit( WindowLayout *layout, void *userData )
 	GadgetListBoxSetListLength(mapList, TheMapCache->size());
 #endif
 	
-	s_usesSystemMaps = usesSystemMapDir;
+	// One merged list, so the split control is noise: hide it rather than leave two
+	// buttons that look like they filter and do not. winEnable too, so a hidden
+	// button cannot still take a click.
+	{
+		GameWindow *radioSystem = TheWindowManager->winGetWindowFromId(parent, radioButtonSystemMapsID);
+		GameWindow *radioUser = TheWindowManager->winGetWindowFromId(parent, radioButtonUserMapsID);
+		if (radioSystem)
+		{
+			radioSystem->winHide(TRUE);
+			radioSystem->winEnable(FALSE);
+		}
+		if (radioUser)
+		{
+			radioUser->winHide(TRUE);
+			radioUser->winEnable(FALSE);
+		}
+	}
 
 	if( mapList )
 	{
@@ -543,16 +559,14 @@ WindowMsgHandledType WOLMapSelectMenuSystem( GameWindow *window, UnsignedInt msg
 			}
 			else if ( controlID == radioButtonSystemMapsID )
 			{
-				s_usesSystemMaps = TRUE;
-				repopulateMapList();
+				// Hidden now (the list always holds both), so this only fires on an
+				// older layout. The list does not change; the preference still does.
 				CustomMatchPreferences pref;
 				pref.setUsesSystemMapDir(TRUE);
 				pref.write();
 			}
 			else if ( controlID == radioButtonUserMapsID )
 			{
-				s_usesSystemMaps = FALSE;
-				repopulateMapList();
 				CustomMatchPreferences pref;
 				pref.setUsesSystemMapDir(FALSE);
 				pref.write();
@@ -604,6 +618,23 @@ WindowMsgHandledType WOLMapSelectMenuSystem( GameWindow *window, UnsignedInt msg
 					TheNGMPGame->resetAccepted();
 					TheNGMPGame->resetStartSpots();
 
+					// TheSuperHackers @feature bill-rich 02/10/2026 Push the .map + sidecars
+					// to the cncstats store so a lobby member who does not have this map can
+					// pull it over HTTP instead of waiting for the P2P transfer at launch
+					// (which only covers user maps). No-ops when the URLs are unset or the
+					// store already holds this CRC, and the sidecar helpers skip whatever is
+					// not on disk here. After setMap, which computes the contents mask.
+					if (it != TheMapCache->end() && TheGlobalData != nullptr)
+					{
+						UploadAllMapAssetsIfMissing(TheGlobalData->m_mapCheckUrl,
+							TheGlobalData->m_mapAssetsUrl,
+							TheGlobalData->m_mapUploadUrl,
+							it->second.m_CRC,
+							it->second.m_fileName,
+							TheNGMPGame->getMapContentsMask(),
+							0 /* no per-game seed in the lobby */);
+					}
+
 					// TODO_NGMP:
 					//TheGameSpyInfo->setGameOptions();
 
@@ -615,7 +646,7 @@ WindowMsgHandledType WOLMapSelectMenuSystem( GameWindow *window, UnsignedInt msg
 
 					if (pLobbyInterface != nullptr)
 					{
-						pLobbyInterface->UpdateCurrentLobby_Map(strMapName, TheNGMPGame->getMap(), bOfficialMap, newMaxPlayers);
+						pLobbyInterface->UpdateCurrentLobby_Map(strMapName, TheNGMPGame->getMap(), bOfficialMap, newMaxPlayers, TheNGMPGame->getMapCRC());
 					}
 					
 

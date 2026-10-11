@@ -45,7 +45,183 @@
 #include "Common/PlayerTemplate.h"
 #include "GameNetwork/LANAPICallbacks.h" // for acceptTrueColor, etc
 #include "GameClient/ChallengeGenerals.h"
+#include "Common/GlobalData.h"
+#include "Common/StatsUploader.h" // DownloadAndInstallMap (map install by CRC)
 
+
+// -----------------------------------------------------------------------------
+// Map lookup by display name, shared by the LAN and online "Radarvan Pick"
+// buttons. Moved here from LanGameOptionsMenu.cpp when the online lobby got the
+// same button: one copy, one set of matching rules.
+// -----------------------------------------------------------------------------
+
+// Normalize a candidate display name for matching against the radarvan
+// response: lowercase + drop spaces. Spaces have to go because radarvan
+// stores some legacy entries with the folder name ("TournamentA") while
+// the engine's m_displayName uses the CSF-translated form with spaces
+// ("Tournament A"). Case folding handles "[RANK]" vs "[rank]" drift.
+static AsciiString normalizeMapNameForMatch(const UnicodeString &src)
+{
+	AsciiString out;
+	out.translate(src);
+	AsciiString stripped;
+	for (const char *p = out.str(); *p != '\0'; ++p)
+	{
+		if (*p != ' ')
+			stripped.concat(*p);
+	}
+	stripped.toLower();
+	return stripped;
+}
+
+const MapMetaData *FindMapByDisplayName(const AsciiString &chosenDisplayName, AsciiString *outMapCacheKey)
+{
+	if (!TheMapCache || chosenDisplayName.isEmpty())
+		return nullptr;
+	UnicodeString chosenU;
+	chosenU.translate(chosenDisplayName);
+	AsciiString chosenNorm = normalizeMapNameForMatch(chosenU);
+	if (chosenNorm.isEmpty())
+		return nullptr;
+
+	for (MapCache::iterator it = TheMapCache->begin(); it != TheMapCache->end(); ++it)
+	{
+		UnicodeString display = it->second.m_displayName;
+
+		// Strip a trailing " (N)" / " (NN)" player-count suffix.
+		Int dlen = display.getLength();
+		if (dlen >= 4)
+		{
+			const WideChar *ds = display.str();
+			if (ds[dlen - 1] == L')')
+			{
+				Int di = dlen - 2;
+				while (di > 0 && ds[di] >= L'0' && ds[di] <= L'9')
+					--di;
+				if (di >= 1 && ds[di] == L'(' && ds[di - 1] == L' ' && di != dlen - 2)
+				{
+					UnicodeString trimmed;
+					Int j;
+					for (j = 0; j < di - 1; ++j)
+						trimmed.concat(ds[j]);
+					display = trimmed;
+					dlen = display.getLength();
+				}
+			}
+		}
+
+		// Strip a trailing ".map" extension (case-insensitive).
+		// Unofficial maps bake the filename into m_displayName so
+		// the extension survives into the visible name; official
+		// maps fetch a localized title and have no extension.
+		if (dlen >= 4)
+		{
+			const WideChar *ds = display.str();
+			WideChar c0 = ds[dlen - 4];
+			WideChar c1 = ds[dlen - 3];
+			WideChar c2 = ds[dlen - 2];
+			WideChar c3 = ds[dlen - 1];
+			if (c0 == L'.' &&
+				(c1 == L'm' || c1 == L'M') &&
+				(c2 == L'a' || c2 == L'A') &&
+				(c3 == L'p' || c3 == L'P'))
+			{
+				UnicodeString trimmed;
+				Int j;
+				for (j = 0; j < dlen - 4; ++j)
+					trimmed.concat(ds[j]);
+				display = trimmed;
+			}
+		}
+
+		AsciiString displayNorm = normalizeMapNameForMatch(display);
+		if (displayNorm == chosenNorm)
+		{
+			if (outMapCacheKey)
+				*outMapCacheKey = it->first;
+			return &it->second;
+		}
+	}
+	return nullptr;
+}
+
+// Keep only characters that are safe in a map directory/file name. The name
+// comes from a server response, and it becomes a path, so anything that could
+// walk out of the maps directory has to go. Spaces are kept: real map names have
+// them, and the engine is happy with them.
+static AsciiString sanitizeMapNameForPath(const AsciiString &src)
+{
+	AsciiString out;
+	for (const char *p = src.str(); *p != '\0'; ++p)
+	{
+		const char c = *p;
+		const Bool ok = (c >= 'a' && c <= 'z')
+			|| (c >= 'A' && c <= 'Z')
+			|| (c >= '0' && c <= '9')
+			|| c == ' ' || c == '_' || c == '-' || c == '.'
+			|| c == '[' || c == ']' || c == '(' || c == ')' || c == '\'';
+		if (ok)
+			out.concat(c);
+	}
+	out.trim();
+	// A name that is nothing but dots would make a path that means "the parent
+	// directory"; refuse it rather than write there.
+	const char *q = out.str();
+	while (*q == '.')
+		++q;
+	if (*q == '\0')
+		return AsciiString::TheEmptyString;
+	return out;
+}
+
+const MapMetaData *InstallMapByCRC(const AsciiString &chosenDisplayName,
+                                   const AsciiString &serverMapFileName,
+                                   UnsignedInt mapCRC,
+                                   UnsignedInt contentsMask,
+                                   AsciiString *outMapCacheKey)
+{
+	// A zero CRC is the server saying it has no pick, or an older schema that
+	// never sent one: there is nothing to fetch by.
+	if (mapCRC == 0 || TheMapCache == nullptr)
+		return nullptr;
+
+	// Where the bytes land. The server's own relative path wins when it sends
+	// one; otherwise derive <user maps>\<name>\<name>.map, which is the layout
+	// the engine requires (directory and file must share a name) and the one
+	// unofficial maps are matched by, so the retry below finds it by name.
+	AsciiString localPath;
+	if (!serverMapFileName.isEmpty())
+	{
+		localPath = serverMapFileName;
+	}
+	else
+	{
+		const AsciiString safeName = sanitizeMapNameForPath(chosenDisplayName);
+		if (safeName.isEmpty())
+			return nullptr;
+		localPath.format("%s\\%s\\%s.map", TheMapCache->getUserMapDir().str(),
+			safeName.str(), safeName.str());
+	}
+
+	if (!DownloadAndInstallMap(localPath, mapCRC, contentsMask))
+		return nullptr;
+
+	// DownloadAndInstallMap refreshes MapCache, so the map should be findable
+	// now. Try the name the server used first -- for an unofficial map the cache
+	// derives the display name from the file name we just wrote, so they agree --
+	// then the path we wrote, for the case where they do not.
+	AsciiString key;
+	const MapMetaData *md = FindMapByDisplayName(chosenDisplayName, &key);
+	if (md == nullptr)
+	{
+		key = localPath;
+		key.toLower();
+		md = TheMapCache->findMap(key);
+	}
+	if (md != nullptr && outMapCacheKey != nullptr)
+		*outMapCacheKey = key;
+	return md;
+}
 
 // -----------------------------------------------------------------------------
 
@@ -317,21 +493,26 @@ void PopulatePlayerTemplateComboBox(Int comboBox, GameWindow *comboArray[], Game
 // team colors for UI (team combo + minimap start positions).
 // Declared in GUIUtil.h as Color (a signed Int) so every caller agrees on the
 // type; GameMakeColor already produces a Color.
+//
+// TheSuperHackers @bugfix bill-rich 02/10/2026 These are Zulu 1.6.x's four team
+// colors, not GO's. Players read a lobby by team color, so a port that quietly
+// renumbered them (GO had Red/Green/Blue/Yellow) made every screenshot and every
+// "I'm on yellow" disagree with what Zulu players already know.
 Color GetTeamUiColor(Int teamNumber)
 {
     switch (teamNumber)
     {
         case 0:
-            return GameMakeColor(255, 60, 60, 255);   // Red
+            return GameMakeColor(255, 220,  60, 255); // Team 1: Yellow
 
         case 1:
-            return GameMakeColor(60, 255, 60, 255);   // Green
+            return GameMakeColor(255,  60,  60, 255); // Team 2: Red
 
         case 2:
-            return GameMakeColor(60, 120, 255, 255);  // Blue
+            return GameMakeColor(200, 100, 255, 255); // Team 3: Purple
 
         case 3:
-            return GameMakeColor(255, 220, 60, 255);  // Yellow
+            return GameMakeColor( 60, 120, 255, 255); // Team 4: Blue
     }
 
     // Default: white (none) 

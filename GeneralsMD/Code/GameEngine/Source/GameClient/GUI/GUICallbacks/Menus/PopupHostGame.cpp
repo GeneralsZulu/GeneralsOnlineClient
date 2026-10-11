@@ -411,6 +411,15 @@ void PopupHostGameInit( WindowLayout *layout, void *userData )
 	checkBoxAllowObservers->winHide(false);
 	GadgetCheckBoxSetChecked(checkBoxAllowObservers, true);
 
+	// TheSuperHackers @feature bill-rich 02/10/2026 Record Stats is not a choice in
+	// this client: every match is reported to radarvan regardless, so the box
+	// offered a switch over nothing the player can see. Hidden rather than deleted
+	// because PopupHostGame.wnd is a retail layout this build does not ship, and
+	// the box is still what positions Allow Observers (read just above). The lobby
+	// is always created with stats tracking on, see below.
+	GadgetCheckBoxSetChecked(checkBoxUseStats, TRUE);
+	checkBoxUseStats->winHide(true);
+
 	// hide password for streams
 	EntryData* e = (EntryData*)textEntryGamePassword->winGetUserData();
 	e->secretText = true;
@@ -663,7 +672,9 @@ void createGame()
 	const MapMetaData* md = TheMapCache->findMap(defaultMap);
 
 	Bool limitArmies = GadgetCheckBoxIsChecked(checkBoxLimitArmies);
-	Bool useStats = GadgetCheckBoxIsChecked(checkBoxUseStats);
+	// Always on: the checkbox is hidden (see PopupHostGameInit) and this client
+	// reports every match, so the lobby is created with stats tracking either way.
+	const Bool useStats = TRUE;
 	Bool bAllowObservers = GadgetCheckBoxIsChecked(checkBoxAllowObservers);
 
 	UnicodeString gameName = GadgetTextEntryGetText(textEntryGameName);
@@ -683,7 +694,7 @@ void createGame()
 		return;
 	}
 
-	pLobbyInterface->CreateLobby(gameName, md->m_displayName, md->m_fileName, md->m_isOfficial, md->m_numPlayers, limitArmies, useStats, TheGlobalData->m_defaultStartingCash.countMoney(), passwd.isNotEmpty(), std::string(passwd.str()), bAllowObservers);
+	pLobbyInterface->CreateLobby(gameName, md->m_displayName, md->m_fileName, md->m_isOfficial, md->m_numPlayers, limitArmies, useStats, TheGlobalData->m_defaultStartingCash.countMoney(), passwd.isNotEmpty(), std::string(passwd.str()), bAllowObservers, md->m_CRC);
 
 	GSMessageBoxCancel(UnicodeString(L"Creating Lobby"), UnicodeString(L"Lobby Creation is in progress..."), nullptr);
 

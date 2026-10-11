@@ -1436,107 +1436,9 @@ WindowMsgHandledType LanGameOptionsMenuInput( GameWindow *window, UnsignedInt ms
 // Radarvan "Map Vote" button helpers
 // -----------------------------------------------------------------------------
 
-// Normalize a candidate display name for matching against the radarvan
-// response: lowercase + drop spaces. Spaces have to go because radarvan
-// stores some legacy entries with the folder name ("TournamentA") while
-// the engine's m_displayName uses the CSF-translated form with spaces
-// ("Tournament A"). Case folding handles "[RANK]" vs "[rank]" drift.
-static AsciiString normalizeMapNameForMatch(const UnicodeString &src)
-{
-	AsciiString out;
-	out.translate(src);
-	AsciiString stripped;
-	for (const char *p = out.str(); *p != '\0'; ++p)
-	{
-		if (*p != ' ')
-			stripped.concat(*p);
-	}
-	stripped.toLower();
-	return stripped;
-}
-
-// Locate a map in MapCache whose m_displayName matches the given
-// AsciiString. Strips two engine-added suffixes from m_displayName
-// before comparing:
-//   1) " (N)" / " (NN)" player-count suffix (appended for any
-//      multiplayer-eligible map).
-//   2) Trailing ".map" extension (unofficial maps derive
-//      m_displayName from the bare filename, official maps don't).
-// Comparison is case-insensitive and space-insensitive so the
-// server's "TournamentA" matches the engine's "Tournament A".
-// Returns the metadata pointer on match and writes the MapCache
-// iterator key (lowercase filename path the engine uses internally)
-// into *outKey. Returns nullptr when nothing matches.
-static const MapMetaData *findMapByDisplayName(const AsciiString &chosen, AsciiString *outKey)
-{
-	if (!TheMapCache || chosen.isEmpty())
-		return nullptr;
-	UnicodeString chosenU;
-	chosenU.translate(chosen);
-	AsciiString chosenNorm = normalizeMapNameForMatch(chosenU);
-	if (chosenNorm.isEmpty())
-		return nullptr;
-
-	for (MapCache::iterator it = TheMapCache->begin(); it != TheMapCache->end(); ++it)
-	{
-		UnicodeString display = it->second.m_displayName;
-
-		// Strip a trailing " (N)" / " (NN)" player-count suffix.
-		Int dlen = display.getLength();
-		if (dlen >= 4)
-		{
-			const WideChar *ds = display.str();
-			if (ds[dlen - 1] == L')')
-			{
-				Int di = dlen - 2;
-				while (di > 0 && ds[di] >= L'0' && ds[di] <= L'9')
-					--di;
-				if (di >= 1 && ds[di] == L'(' && ds[di - 1] == L' ' && di != dlen - 2)
-				{
-					UnicodeString trimmed;
-					Int j;
-					for (j = 0; j < di - 1; ++j)
-						trimmed.concat(ds[j]);
-					display = trimmed;
-					dlen = display.getLength();
-				}
-			}
-		}
-
-		// Strip a trailing ".map" extension (case-insensitive).
-		// Unofficial maps bake the filename into m_displayName so
-		// the extension survives into the visible name; official
-		// maps fetch a localized title and have no extension.
-		if (dlen >= 4)
-		{
-			const WideChar *ds = display.str();
-			WideChar c0 = ds[dlen - 4];
-			WideChar c1 = ds[dlen - 3];
-			WideChar c2 = ds[dlen - 2];
-			WideChar c3 = ds[dlen - 1];
-			if (c0 == L'.' &&
-				(c1 == L'm' || c1 == L'M') &&
-				(c2 == L'a' || c2 == L'A') &&
-				(c3 == L'p' || c3 == L'P'))
-			{
-				UnicodeString trimmed;
-				Int j;
-				for (j = 0; j < dlen - 4; ++j)
-					trimmed.concat(ds[j]);
-				display = trimmed;
-			}
-		}
-
-		AsciiString displayNorm = normalizeMapNameForMatch(display);
-		if (displayNorm == chosenNorm)
-		{
-			if (outKey)
-				*outKey = it->first;
-			return &it->second;
-		}
-	}
-	return nullptr;
-}
+// The display-name lookup both lobbies use now lives in GUIUtil
+// (FindMapByDisplayName): the online "Radarvan Pick" button needs the same
+// matching rules, and two copies would drift.
 
 // Host-only handler for the "Radarvan Pick" button. POSTs the lobby
 // roster to the configured map_vote endpoint, applies the chosen map
@@ -1599,28 +1501,23 @@ static void handleMapVoteClick()
 	}
 
 	AsciiString mapKey;
-	const MapMetaData *md = findMapByDisplayName(res.chosenMap, &mapKey);
+	const MapMetaData *md = FindMapByDisplayName(res.chosenMap, &mapKey);
 
-	// Forward-compat CDN-download hook. The server doesn't return
-	// these fields today (mapCRC == 0, mapFileName empty), so this
-	// branch is dormant. Once it does, an unknown chosen_map will be
-	// fetched + CRC-verified by DownloadAndInstallMap before the
-	// local-cache lookup retries, and the user-visible "not found"
-	// chat error stays as the final fallback for truly missing maps.
-	if (md == nullptr && !res.mapFileName.isEmpty() && res.mapCRC != 0)
+	// TheSuperHackers @feature bill-rich 02/10/2026 Don't have it? Fetch it. radarvan
+	// returns the picked map's CRC (chosen_map_crc) and the cncstats map store is
+	// keyed by CRC, so that is everything the download needs -- it used to also
+	// insist on a map_filename the server has never sent, which left this branch
+	// dormant and turned "radarvan picked a map you don't have" into a dead end.
+	// The "not found" chat error below is still the fallback for a map the store
+	// does not have either.
+	if (md == nullptr && res.mapCRC != 0)
 	{
-		if (DownloadAndInstallMap(res.mapFileName, res.mapCRC, res.contentsMask))
-		{
-			md = findMapByDisplayName(res.chosenMap, &mapKey);
-			if (md == nullptr && TheMapCache)
-			{
-				AsciiString key = res.mapFileName;
-				key.toLower();
-				md = TheMapCache->findMap(key);
-				if (md)
-					mapKey = key;
-			}
-		}
+		UnicodeString dlU;
+		dlU.format(TheGameText->fetch("GUI:MapVoteDownloading"), res.chosenMap.str());
+		TheLAN->OnChat(L"SYSTEM", TheLAN->GetLocalIP(), dlU, LANAPIInterface::LANCHAT_SYSTEM);
+
+		md = InstallMapByCRC(res.chosenMap, res.mapFileName, res.mapCRC,
+			res.contentsMask, &mapKey);
 	}
 
 	if (md == nullptr || mapKey.isEmpty())

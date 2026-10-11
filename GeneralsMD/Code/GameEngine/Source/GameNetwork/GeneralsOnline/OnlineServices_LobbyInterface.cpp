@@ -123,7 +123,7 @@ namespace
 	}
 }
 
-void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_Map(AsciiString strMap, AsciiString strMapPath, bool bIsOfficial, int newMaxPlayers)
+void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_Map(AsciiString strMap, AsciiString strMapPath, bool bIsOfficial, int newMaxPlayers, uint32_t mapCRC)
 {
 	// reset autostart if host changes anything (because ready flag will reset too)
 #if !defined(GENERALS_ONLINE_DISABLE_AUTO_ACCEPT)
@@ -151,6 +151,9 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_Map(AsciiString strM
 	j["map_path"] = sanitizedMapPath.str();
 	j["map_official"] = bIsOfficial;
 	j["max_players"] = newMaxPlayers;
+	// TheSuperHackers @feature bill-rich 02/10/2026 So a member without this map can
+	// fetch exactly this map from the cncstats store, which is keyed by CRC.
+	j["map_crc"] = mapCRC;
 	std::string strPostData = j.dump();
 
 	// convert
@@ -233,8 +236,13 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_StartingCash(Unsigne
 
 void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_HasMap()
 {
-	// do we have the map?
-	bool bHasMap = TheMapCache->findMap(AsciiString(m_CurrentLobby.map_path.c_str()));
+	// TheSuperHackers @feature bill-rich 02/10/2026 Having a map of that name is not
+	// the same as having the host's map: a differently-built copy of the same name used
+	// to report "yes" and then the match either refused to start or started wrong.
+	// When the host sends a CRC (map_crc != 0) the local copy has to match it.
+	const MapMetaData *pLocalMap = TheMapCache->findMap(AsciiString(m_CurrentLobby.map_path.c_str()));
+	bool bHasMap = (pLocalMap != nullptr)
+		&& (m_CurrentLobby.map_crc == 0 || m_CurrentLobby.map_crc == pLocalMap->m_CRC);
 
 	std::string strURI = std::format("{}/{}", NGMP_OnlineServicesManager::GetAPIEndpoint("Lobby"), m_CurrentLobby.lobbyID);
 	std::map<std::string, std::string> mapHeaders;
@@ -905,6 +913,8 @@ void NGMP_OnlineServices_LobbyInterface::SearchForLobbies(std::function<void()> 
 				lobbyEntryIter["MapName"].get_to(lobbyEntry.map_name);
 				lobbyEntryIter["MapPath"].get_to(lobbyEntry.map_path);
 				lobbyEntryIter["IsMapOfficial"].get_to(lobbyEntry.map_official);
+				if (lobbyEntryIter.contains("MapCRC"))
+					lobbyEntryIter["MapCRC"].get_to(lobbyEntry.map_crc);
 				lobbyEntryIter["NumCurrentPlayers"].get_to(lobbyEntry.current_players);
 				lobbyEntryIter["MaxPlayers"].get_to(lobbyEntry.max_players);
 				lobbyEntryIter["IsVanillaTeamsOnly"].get_to(lobbyEntry.vanilla_teams);
@@ -1184,6 +1194,8 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 						lobbyEntryIter["MapName"].get_to(lobbyEntry.map_name);
 						lobbyEntryIter["MapPath"].get_to(lobbyEntry.map_path);
 						lobbyEntryIter["IsMapOfficial"].get_to(lobbyEntry.map_official);
+						if (lobbyEntryIter.contains("MapCRC"))
+							lobbyEntryIter["MapCRC"].get_to(lobbyEntry.map_crc);
 						lobbyEntryIter["NumCurrentPlayers"].get_to(lobbyEntry.current_players);
 						lobbyEntryIter["MaxPlayers"].get_to(lobbyEntry.max_players);
 						lobbyEntryIter["IsVanillaTeamsOnly"].get_to(lobbyEntry.vanilla_teams);
@@ -1489,6 +1501,7 @@ void NGMP_OnlineServices_LobbyInterface::JoinLobby(LobbyEntry lobbyInfo, std::st
 					// TODO_NGMP: Handle room full error (JoinLobbyResult_FullRoom, can we even get that?
 
 					// no response body from this, just http codes
+					ReleaseLog("GO lobby: join lobby %lld result=%d http=%d", (long long)lobbyInfo.lobbyID, (int)JoinResult, statusCode);
 					if (JoinResult == EJoinLobbyResult::JoinLobbyResult_Success)
 					{
 						NetworkLog(ELogVerbosity::LOG_RELEASE, "[NGMP] Joined lobby");
@@ -1501,7 +1514,6 @@ void NGMP_OnlineServices_LobbyInterface::JoinLobby(LobbyEntry lobbyInfo, std::st
 							nlohmann::json jsonObject = nlohmann::json::parse(strBody);
 							JoinLobbyResponse resp = jsonObject.get<JoinLobbyResponse>();
 
-					ReleaseLog("GO lobby: join lobby %lld result=%d http=%d", (long long)lobbyInfo.lobbyID, (int)JoinResult, statusCode);
 							m_strTURNUsername = resp.turn_username;
 							m_strTURNToken = resp.turn_token;
 							NetworkLog(ELogVerbosity::LOG_DEBUG, "Got TURN username: %s, token: %s", m_strTURNUsername.c_str(), m_strTURNToken.c_str());
@@ -1605,6 +1617,7 @@ void NGMP_OnlineServices_LobbyInterface::JoinLobby(LobbyEntry lobbyInfo, std::st
 
 void NGMP_OnlineServices_LobbyInterface::LeaveCurrentLobby()
 {
+	ReleaseLog("GO lobby: leaving lobby %lld", (long long)m_CurrentLobby.lobbyID);
 	// reset host migration flags
 	ResetHostMigrationFlags();
 
@@ -1617,7 +1630,6 @@ void NGMP_OnlineServices_LobbyInterface::LeaveCurrentLobby()
 		delete m_pLobbyMesh;
 		m_pLobbyMesh = nullptr;
 	}
-	ReleaseLog("GO lobby: leaving lobby %lld", (long long)m_CurrentLobby.lobbyID);
 
 	if (TheNGMPGame != nullptr)
 	{
@@ -1706,7 +1718,7 @@ struct CreateLobbyResponse
 	NLOHMANN_DEFINE_TYPE_INTRUSIVE(CreateLobbyResponse, result, lobby_id, turn_username, turn_token)
 };
 
-void NGMP_OnlineServices_LobbyInterface::CreateLobby(UnicodeString strLobbyName, UnicodeString strInitialMapName, AsciiString strInitialMapPath, bool bIsOfficial, int initialMaxSize, bool bVanillaTeamsOnly, bool bTrackStats, uint32_t startingCash, bool bPassworded, std::string strPassword, bool bAllowObservers)
+void NGMP_OnlineServices_LobbyInterface::CreateLobby(UnicodeString strLobbyName, UnicodeString strInitialMapName, AsciiString strInitialMapPath, bool bIsOfficial, int initialMaxSize, bool bVanillaTeamsOnly, bool bTrackStats, uint32_t startingCash, bool bPassworded, std::string strPassword, bool bAllowObservers, uint32_t mapCRC)
 {
 	AnticheatPlugInterface::EndSession();
 
@@ -1734,6 +1746,8 @@ void NGMP_OnlineServices_LobbyInterface::CreateLobby(UnicodeString strLobbyName,
 			j["map_path"] = sanitizedMapPath.str();
 			j["map_official"] = bIsOfficial;
 			j["max_players"] = initialMaxSize;
+			// See UpdateCurrentLobby_Map: lets a joiner fetch this map by CRC.
+			j["map_crc"] = mapCRC;
 
 			// TODO_NGMP: Remove this and just hardcode it or provide from service
 			j["preferred_port"] = 0;
@@ -1770,6 +1784,8 @@ void NGMP_OnlineServices_LobbyInterface::CreateLobby(UnicodeString strLobbyName,
 						m_strTURNUsername = resp.turn_username;
 						m_strTURNToken = resp.turn_token;
 						NetworkLog(ELogVerbosity::LOG_DEBUG, "Got TURN username: %s, token: %s", m_strTURNUsername.c_str(), m_strTURNToken.c_str());
+						ReleaseLog("GO lobby: create lobby result=%d id=%lld turnCreds=%s", (int)resp.result, (long long)resp.lobby_id,
+							(m_strTURNUsername.empty() || m_strTURNToken.empty()) ? "NONE" : "present");
 
 
 						if (resp.result == ECreateLobbyResponseResult::SUCCEEDED)
@@ -1784,8 +1800,6 @@ void NGMP_OnlineServices_LobbyInterface::CreateLobby(UnicodeString strLobbyName,
 
 
 							// TODO_NGMP: Cleanup game + dont store 2 ptrs
-						ReleaseLog("GO lobby: create lobby result=%d id=%lld turnCreds=%s", (int)resp.result, (long long)resp.lobby_id,
-							(m_strTURNUsername.empty() || m_strTURNToken.empty()) ? "NONE" : "present");
 							if (TheNGMPGame == nullptr)
 							{
 								TheNGMPGame = new NGMPGame();

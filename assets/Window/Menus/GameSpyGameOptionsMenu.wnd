@@ -194,55 +194,6 @@ WINDOW
     CHILD
     WINDOW
       WINDOWTYPE = CHECKBOX;
-      SCREENRECT = UPPERLEFT: 529 311,
-                   BOTTOMRIGHT: 634 335,
-                   CREATIONRESOLUTION: 800 600;
-      NAME = "GameSpyGameOptionsMenu.wnd:CheckBoxUseStats";
-      STATUS = ENABLED+IMAGE+BORDER;
-      STYLE = CHECKBOX+MOUSETRACK;
-      SYSTEMCALLBACK = "[None]";
-      INPUTCALLBACK = "[None]";
-      TOOLTIPCALLBACK = "[None]";
-      DRAWCALLBACK = "[None]";
-      FONT = NAME: "Arial", SIZE: 10, BOLD: 0;
-      HEADERTEMPLATE = "TextEntry";
-      TOOLTIPTEXT = "TOOLTIP:UseStats";
-      TOOLTIPDELAY = -1;
-      TEXT = "GUI:UseStats";
-      TEXTCOLOR = ENABLED:  255 255 255 255, ENABLEDBORDER:  0 0 0 255,
-                  DISABLED: 140 138 138 255, DISABLEDBORDER: 64 64 64 255,
-                  HILITE:   168 255 12 255, HILITEBORDER:   0 0 128 255;
-      ENABLEDDRAWDATA = IMAGE: NoImage, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
-                        IMAGE: Active-Unchecked, COLOR: 255 255 255 0, BORDERCOLOR: 128 128 255 255,
-                        IMAGE: Active-Checked, COLOR: 0 0 255 255, BORDERCOLOR: 128 128 255 255,
-                        IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
-                        IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
-                        IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
-                        IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
-                        IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
-                        IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0;
-      DISABLEDDRAWDATA = IMAGE: NoImage, COLOR: 128 128 128 255, BORDERCOLOR: 192 192 192 255,
-                         IMAGE: Disabled-Unchecked, COLOR: 255 255 255 0, BORDERCOLOR: 192 192 192 255,
-                         IMAGE: Disabled-Checked, COLOR: 64 64 64 255, BORDERCOLOR: 254 254 254 255,
-                         IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
-                         IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
-                         IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
-                         IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
-                         IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
-                         IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0;
-      HILITEDRAWDATA = IMAGE: NoImage, COLOR: 0 255 0 255, BORDERCOLOR: 128 255 128 255,
-                       IMAGE: Active-Unchecked, COLOR: 255 255 255 0, BORDERCOLOR: 128 128 255 255,
-                       IMAGE: Active-Checked, COLOR: 255 255 0 255, BORDERCOLOR: 254 254 254 255,
-                       IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
-                       IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
-                       IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
-                       IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
-                       IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
-                       IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0;
-    END
-    CHILD
-    WINDOW
-      WINDOWTYPE = CHECKBOX;
       SCREENRECT = UPPERLEFT: 401 311,
                    BOTTOMRIGHT: 521 335,
                    CREATIONRESOLUTION: 800 600;
@@ -1760,6 +1711,53 @@ WINDOW
       TOOLTIPTEXT = "Tooltip:SelectMap";
       TOOLTIPDELAY = -1;
       TEXT = "GUI:SelectMap";
+      TEXTCOLOR = ENABLED:  255 255 255 255, ENABLEDBORDER:  0 0 0 255,
+                  DISABLED: 62 64 92 255, DISABLEDBORDER: 31 32 47 255,
+                  HILITE:   186 255 12 255, HILITEBORDER:   0 2 0 255;
+      ENABLEDDRAWDATA = IMAGE: Buttons-Left, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
+                        IMAGE: NoImage, COLOR: 47 55 168 255, BORDERCOLOR: 254 254 254 255,
+                        IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                        IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                        IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                        IMAGE: Buttons-Middle, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                        IMAGE: Buttons-Right, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                        IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                        IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0;
+      DISABLEDDRAWDATA = IMAGE: Buttons-Disabled-Left, COLOR: 128 128 128 255, BORDERCOLOR: 192 192 192 255,
+                         IMAGE: NoImage, COLOR: 192 192 192 255, BORDERCOLOR: 128 128 128 255,
+                         IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                         IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                         IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                         IMAGE: Buttons-Disabled-Middle, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                         IMAGE: Buttons-Disabled-Right, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                         IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                         IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0;
+      HILITEDRAWDATA = IMAGE: Buttons-HiLite-Left, COLOR: 209 253 4 255, BORDERCOLOR: 59 60 52 255,
+                       IMAGE: Buttons-Pushed-Left, COLOR: 47 55 168 255, BORDERCOLOR: 254 254 254 255,
+                       IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                       IMAGE: Buttons-Pushed-Middle, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                       IMAGE: Buttons-Pushed-Right, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                       IMAGE: Buttons-HiLite-Middle, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                       IMAGE: Buttons-HiLite-Right, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                       IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0,
+                       IMAGE: NoImage, COLOR: 255 255 255 0, BORDERCOLOR: 255 255 255 0;
+    END
+    WINDOW
+      WINDOWTYPE = PUSHBUTTON;
+      SCREENRECT = UPPERLEFT: 529 311,
+                   BOTTOMRIGHT: 634 335,
+                   CREATIONRESOLUTION: 800 600;
+      NAME = "GameSpyGameOptionsMenu.wnd:ButtonMapVote";
+      STATUS = ENABLED+IMAGE+NOFOCUS;
+      STYLE = PUSHBUTTON+MOUSETRACK;
+      SYSTEMCALLBACK = "[None]";
+      INPUTCALLBACK = "[None]";
+      TOOLTIPCALLBACK = "[None]";
+      DRAWCALLBACK = "[None]";
+      FONT = NAME: "Arial", SIZE: 10, BOLD: 1;
+      HEADERTEMPLATE = "Arial10BoldTemplate";
+      TOOLTIPDELAY = -1;
+      TEXT = "GUI:MapVote";
       TEXTCOLOR = ENABLED:  255 255 255 255, ENABLEDBORDER:  0 0 0 255,
                   DISABLED: 62 64 92 255, DISABLEDBORDER: 31 32 47 255,
                   HILITE:   186 255 12 255, HILITEBORDER:   0 2 0 255;
@@ -4435,7 +4433,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 5,
+                    MAXDISPLAY: 14,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -4676,7 +4674,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 5,
+                    MAXDISPLAY: 14,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -4917,7 +4915,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 5,
+                    MAXDISPLAY: 14,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -5158,7 +5156,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 5,
+                    MAXDISPLAY: 14,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -5399,7 +5397,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 5,
+                    MAXDISPLAY: 14,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -5640,7 +5638,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 5,
+                    MAXDISPLAY: 14,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -5881,7 +5879,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 5,
+                    MAXDISPLAY: 14,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -6122,7 +6120,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 5,
+                    MAXDISPLAY: 14,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -6412,7 +6410,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 9,
+                    MAXDISPLAY: 14,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -6653,7 +6651,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 9,
+                    MAXDISPLAY: 14,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -6894,7 +6892,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 9,
+                    MAXDISPLAY: 14,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -7135,7 +7133,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 9,
+                    MAXDISPLAY: 14,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -7376,7 +7374,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 9,
+                    MAXDISPLAY: 14,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -7617,7 +7615,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 9,
+                    MAXDISPLAY: 14,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -7858,7 +7856,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 9,
+                    MAXDISPLAY: 14,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -8099,7 +8097,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 9,
+                    MAXDISPLAY: 14,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -8389,7 +8387,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 5,
+                    MAXDISPLAY: 6,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -8630,7 +8628,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 5,
+                    MAXDISPLAY: 6,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -8871,7 +8869,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 5,
+                    MAXDISPLAY: 6,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -9112,7 +9110,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 5,
+                    MAXDISPLAY: 6,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -9353,7 +9351,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 5,
+                    MAXDISPLAY: 6,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -9594,7 +9592,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 5,
+                    MAXDISPLAY: 6,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -9835,7 +9833,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 5,
+                    MAXDISPLAY: 6,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,
@@ -10076,7 +10074,7 @@ WINDOW
                        IMAGE: NoImage, COLOR: 255 255 255 255, BORDERCOLOR: 255 255 255 255;
       COMBOBOXDATA = ISEDITABLE: 0,
                     MAXCHARS: 16,
-                    MAXDISPLAY: 5,
+                    MAXDISPLAY: 6,
                     ASCIIONLY: 0,
                     LETTERSANDNUMBERS: 0;
       COMBOBOXDROPDOWNBUTTONENABLEDDRAWDATA = IMAGE: VSliderDownButtonEnabled, COLOR: 255 0 0 255, BORDERCOLOR: 255 128 128 255,

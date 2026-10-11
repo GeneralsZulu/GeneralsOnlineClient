@@ -31,6 +31,7 @@
 
 class GameWindow;
 class GameInfo;
+class MapMetaData;
 
 void ShowUnderlyingGUIElements( Bool show, const char *layoutFilename, const char *parentName,
 															 const char **gadgetsToHide, const char **perPlayerGadgetsToHide );
@@ -44,6 +45,30 @@ void PopulateStartingCashComboBox(GameWindow *comboBox, GameInfo *myGame);
 // preview's start-position markers. teamNumber is 0-based (team 1 = 0, etc.);
 // negative values (no team) return white.
 Color GetTeamUiColor( Int teamNumber );
+
+// Locate a map in MapCache by the display name a server handed us (radarvan's
+// map pick returns a human-readable name, not a path). Matching is
+// case-insensitive and space-insensitive, and strips the two suffixes the
+// engine adds to m_displayName -- the " (N)" player count and a trailing
+// ".map" -- so "TournamentA" finds "Tournament A (2)". Returns the metadata and
+// writes the MapCache key (the lowercase path the engine uses internally) into
+// *outMapCacheKey; nullptr when nothing matches.
+const MapMetaData *FindMapByDisplayName( const AsciiString &chosenDisplayName, AsciiString *outMapCacheKey );
+
+// Install a map this client does not have, by the CRC a server handed us, from
+// the cncstats map endpoint (which is keyed by CRC, so the name only decides
+// where the bytes land). serverMapFileName is the server's own relative path when
+// it sends one; otherwise a path is derived from chosenDisplayName under the user
+// maps directory. Blocking: the caller has already made one blocking request to
+// get here. Returns the installed map's metadata and writes its MapCache key into
+// *outMapCacheKey, or nullptr when there is nothing to fetch, the download fails,
+// the CRC does not verify, or the installed file still does not show up in the
+// cache.
+const MapMetaData *InstallMapByCRC( const AsciiString &chosenDisplayName,
+                                    const AsciiString &serverMapFileName,
+                                    UnsignedInt mapCRC,
+                                    UnsignedInt contentsMask,
+                                    AsciiString *outMapCacheKey );
 
 void EnableSlotListUpdates( Bool val );
 Bool AreSlotListUpdatesEnabled();

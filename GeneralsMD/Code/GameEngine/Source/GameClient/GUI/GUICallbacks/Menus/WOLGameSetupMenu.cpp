@@ -70,8 +70,11 @@
 #include "GameNetwork/GeneralsOnline/NGMP_interfaces.h"
 #include "GameNetwork/RandomAssign.h"
 #include "Common/LobbyDiscord.h"
+#include "Common/StatsUploader.h" // ChooseMapFromServer / DownloadAndInstallMap (Radarvan Pick)
 #include "Common/ReleaseLog.h"
 #include "GameNetwork/GeneralsOnline/NetworkSelfTest.h"
+#include "GameNetwork/MapDownloadHook.h" // peer-side map fetch for a map we do not have
+#include "Common/GlobalData.h"
 #include <ws2ipdef.h>
 #include <format>
 #include "../OnlineServices_Init.h"
@@ -207,6 +210,10 @@ static NameKeyType buttonStartID = NAMEKEY_INVALID;
 static NameKeyType buttonEmoteID = NAMEKEY_INVALID;
 static NameKeyType buttonSelectMapID = NAMEKEY_INVALID;
 static NameKeyType buttonRandomizeID = NAMEKEY_INVALID;
+// TheSuperHackers @feature bill-rich 02/10/2026 Radarvan Pick, the LAN lobby's map
+// vote button, now on this screen too: host-only, asks radarvan for a map that
+// suits the roster, and applies it the way Select Map does.
+static NameKeyType buttonMapVoteID = NAMEKEY_INVALID;
 static NameKeyType windowMapID = NAMEKEY_INVALID;
 
 #if defined(GENERALS_ONLINE_ENABLE_MATCH_START_COUNTDOWN)
@@ -230,6 +237,7 @@ static GameWindow *buttonBack = NULL;
 static GameWindow *buttonStart = NULL;
 static GameWindow *buttonSelectMap = NULL;
 static GameWindow *buttonRandomize = NULL;
+static GameWindow *buttonMapVote = NULL;
 // TheSuperHackers @feature bill-rich 15/09/2026 How many times the host pressed Randomize in this
 // lobby; announced with every roll so re-rolling is visible to everyone present.
 static Int s_randomizeCount = 0;
@@ -1174,6 +1182,7 @@ static void StartPressed()
 	if(isReady)
 	{
 		// start full mesh connection check
+		ReleaseLog("GO lobby: host pressed start, full mesh check requested");
 		UnicodeString strInform = UnicodeString(L"Connections: Checking all players...");
 		GadgetListBoxAddEntryText(listboxGameSetupChat, strInform, GameMakeColor(255, 194, 15, 255), -1, -1);
 
@@ -1182,7 +1191,6 @@ static void StartPressed()
 		{
 			if (buttonStart != nullptr)
 			{
-		ReleaseLog("GO lobby: host pressed start, full mesh check requested");
 				buttonStart->winEnable(FALSE);
 			}
 
@@ -1370,7 +1378,11 @@ void WOLDisplayGameOptions()
   //If our display does not match the current state of game settings, update the checkbox.
   Bool isUsingStats = TheGameSpyInfo->getCurrentStagingRoom()->getUseStats() ? TRUE : FALSE;
 #endif
-  if (GadgetCheckBoxIsChecked(checkBoxUseStats) != isUsingStats)
+  // TheSuperHackers @feature bill-rich 02/10/2026 Record Stats is gone from the
+  // shipped layout (every match reports to radarvan, so it switched nothing a
+  // player can see), which frees its slot in the options row for Radarvan Pick.
+  // Every use stays guarded so an older .wnd that still has the box keeps working.
+  if (checkBoxUseStats && GadgetCheckBoxIsChecked(checkBoxUseStats) != isUsingStats)
   {
   	GadgetCheckBoxSetChecked(checkBoxUseStats, isUsingStats);
     checkBoxUseStats->winSetTooltip( TheGameText->fetch( isUsingStats ? "TOOLTIP:UseStatsOn" : "TOOLTIP:UseStatsOff" ) );
@@ -1562,6 +1574,7 @@ static Bool s_wolResumeDownloadInProgress = FALSE;      ///< a download is under
 
 static void wolLocalSystemChat(const UnicodeString &text)
 {
+	ReleaseLog("GO lobby (local): %ls", text.str());
 	if (listboxGameSetupChat)
 		GadgetListBoxAddEntryText(listboxGameSetupChat, text, GameSpyColor[GSCOLOR_DEFAULT], -1, -1);
 }
@@ -1570,20 +1583,245 @@ static void wolLocalSystemChat(const UnicodeString &text)
 // usually not the host.
 static void wolLobbySystemChat(const UnicodeString &text)
 {
+	ReleaseLog("GO lobby: %ls", text.str());
 	NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
 	UnicodeString msg = text;
 	if (pLobbyInterface != nullptr)
 		pLobbyInterface->SendAnnouncementMessageToCurrentLobby(msg, true);
-	ReleaseLog("GO lobby (local): %ls", text.str());
 	else
 		wolLocalSystemChat(text);
+}
+
+// -----------------------------------------------------------------------------
+// Peer-side map fetch. The LAN lobby has done this since August (LANAPI, driven
+// by the host's game-options packets); online it never existed, so a member who
+// did not have the lobby's map just sat there as "does not have map" and the host
+// could not start unless the map was a user map the launch-time P2P transfer
+// could carry. The cncstats map store is keyed by CRC, which is why this had to
+// wait for the lobby to carry one (LobbyEntry::map_crc).
+//
+// One download at a time (the hook enforces that too), and a CRC that failed is
+// not retried: the lobby pushes its state repeatedly and we would otherwise
+// re-request the same map forever.
+// -----------------------------------------------------------------------------
+static Bool s_mapDownloadPending = FALSE;
+static UnsignedInt s_mapDownloadCRC = 0;
+static UnsignedInt s_mapDownloadFailedCRC = 0;
+
+// Ask the store for every sidecar kind. Unlike LAN there is no contents mask in
+// the lobby to say which ones the host actually has, and both the download and
+// the install treat sidecars as best-effort, so asking for all of them costs
+// nothing beyond a 404 for the kinds that were never stored.
+static const UnsignedInt MAP_SIDECARS_ALL = 0x7E;
+
+// Do we have the lobby's map, as opposed to a map with the same name? Same test
+// as UpdateCurrentLobby_HasMap.
+static Bool wolLocalHasLobbyMap(NGMPGame *game)
+{
+	if (game == NULL || TheMapCache == nullptr)
+		return FALSE;
+	AsciiString key = game->getMap();
+	key.toLower();
+	const MapMetaData *md = TheMapCache->findMap(key);
+	if (md == nullptr)
+		return FALSE;
+	const UnsignedInt want = game->getMapCRC();
+	return (want == 0) || (want == md->m_CRC);
+}
+
+static void wolUpdateMapDownload()
+{
+	NGMPGame *game = TheNGMPGame;
+	if (game == NULL)
+		return;
+
+	NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+	if (pLobbyInterface == nullptr)
+		return;
+
+	const UnsignedInt crc = game->getMapCRC();
+
+	if (!s_mapDownloadPending
+		&& TheMapDownloadStartHook != nullptr
+		&& crc != 0
+		&& crc != s_mapDownloadFailedCRC
+		&& !wolLocalHasLobbyMap(game))
+	{
+		if (TheMapDownloadStartHook(game->getMap(), crc, MAP_SIDECARS_ALL))
+		{
+			s_mapDownloadPending = TRUE;
+			s_mapDownloadCRC = crc;
+			wolLocalSystemChat(TheGameText->FETCH_OR_SUBSTITUTE("GUI:MapDownloadStarted",
+				L"Downloading map from server..."));
+		}
+		else
+		{
+			// Nothing started (no download URL configured, or one already in
+			// flight). Do not ask again for this CRC.
+			s_mapDownloadFailedCRC = crc;
+		}
+	}
+
+	if (s_mapDownloadPending && TheMapDownloadPollHook != nullptr)
+	{
+		const MapDownloadStatus status = TheMapDownloadPollHook();
+		if (status == MAPDOWNLOAD_PENDING)
+			return;
+
+		s_mapDownloadPending = FALSE;
+
+		// The lobby's map can change while a download runs (the host picks
+		// something else). A result nobody is waiting for any more must not touch
+		// the game's CRC.
+		if (s_mapDownloadCRC != crc)
+			return;
+
+		// Re-applying the CRC re-runs the availability check against the file that
+		// just landed, which is what flips this slot to "has map".
+		game->setMapCRC(s_mapDownloadCRC);
+
+		if (status == MAPDOWNLOAD_INSTALLED && wolLocalHasLobbyMap(game))
+		{
+			pLobbyInterface->UpdateCurrentLobby_HasMap();
+			WOLDisplaySlotList();
+			WOLDisplayGameOptions();
+			wolLocalSystemChat(TheGameText->FETCH_OR_SUBSTITUTE("GUI:MapDownloadDone",
+				L"Map downloaded."));
+		}
+		else
+		{
+			// Either the fetch failed, or the bytes are on disk and the cache still
+			// cannot use them. Retiring the CRC stops the retry loop; for a user map
+			// the host's transfer at launch is still a fallback.
+			s_mapDownloadFailedCRC = s_mapDownloadCRC;
+			wolLocalSystemChat(TheGameText->FETCH_OR_SUBSTITUTE("GUI:MapDownloadFailed",
+				L"Map download failed; ask the host for the map."));
+		}
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Radarvan "Map Vote" button, host only. Same server call and the same matching
+// rules as the LAN lobby's (see LanGameOptionsMenu + GUIUtil
+// FindMapByDisplayName); only the apply differs, because here the lobby service
+// owns the map and has to be told about it. The body sends humans-only names;
+// the URL path segment carries the total occupied-slot count (humans + AI +
+// observers) so the server picks from a pool sized to the actual match.
+// -----------------------------------------------------------------------------
+static void handleOnlineMapVoteClick()
+{
+	NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+	if (pLobbyInterface == nullptr || !pLobbyInterface->IsHost())
+		return;
+
+	NGMPGame *game = pLobbyInterface->GetCurrentGame();
+	if (game == nullptr)
+		return;
+
+	std::vector<AsciiString> humanNames;
+	unsigned int occupied = 0;
+	Int i;
+	for (i = 0; i < MAX_SLOTS; ++i)
+	{
+		const GameSlot *slot = game->getConstSlot(i);
+		if (slot == NULL || !slot->isOccupied())
+			continue;
+		++occupied;
+		if (slot->isHuman())
+		{
+			AsciiString name;
+			name.translate(slot->getName());
+			if (!name.isEmpty())
+				humanNames.push_back(name);
+		}
+	}
+
+	if (humanNames.empty())
+	{
+		UnicodeString errU;
+		errU.format(TheGameText->fetch("GUI:MapVoteFailed"), "no human players");
+		wolLocalSystemChat(errU);
+		return;
+	}
+
+	ChooseMapResult res = ChooseMapFromServer(
+		TheGlobalData->m_mapVoteUrl, humanNames, occupied);
+	if (!res.success)
+	{
+		UnicodeString errU;
+		errU.format(TheGameText->fetch("GUI:MapVoteFailed"), res.errorMessage.str());
+		wolLocalSystemChat(errU);
+		return;
+	}
+
+	AsciiString mapKey;
+	const MapMetaData *md = FindMapByDisplayName(res.chosenMap, &mapKey);
+
+	// Don't have it? Fetch it by the CRC radarvan returned, same as the LAN
+	// handler (see InstallMapByCRC).
+	if (md == nullptr && res.mapCRC != 0)
+	{
+		UnicodeString dlU;
+		dlU.format(TheGameText->fetch("GUI:MapVoteDownloading"), res.chosenMap.str());
+		wolLocalSystemChat(dlU);
+
+		md = InstallMapByCRC(res.chosenMap, res.mapFileName, res.mapCRC,
+			res.contentsMask, &mapKey);
+	}
+
+	if (md == nullptr || mapKey.isEmpty())
+	{
+		UnicodeString errU;
+		errU.format(TheGameText->fetch("GUI:MapVoteNotFound"), res.chosenMap.str());
+		wolLocalSystemChat(errU);
+		return;
+	}
+
+	// Apply exactly as the Select Map confirm does (WOLMapSelectMenu), including
+	// the lobby push: without UpdateCurrentLobby_Map the service keeps the old
+	// map and the next push undoes the pick.
+	AsciiString mapDisplay;
+	mapDisplay.translate(md->m_displayName);
+
+	game->setMap(mapKey);
+	if (game->getGameSpySlot(0))
+		game->getGameSpySlot(0)->setMapAvailability(TRUE);
+	game->setMapCRC(md->m_CRC);
+	game->setMapSize(md->m_filesize);
+	game->adjustSlotsForMap();
+	game->resetAccepted();
+	game->resetStartSpots();
+
+	// TheSuperHackers @feature bill-rich 02/10/2026 Push the .map + sidecars to the
+	// cncstats store so a lobby member who does not have this map can pull it over
+	// HTTP. No-ops when the URLs are unset or the store already holds this CRC; the
+	// sidecar helpers skip whatever is not on disk here. Runs after setMap, which is
+	// what computes the contents mask.
+	if (TheGlobalData != nullptr)
+	{
+		UploadAllMapAssetsIfMissing(TheGlobalData->m_mapCheckUrl,
+			TheGlobalData->m_mapAssetsUrl,
+			TheGlobalData->m_mapUploadUrl,
+			md->m_CRC,
+			md->m_fileName,
+			game->getMapContentsMask(),
+			0 /* no per-game seed in the lobby */);
+	}
+
+	WOLDisplaySlotList();
+	WOLDisplayGameOptions();
+
+	pLobbyInterface->UpdateCurrentLobby_Map(mapDisplay, game->getMap(), md->m_isOfficial, md->m_numPlayers, md->m_CRC);
+
+	UnicodeString okU;
+	okU.format(TheGameText->fetch("GUI:MapVoteApplied"), res.chosenMap.str());
+	wolLobbySystemChat(okU);
 }
 
 // Called on the host's start while a resume is armed: refuse when the lobby has drifted
 // from the recording since arming, or when a human does not hold the resume source yet.
 static Bool wolArmedResumeStillMatches(NGMPGame *game)
 {
-	ReleaseLog("GO lobby: %ls", text.str());
 	ResumeFromReplay::SourceReplay replay;
 	UnicodeString why;
 	if (!ResumeFromReplay::readSource(replay, why)
@@ -1828,6 +2066,7 @@ void InitWOLGameGadgets()
 	buttonEmoteID = TheNameKeyGenerator->nameToKey( "GameSpyGameOptionsMenu.wnd:ButtonEmote" );
 	buttonSelectMapID = TheNameKeyGenerator->nameToKey( "GameSpyGameOptionsMenu.wnd:ButtonSelectMap" );
 	buttonRandomizeID = TheNameKeyGenerator->nameToKey( "GameSpyGameOptionsMenu.wnd:ButtonRandomize" );
+	buttonMapVoteID = TheNameKeyGenerator->nameToKey( "GameSpyGameOptionsMenu.wnd:ButtonMapVote" );
 	checkBoxUseStatsID = TheNameKeyGenerator->nameToKey( "GameSpyGameOptionsMenu.wnd:CheckBoxUseStats" );
 	windowMapID = TheNameKeyGenerator->nameToKey( "GameSpyGameOptionsMenu.wnd:MapWindow" );
   checkBoxLimitSuperweaponsID = TheNameKeyGenerator->nameToKey("GameSpyGameOptionsMenu.wnd:CheckboxLimitSuperweapons");
@@ -1845,6 +2084,9 @@ void InitWOLGameGadgets()
 	buttonRandomize = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, buttonRandomizeID ); // absent from older .wnd layouts
 	if (buttonRandomize)
 		buttonRandomize->winSetText(TheGameText->FETCH_OR_SUBSTITUTE("GUI:Randomize", L"Randomize")); // no .csf change needed
+	buttonMapVote = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, buttonMapVoteID ); // absent from older .wnd layouts
+	if (buttonMapVote)
+		buttonMapVote->winSetText(TheGameText->FETCH_OR_SUBSTITUTE("GUI:MapVote", L"Radarvan Pick"));
 	checkBoxUseStats = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, checkBoxUseStatsID );
 	buttonStart = TheWindowManager->winGetWindowFromId( parentWOLGameSetup,buttonStartID  );
 	buttonBack = TheWindowManager->winGetWindowFromId( parentWOLGameSetup,  buttonBackID);
@@ -1877,8 +2119,9 @@ void InitWOLGameGadgets()
 
   // Limit Armies can ONLY be set in the Host Game window (PopupHostGame.wnd)
   checkBoxLimitArmies->winEnable( false );
-  // Ditto use stats
-  checkBoxUseStats->winEnable( false );
+  // Ditto use stats, when a layout still carries the box at all.
+  if (checkBoxUseStats)
+    checkBoxUseStats->winEnable( false );
 
 #if defined(GENERALS_ONLINE)
   Int isUsingStats = theGameInfo->getUseStats();
@@ -1887,8 +2130,11 @@ void InitWOLGameGadgets()
 #endif
 
 	
-  GadgetCheckBoxSetChecked(checkBoxUseStats, isUsingStats );
-  checkBoxUseStats->winSetTooltip( TheGameText->fetch( isUsingStats ? "TOOLTIP:UseStatsOn" : "TOOLTIP:UseStatsOff" ) );
+  if (checkBoxUseStats)
+  {
+    GadgetCheckBoxSetChecked(checkBoxUseStats, isUsingStats );
+    checkBoxUseStats->winSetTooltip( TheGameText->fetch( isUsingStats ? "TOOLTIP:UseStatsOn" : "TOOLTIP:UseStatsOff" ) );
+  }
 
 #if defined(GENERALS_ONLINE)
   if (!pLobbyInterface->IsHost())
@@ -1900,6 +2146,7 @@ void InitWOLGameGadgets()
     if (checkBoxEnforceRandom) checkBoxEnforceRandom->winEnable( false );
     comboBoxStartingCash->winEnable( false );
     if (buttonRandomize) buttonRandomize->winEnable( false );
+    if (buttonMapVote) buttonMapVote->winEnable( false );
 		NameKeyType labelID = TheNameKeyGenerator->nameToKey("GameSpyGameOptionsMenu.wnd:StartingCashLabel");
 		TheWindowManager->winGetWindowFromId(parentWOLGameSetup, labelID)->winEnable( FALSE );
   }
@@ -1913,6 +2160,7 @@ void InitWOLGameGadgets()
 	  if (checkBoxEnforceRandom) checkBoxEnforceRandom->winEnable(true);
 	  comboBoxStartingCash->winEnable(true);
 	  if (buttonRandomize) buttonRandomize->winEnable(true);
+	  if (buttonMapVote) buttonMapVote->winEnable(true);
   }
 #endif
 
@@ -2077,6 +2325,7 @@ void DeinitWOLGameGadgets()
 	buttonEmote = NULL;
 	buttonSelectMap = NULL;
 	buttonRandomize = NULL;
+	buttonMapVote = NULL;
 	buttonStart = NULL;
 	buttonBack = NULL;
 	listboxGameSetupChat = NULL;
@@ -2119,6 +2368,10 @@ void WOLGameSetupMenuInit( WindowLayout *layout, void *userData )
 	s_randomizeCount = 0;
 	s_localSlotChosen = FALSE;
 	s_applyingLobbyUpdate = FALSE;
+	// A fresh lobby: forget the last one's map-download bookkeeping.
+	s_mapDownloadPending = FALSE;
+	s_mapDownloadCRC = 0;
+	s_mapDownloadFailedCRC = 0;
 	NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
 	if (pLobbyInterface == nullptr)
 	{
@@ -2479,6 +2732,7 @@ void WOLGameSetupMenuInit( WindowLayout *layout, void *userData )
 		buttonStart->winEnable( FALSE );
 		buttonSelectMap->winEnable( FALSE );
 		if (buttonRandomize) buttonRandomize->winEnable( FALSE );
+		if (buttonMapVote) buttonMapVote->winEnable( FALSE );
 		initialAcceptEnable = FALSE;
 
 		WOLDisplaySlotList();
@@ -2705,6 +2959,9 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 	// Refresh only the fast-changing connection indicators each frame.
 	WOLRefreshConnectionIndicators();
 
+	// Fetch the lobby's map if we do not have it (see wolUpdateMapDownload).
+	wolUpdateMapDownload();
+
 	// need to exit?
 	if (NGMP_OnlineServicesManager::GetInstance() != nullptr && NGMP_OnlineServicesManager::GetInstance()->IsPendingFullTeardown())
 	{
@@ -2764,6 +3021,7 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 							buttonStart->winEnable(TRUE);
 							buttonSelectMap->winEnable(TRUE);
 							if (buttonRandomize) buttonRandomize->winEnable(TRUE);
+							if (buttonMapVote) buttonMapVote->winEnable(TRUE);
 							initialAcceptEnable = TRUE;
 
 							comboBoxStartingCash->winEnable(TRUE);
@@ -3869,6 +4127,12 @@ Bool handleGameSetupSlashCommands(UnicodeString uText)
 	}
 
 #if defined(GENERALS_ONLINE)
+	else if (token == "nettest")
+	{
+		// TheSuperHackers @feature bill-rich 11/10/2026 Network self-test, results uploaded.
+		wolLocalSystemChat(NetSelfTest_Start("chat command", TRUE));
+		return TRUE; // was a slash command
+	}
 	else if (token == "resume")
 	{
 		// TheSuperHackers @feature bill-rich 15/09/2026 resume-from-replay arming lives behind a chat command so no layout change is needed
@@ -4127,12 +4391,6 @@ Bool handleGameSetupSlashCommands(UnicodeString uText)
 #endif // defined(RTS_DEBUG)
 
 #if defined(GENERALS_ONLINE)
-	else if (token == "nettest")
-	{
-		// TheSuperHackers @feature bill-rich 11/10/2026 Network self-test, results uploaded.
-		wolLocalSystemChat(NetSelfTest_Start("chat command", TRUE));
-		return TRUE; // was a slash command
-	}
 	GadgetListBoxAddEntryText(listboxGameSetupChat, UnicodeString(L"Unknown command: Use /help to see all commands."), GameSpyColor[GSCOLOR_CHAT_NORMAL], -1, -1);
 	return TRUE;
 #else
@@ -4393,6 +4651,10 @@ WindowMsgHandledType WOLGameSetupMenuSystem( GameWindow *window, UnsignedInt msg
 					WOLMapSelectLayout->runInit();
 					WOLMapSelectLayout->hide( FALSE );
 					WOLMapSelectLayout->bringForward();
+				}
+				else if ( controlID == buttonMapVoteID )
+				{
+					handleOnlineMapVoteClick();
 				}
 				else if ( controlID == buttonRandomizeID )
 				{
