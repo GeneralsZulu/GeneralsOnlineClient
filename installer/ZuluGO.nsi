@@ -61,7 +61,7 @@
 ; that survive into the Sections are guarded with IfSilent.
 
 !ifndef APPVERSION
-    !define APPVERSION "2.0.0"
+    !define APPVERSION "2.0.3"
 !endif
 
 !define APPNAME       "Zulu GO"
@@ -715,9 +715,12 @@ Section "${APPNAME}" SecMain
     ;
     ; The target is the launcher and the argument list is EMPTY: the launcher
     ; builds the game's command line itself (see the -mod note in the header).
-    ; The icon is still taken from the game exe -- the launcher is a small
-    ; stub with no artwork of its own, and a shortcut that looks like the game
-    ; is the point.
+    ; The icon is taken from the game exe, which carries the GeneralsZulu
+    ; insignia rather than the retail Generals icon (ZULU_APP_ICON_FILE in
+    ; GeneralsMD\Code\Main\CMakeLists.txt). That is the whole point of the
+    ; separate icon: this shortcut sits on a desktop that usually already has
+    ; a stock GeneralsOnline one, and two identical icons is how a tester ends
+    ; up reporting a bug against the wrong client.
     ;
     ; All-users context: the game is usually under Program Files and we are
     ; elevated, so every account on the box should see the shortcuts. This
@@ -825,7 +828,8 @@ Section "Desktop shortcut" SecDesktop
     ; Same working-directory rule as above; the section boundary resets
     ; nothing, but SetOutPath is repeated so this does not depend on the
     ; order the sections happen to run in. Same target too: the launcher,
-    ; no arguments, game exe for the icon.
+    ; no arguments, game exe for the icon -- the insignia, not the retail
+    ; Generals icon, so this is the one on the desktop you can pick out.
     ;
     ; Selected by default, and a silent install runs every selected section,
     ; so the launcher's update re-writes this shortcut as well.

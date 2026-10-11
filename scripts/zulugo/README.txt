@@ -26,6 +26,10 @@ it finds it, which takes a few seconds. Everyone in a game has to be on the same
 version, so letting it update is the easy way to stay playable. If you are
 offline or the check fails, it starts the game you already have.
 
+If you click ONLINE on a build the server no longer accepts, the game says so
+and offers to close and run the updater for you. Only Zulu GO is updated by
+this; your normal GeneralsOnline install is never touched.
+
 SIGNING IN
 ----------
 Click ONLINE. A browser page opens asking for a player name and a passphrase.

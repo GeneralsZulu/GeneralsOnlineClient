@@ -419,6 +419,29 @@ static bool launchGame(const char *gameExe, const char *extraArgs) {
     return launchGameEx(gameExe, extraArgs, NULL);
 }
 
+// Block until nothing holds the game exe open, or the timeout runs out.
+//
+// Only matters on the "-update" path: there the game started us and is still
+// shutting down, and Windows keeps an exclusive image lock on a running exe,
+// so an installer that got there first would fail to write it. Opening the
+// file for writing is the test -- it is exactly what the installer is about
+// to do. Returns false on timeout, and the caller carries on regardless:
+// the installer reports its own failure, which beats refusing to update over
+// a lock that may not even be the game's.
+static bool waitForGameExeWritable(const char *gameExe, DWORD timeoutMs) {
+    const DWORD pollMs = 250;
+    for (DWORD waited = 0; ; waited += pollMs) {
+        HANDLE h = CreateFileA(gameExe, GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL, NULL);
+        if (h != INVALID_HANDLE_VALUE) {
+            CloseHandle(h);
+            return true;
+        }
+        if (waited >= timeoutMs) return false;
+        Sleep(pollMs);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Replay Theater
 //
@@ -824,6 +847,20 @@ int APIENTRY WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
     const char *fwdArgs = extractArgsAfterExe(GetCommandLineA());
 
+    // "-update" means the game sent us here: it was refused online because
+    // the service does not recognise this build, and restarted itself through
+    // the launcher to get the published one. The user has already agreed to
+    // update, so the prompt below is skipped -- and if there is nothing to
+    // install we have to say so, or the game just comes back refused with no
+    // explanation. Consumed here rather than forwarded: the game has no such
+    // argument.
+    bool forcedUpdate = false;
+    if (_strnicmp(fwdArgs, "-update", 7) == 0) {
+        forcedUpdate = true;
+        fwdArgs += 7;
+        while (*fwdArgs == ' ' || *fwdArgs == '\t') ++fwdArgs;
+    }
+
     // Directory to hand the installer as NSIS /D=. This is the product's
     // install ROOT, which is not always the directory we are sitting in:
     //   Zulu   installs into the Zero Hour folder and its launcher sits
@@ -942,6 +979,7 @@ int APIENTRY WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     // is what makes that reach players who already took the bad build.
     char installedSha[80]; installedSha[0] = 0;
     bool needUpdate = false;
+    bool sameVersionRebuild = false;
     if (devBuild) {
         bool haveInstalledSha = computeFileSha256Hex(gameExe, installedSha, sizeof(installedSha));
         needUpdate = haveLatestExeSha && haveInstalledSha && urlOk &&
@@ -949,6 +987,37 @@ int APIENTRY WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     } else {
         needUpdate = haveInstalled && haveLatest && urlOk &&
                      semVerCompare(latest, installed) != 0;
+
+        // Same version string, different binary -- a release republished
+        // without a version bump. The semver gate cannot see that, and for
+        // Zulu GO it has to: online play there is gated on a CRC of the game
+        // exe, so a client carrying the right version number and the wrong
+        // build is refused by the service with no way back. The release
+        // manifest publishes "exe_sha256" (the hash of the game exe inside
+        // the installer) for exactly this case. Zulu's release manifest does
+        // not carry the field, so its gate stays semver-only.
+        if (!needUpdate && haveLatest && urlOk && haveLatestExeSha) {
+            sameVersionRebuild =
+                computeFileSha256Hex(gameExe, installedSha, sizeof(installedSha)) &&
+                (_stricmp(latestExeSha, installedSha) != 0);
+            needUpdate = sameVersionRebuild;
+        }
+    }
+
+    // Nothing to install, but the game sent us here to fix being refused
+    // online. Saying so beats bouncing it straight back into the same refusal.
+    if (forcedUpdate && !needUpdate) {
+        char msg[512];
+        _snprintf(msg, sizeof(msg) - 1,
+            "No newer %s build is published yet.\n\n"
+            "Installed: %u.%u.%u\n"
+            "Published: %s\n\n"
+            "If online play is still refused, the server is expecting a build "
+            "that has not been released -- try again later.",
+            kAppName, installed.major, installed.minor, installed.build,
+            latestVersion[0] ? latestVersion : "unknown");
+        msg[sizeof(msg) - 1] = 0;
+        MessageBoxA(NULL, msg, kAppName, MB_OK | MB_ICONINFORMATION);
     }
 
     if (needUpdate) {
@@ -960,6 +1029,13 @@ int APIENTRY WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
                 "Latest game exe SHA:    %.12s...\n\n"
                 "Download and install the update now?",
                 kAppName, installedSha, latestExeSha);
+        } else if (sameVersionRebuild) {
+            _snprintf(msg, sizeof(msg) - 1,
+                "%s %s has been rebuilt since this copy was installed.\n\n"
+                "Installed game exe SHA: %.12s...\n"
+                "Published game exe SHA: %.12s...\n\n"
+                "Download and install it now?",
+                kAppName, latestVersion, installedSha, latestExeSha);
         } else {
             const bool rollback = semVerCompare(latest, installed) < 0;
             char headline[160];
@@ -979,8 +1055,13 @@ int APIENTRY WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
                 latestVersion);
         }
         msg[sizeof(msg) - 1] = 0;
-        int rc = MessageBoxA(NULL, msg, kAppName,
-            MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON1);
+        // Under -update the game already asked and the player already said
+        // yes; asking a second time for the same install is just a dialog in
+        // the way.
+        int rc = forcedUpdate
+            ? IDYES
+            : MessageBoxA(NULL, msg, kAppName,
+                MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON1);
         if (rc == IDYES) {
             char tempDir[MAX_PATH];
             GetTempPathA(sizeof(tempDir), tempDir);
@@ -991,6 +1072,11 @@ int APIENTRY WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
             HCURSOR oldCursor = SetCursor(LoadCursorA(NULL, IDC_WAIT));
             bool ok = httpDownloadToFile(latestUrl, installerPath);
+            if (ok && forcedUpdate) {
+                // The game that sent us here is still on its way out and the
+                // installer is about to overwrite its exe. Give it a moment.
+                waitForGameExeWritable(gameExe, 30000);
+            }
             SetCursor(oldCursor);
 
             if (ok) {

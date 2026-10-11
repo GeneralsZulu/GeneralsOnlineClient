@@ -51,6 +51,14 @@ Intro::Intro()
         // Please be kind and do not remove the custom logo screen when building a client that includes GeneralsOnline.
         m_allowedStateFlags |= 1u << IntroState_GOWait;
         m_allowedStateFlags |= 1u << IntroState_GO;
+#if defined(ZULU_GO_SELFHOST_BASE)
+		// The build actually running: last of the three, so the name on screen
+		// when the shell comes up is the one to quote in a bug report. Only a
+		// Zulu GO build claims it -- the states exist either way, they are
+		// simply never entered when the flag is clear.
+		m_allowedStateFlags |= 1u << IntroState_ZuluGOWait;
+		m_allowedStateFlags |= 1u << IntroState_ZuluGO;
+#endif
 	}
 
 	if (TheGlobalData->m_playSizzle)
@@ -88,6 +96,8 @@ void Intro::update()
 		case IntroState_TheSuperHackers: doTheSuperHackers(); break;
         case IntroState_GOWait: doAsyncWait(1200); break;
         case IntroState_GO: doGeneralsOnlineLogo(); break;
+		case IntroState_ZuluGOWait: doAsyncWait(1200); break;
+		case IntroState_ZuluGO: doZuluGOLogo(); break;
 		case IntroState_SizzleMovieWait: doAsyncWait(1000); break;
 		case IntroState_SizzleMovie: doSizzleMovie(); break;
 		case IntroState_Done: doPostIntro(); break;
@@ -101,6 +111,7 @@ void Intro::draw()
 	{
 		case IntroState_TheSuperHackers: drawDisplayEntities(); break;
 		case IntroState_GO: drawDisplayEntities(); break;
+		case IntroState_ZuluGO: drawDisplayEntities(); break;
 	}
 }
 
@@ -125,6 +136,10 @@ Bool Intro::skipCurrentIntroStage()
 		break;
 
 	case IntroState_GO:
+		enterNextState();
+		break;
+
+	case IntroState_ZuluGO:
 		enterNextState();
 		break;
 	}
@@ -251,6 +266,89 @@ void Intro::doGeneralsOnlineLogo()
 
     doAsyncWait(3000);
     m_fadeValue = 0.0f;
+}
+
+// The screen for the build the player actually launched. Same shape as the two
+// above it, with the insignia carrying the wordmark so only one line of text is
+// needed above it. "ZuluGOLogo" is a MappedImage out of Zulu.modbig
+// (Data/INI/MappedImages/HandCreated/ZuluGOIntro.ini); run without the mod
+// archive and findImageByName simply returns null, which drawDisplayEntities
+// skips, leaving the text.
+void Intro::doZuluGOLogo()
+{
+	m_displayEntities.clear();
+
+	std::vector<DisplaySetting> settings;
+
+	const Real resolutionScale = GlobalLanguage::getResolutionFontSizeScale(GlobalLanguage::ResolutionFontSizeMethod_Strict);
+	const Int screenWidth = TheDisplay->getWidth();
+	const Int screenHeight = TheDisplay->getHeight();
+	Int centerOffsetY = -(screenHeight * 0.05f);
+
+	{
+		// Pretext
+		m_unicodeStrings[0] = TheGameText->FETCH_OR_SUBSTITUTE("CREDITS:ZuluGOIntroPretext", L"Competitive Zero Hour by");
+		DisplaySetting setting;
+		setting.font = "Consolas";
+		setting.text = m_unicodeStrings[0].str();
+		setting.sizeY = 16;
+		centerOffsetY -= setting.sizeY * resolutionScale * 2;
+		setting.centerOffsetY = centerOffsetY;
+		centerOffsetY += setting.sizeY * resolutionScale * 2;
+		setting.bold = false;
+		setting.centered = true;
+		settings.push_back(setting);
+	}
+	{
+		// Team name
+		DisplaySetting setting;
+		setting.font = "Consolas";
+		setting.text = L"ZULU GO";
+		setting.sizeY = 32;
+		setting.centerOffsetY = centerOffsetY;
+		centerOffsetY += setting.sizeY * resolutionScale * 2;
+		setting.bold = true;
+		setting.centered = true;
+		settings.push_back(setting);
+	}
+	{
+		// GeneralsZulu insignia. Drawn larger than the two marks above because
+		// it is the wordmark, not a decoration beside one.
+		DisplaySetting setting;
+		setting.imageName = "ZuluGOLogo";
+		setting.centerOffsetY = centerOffsetY;
+		setting.sizeX = 160;
+		setting.sizeY = 160;
+		settings.push_back(setting);
+	}
+
+	m_displayEntities.resize(settings.size());
+
+	for (size_t i = 0; i < m_displayEntities.size(); ++i)
+	{
+		const DisplaySetting& s = settings[i];
+		DisplayEntity& e = m_displayEntities[i];
+		e.sizeX = Int(s.sizeX * resolutionScale);
+		e.sizeY = Int(s.sizeY * resolutionScale);
+
+		if (s.text != nullptr)
+		{
+			e.displayString = TheDisplayStringManager->newDisplayString();
+			e.displayString->setText(s.text);
+			e.displayString->setFont(TheFontLibrary->getFont(s.font, e.sizeY, s.bold));
+			e.displayString->setWordWrap(screenWidth);
+		}
+
+		if (s.imageName != nullptr)
+		{
+			e.image = TheMappedImageCollection->findImageByName(s.imageName);
+		}
+
+		e.centerOffsetY = s.centerOffsetY;
+	}
+
+	doAsyncWait(3000);
+	m_fadeValue = 0.0f;
 }
 
 void Intro::doTheSuperHackers()

@@ -15,10 +15,11 @@ if(NOT DEFINED ZULU_VERSION_BUILDNUM)
 endif()
 
 # configure_file uses forward slashes; RC files happily accept those even
-# on Windows. We point at the game's icon in the source tree so the launcher
-# shortcut looks identical to a direct-to-game shortcut.
-set(ZULU_LAUNCHER_ICON     "${CMAKE_SOURCE_DIR}/GeneralsMD/Code/Main/Generals.ico")
-set(ZULU_LAUNCHER_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/ZuluLauncher.manifest")
+# on Windows. The default points at the game's icon in the source tree so the
+# launcher shortcut looks identical to a direct-to-game shortcut; a product
+# whose game exe carries its own icon passes that one instead (ICON below).
+set(ZULU_LAUNCHER_ICON_DEFAULT "${CMAKE_SOURCE_DIR}/GeneralsMD/Code/Main/Generals.ico")
+set(ZULU_LAUNCHER_MANIFEST     "${CMAKE_CURRENT_SOURCE_DIR}/ZuluLauncher.manifest")
 
 # ---------------------------------------------------------------------------
 # zulu_add_launcher(<target> <KEY value>...)
@@ -36,6 +37,7 @@ set(ZULU_LAUNCHER_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/ZuluLauncher.manifest")
 function(zulu_add_launcher target)
     set(_one_value
         OUTPUT_NAME
+        ICON
         APP_NAME
         GAME_EXE_NAME
         LAUNCHER_EXE_NAME
@@ -63,6 +65,11 @@ function(zulu_add_launcher target)
     set(ZULU_PRODUCT_HTTP_USER_AGENT         "${P_HTTP_USER_AGENT}")
     set(ZULU_PRODUCT_MOD_BIG_NAME            "${P_MOD_BIG_NAME}")
     set(ZULU_PRODUCT_INSTALL_TO_PARENT       "${P_INSTALL_TO_PARENT}")
+
+    set(ZULU_LAUNCHER_ICON "${ZULU_LAUNCHER_ICON_DEFAULT}")
+    if(P_ICON)
+        set(ZULU_LAUNCHER_ICON "${P_ICON}")
+    endif()
 
     set(ZULU_LAUNCHER_FILE_DESCRIPTION  "${P_FILE_DESCRIPTION}")
     set(ZULU_LAUNCHER_INTERNAL_NAME     "${P_OUTPUT_NAME}")
@@ -175,6 +182,9 @@ zulu_add_launcher(z_launcher
 #   INSTALL_TO_PARENT /D= is the Zero Hour folder, one level above us
 zulu_add_launcher(z_go_launcher
     OUTPUT_NAME            "ZuluGOLauncher"
+    # The same insignia the Zulu GO client carries, so the brief moment the
+    # launcher owns the taskbar button looks like the game it is starting.
+    ICON                   "${CMAKE_SOURCE_DIR}/GeneralsMD/Code/Main/ZuluGO.ico"
     APP_NAME               "Zulu GO"
     GAME_EXE_NAME          "ZuluGO.exe"
     LAUNCHER_EXE_NAME      "ZuluGOLauncher.exe"

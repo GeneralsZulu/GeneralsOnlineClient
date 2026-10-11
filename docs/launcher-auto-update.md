@@ -129,6 +129,48 @@ guessing. Its `@default` branch does follow the product config, using
 the absolute `-mod` rather than the bare `Zulu.big` that only works
 when the archive sits next to the game.
 
+## Zulu GO updates itself, and only itself
+
+Two things are different about the Zulu GO channel, and both come from
+the same fact: the GeneralsOnline service decides who may play online
+by **CRC32 of the game exe**, not by a version number. Publishing a
+build and moving that gate are one act, so a client holding the wrong
+binary cannot play at all — the in-game message is the misleading
+"cannot connect to online services".
+
+**The release gate falls back to a hash.** Zulu GO republishes under an
+unchanged `APPVERSION` more often than it bumps one, and the semver
+comparison cannot see that. `make zulugo-installer-release` therefore
+publishes `exe_sha256` in `latest-go.json` as well as in the dev
+manifest, and the release gate reads: update when the version differs,
+**or** when the version matches and the published game-exe hash does
+not. The hash of the staged client is taken while the payload still
+exists and parked in `build/installer-go-tmp/exe-sha256.txt` for the
+publish step, because the rule that builds the installer deletes the
+payload. Zulu's own `latest.json` does not carry the field, so the Zulu
+gate is unchanged and stays semver-only.
+
+**The game hands off to the launcher instead of running GO's patcher.**
+When the service refuses a build, the stock client downloads
+GeneralsOnline's patcher and runs it with `GetCurrentDirectory()` as its
+working directory. For Zulu GO that directory is the Zero Hour root, one
+level *above* the `ZuluGO` folder — so it would update the player's
+stock GeneralsOnline install and leave the build that was actually
+refused exactly as it was, while writing into an install this package
+promises not to touch. `LaunchZuluGOUpdater()`
+(`OnlineServices_Init.cpp`, built only when `ZULU_GO_SELFHOST_BASE` is
+defined) replaces that path: it starts `ZuluGOLauncher.exe` from its own
+folder with `-update` and quits the game.
+
+`-update` tells the launcher two things. The player has already agreed,
+so it installs without a second prompt; and if there is nothing newer to
+install it must say so rather than silently restart the game into the
+same refusal. The launcher also waits for the game exe to become
+writable before starting the installer — the game that sent it is still
+shutting down, and Windows holds an exclusive image lock on a running
+exe, which is the same lock the launcher's own rename-aside dance in
+`ZuluGO.nsi` exists to work around.
+
 ## Code surface
 
 - `launcher/ZuluLauncher.cpp` — ~380 lines. Manifest, version

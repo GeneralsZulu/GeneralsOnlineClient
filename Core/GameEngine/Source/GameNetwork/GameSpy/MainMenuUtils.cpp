@@ -946,6 +946,24 @@ void StartPatchCheck()
 					}
 					else*/ if (mustDownloadPatch)
 					{
+#if defined(ZULU_GO_SELFHOST_BASE)
+						// TheSuperHackers @bugfix bill-rich 04/10/2026 Zulu GO
+						// updates itself, and only itself. The patcher flow
+						// below belongs to the public service: it runs that
+						// service's patcher against the current working
+						// directory, which for a subfolder install is the
+						// player's Zero Hour root -- so it would update the
+						// stock GeneralsOnline client sitting next to us and
+						// leave the build that was just refused exactly as it
+						// was. Hand off to ZuluGOLauncher.exe instead; it
+						// fetches the published Zulu GO installer and nothing
+						// outside the ZuluGO folder is touched.
+						onlineCancelWindow = MessageBoxOkCancel(TheGameText->fetch("GUI:PatchAvailable"),
+							UnicodeString(L"Zulu GO must be updated before you can play online.\n\nPress OK to close the game and run the updater."), []()
+							{
+								NGMP_OnlineServicesManager::GetInstance()->LaunchZuluGOUpdater();
+							}, CancelPatchCheckCallbackAndReopenDropdown);
+#else
 						// NOTE: we treat all patches as mandatory currently
 						onlineCancelWindow = MessageBoxOkCancel(TheGameText->fetch("GUI:PatchAvailable"),
 							UnicodeString(L"Press OK to begin updating.\n\nOtherwise, you can visit www.playgenerals.online to download the latest update manually."), []()
@@ -965,6 +983,7 @@ void StartPatchCheck()
 									});
 
 							}, CancelPatchCheckCallbackAndReopenDropdown);
+#endif
 					}
 				}
 			}

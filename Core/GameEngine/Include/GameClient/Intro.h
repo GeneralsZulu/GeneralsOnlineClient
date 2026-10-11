@@ -33,6 +33,8 @@ class Intro
 		IntroState_TheSuperHackers,
         IntroState_GOWait,
         IntroState_GO,
+		IntroState_ZuluGOWait,
+		IntroState_ZuluGO,
 		IntroState_SizzleMovieWait,
 		IntroState_SizzleMovie,
 		IntroState_Done,
@@ -77,6 +79,7 @@ private:
 	void doAsyncWait(UnsignedInt milliseconds);
 
 	void doGeneralsOnlineLogo();
+	void doZuluGOLogo();
 
 	void drawDisplayEntities();
 

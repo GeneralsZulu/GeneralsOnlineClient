@@ -80,6 +80,22 @@ if(NOT DEFINED ZULU_VERSION_BUILDNUM)
     set(ZULU_VERSION_BUILDNUM 3)
 endif()
 
+# Which application icon the exe carries. Zulu GO installs into a subfolder of
+# someone else's Zero Hour install and sits on the desktop next to the stock
+# GeneralsOnline shortcut, so it gets the GeneralsZulu insignia to tell the two
+# apart; every other build keeps the retail icon. The exe is the only place
+# this has to be set -- the shortcuts, the Add/Remove entry, the taskbar and
+# alt-tab all take their icon from it. RC resolves the name against RTS.RC's
+# own directory, which is where both .ico files live.
+#
+# Defined only for the Zulu GO build: RTS.RC falls back to the literal
+# "GENERALS.ICO" when it is absent, so the VC6 Zulu build compiles exactly the
+# resource script it always did.
+set(_zulu_app_icon_define "")
+if(DEFINED ZULU_GO_SELFHOST_BASE AND NOT ZULU_GO_SELFHOST_BASE STREQUAL "")
+    set(_zulu_app_icon_define "#define ZULU_APP_ICON_FILE \"ZuluGO.ico\"\n")
+endif()
+
 # VERSION_STRING is consumed by RTS.RC's VERSIONINFO block (and any C/C++
 # code that wants a string form). Kept alongside the numeric macros so both
 # the game and the launcher read versions from one source of truth.
@@ -93,7 +109,7 @@ set(_zulu_build_version_content
 #define VERSION_MINOR ${ZULU_VERSION_MINOR}
 #define VERSION_BUILDNUM ${ZULU_VERSION_BUILDNUM}
 #define VERSION_STRING \"${ZULU_VERSION_MAJOR}.${ZULU_VERSION_MINOR}.${ZULU_VERSION_BUILDNUM}\"
-")
+${_zulu_app_icon_define}")
 set(_zulu_build_version_existing "")
 if(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/BuildVersion.h")
     file(READ "${CMAKE_CURRENT_BINARY_DIR}/BuildVersion.h" _zulu_build_version_existing)
@@ -158,8 +174,11 @@ if(MSVC)
     # as WinMain.cpp above. Without this, bumping APPVERSION leaves the .res
     # unmodified and the exe ships with the stale FILEVERSION. The launcher
     # avoids this entirely because its .rc.in goes through configure_file().
+    # The icons are listed for the same reason: the .res embeds whichever one
+    # ZULU_APP_ICON_FILE names, and nothing else tells ninja that redrawing an
+    # .ico should rebuild it.
     set_source_files_properties(RTS.RC PROPERTIES
-        OBJECT_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/BuildVersion.h")
+        OBJECT_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/BuildVersion.h;${CMAKE_CURRENT_SOURCE_DIR}/Generals.ico;${CMAKE_CURRENT_SOURCE_DIR}/ZuluGO.ico")
 endif()
 
 # Strip debug symbols to separate file for MinGW Release builds

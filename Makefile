@@ -514,6 +514,12 @@ GO_INSTALLER_OUT_DEV := $(GO_TMP_DIR)/ZuluGO_Setup_Dev.exe
 GO_LATEST_JSON       := $(GO_TMP_DIR)/latest-go.json
 GO_LATEST_DEV_JSON   := $(GO_TMP_DIR)/latest-go-dev.json
 GO_DEV_EXE_SHA_FILE  := $(GO_TMP_DIR)/dev-exe-sha256.txt
+# The hash of the client inside the release installer, taken while the staged
+# payload still exists and kept for zulugo-installer-release to publish. The
+# dev channel takes its own inline because that target packages and uploads in
+# one recipe; the release installer is built by a rule of its own that drops
+# the payload, so the value has to outlive it in a file.
+GO_EXE_SHA_FILE      := $(GO_TMP_DIR)/exe-sha256.txt
 
 # Same bucket as Zulu, distinct object names. The GO launcher reads
 # latest-go.json / latest-go-dev.json (launcher/LauncherProduct.h.in), so
@@ -717,6 +723,7 @@ $(GO_INSTALLER_OUT): $(GO_PAYLOAD_STAMP) $(GO_NSI)
 		-DBIGNAME="$(GO_BIG_NAME)" \
 		-DSIGN_CMD="$(SIGN)" \
 		$(GO_NSI)
+	@sha256sum "$(GO_PAYLOAD)/$(GO_EXE_NAME)" | cut -d' ' -f1 > "$(GO_EXE_SHA_FILE)"
 	@rm -rf "$(GO_PAYLOAD)" "$(GO_PAYLOAD_STAMP)"
 
 $(GO_TMP_DIR):
@@ -733,6 +740,11 @@ clean-zulugo-installer:
 zulugo-installer-release: $(GO_INSTALLER_OUT) | $(GO_TMP_DIR)
 	@test -n "$(GO_APPVERSION)" || { \
 		echo "ERROR: could not parse APPVERSION from $(GO_NSI)"; exit 1; }
+	@# Checked before anything is uploaded: the manifest cannot be written
+	@# without it, and publishing the installer and then failing would leave
+	@# the bucket holding a release no launcher is told about.
+	@test -s "$(GO_EXE_SHA_FILE)" || { \
+		echo "ERROR: $(GO_EXE_SHA_FILE) is missing; run 'make clean-zulugo-installer' and build again."; exit 1; }
 	$(GCLOUD) storage cp "$(GO_INSTALLER_OUT)" "$(GO_GCS_URI)"
 	@$(GCLOUD) storage objects update "$(GO_GCS_URI)" \
 		--add-acl-grant=entity=AllUsers,role=READER \
@@ -740,14 +752,21 @@ zulugo-installer-release: $(GO_INSTALLER_OUT) | $(GO_TMP_DIR)
 	@# Cache-Control is overridden on the manifest only: the installer object
 	@# is immutable (its name carries the version), while a cached manifest
 	@# would hide a fresh release for up to GCS's default hour.
+	@# "exe_sha256" is the hash of the client inside this installer. The
+	@# launcher falls back to it when the published version equals the
+	@# installed one, which is how a build republished without a version bump
+	@# still reaches people -- and it has to, because the service gates online
+	@# play on a CRC of that exe, so being "the right version" is not enough.
 	@SIZE=$$(stat -c%s "$(GO_INSTALLER_OUT)"); \
 	SHA=$$(sha256sum "$(GO_INSTALLER_OUT)" | cut -d' ' -f1); \
+	EXESHA=$$(cat "$(GO_EXE_SHA_FILE)"); \
 	printf '%s\n' \
 	    '{' \
 	    '  "version": "$(GO_APPVERSION)",' \
 	    '  "url": "$(GO_PUBLIC_URL)",' \
 	    "  \"size\": $$SIZE," \
-	    "  \"sha256\": \"$$SHA\"" \
+	    "  \"sha256\": \"$$SHA\"," \
+	    "  \"exe_sha256\": \"$$EXESHA\"" \
 	    '}' > "$(GO_LATEST_JSON)"
 	$(GCLOUD) storage cp "$(GO_LATEST_JSON)" "$(GO_LATEST_GCS_URI)"
 	@$(GCLOUD) storage objects update "$(GO_LATEST_GCS_URI)" \

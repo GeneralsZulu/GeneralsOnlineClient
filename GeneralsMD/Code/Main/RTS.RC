@@ -58,7 +58,15 @@ END
 
 // Icon with lowest ID value placed first to ensure application icon
 // remains consistent on all systems.
+//
+// ZULU_APP_ICON_FILE comes from the cmake-generated BuildVersion.h and is
+// defined only for the Zulu GO build, which ships its own insignia so its
+// shortcut is distinguishable from the stock client it installs beside.
+#ifdef ZULU_APP_ICON_FILE
+IDI_ApplicationIcon     ICON    DISCARDABLE     ZULU_APP_ICON_FILE
+#else
 IDI_ApplicationIcon     ICON    DISCARDABLE     "GENERALS.ICO"
+#endif
 #endif    // English (U.S.) resources
 /////////////////////////////////////////////////////////////////////////////
 

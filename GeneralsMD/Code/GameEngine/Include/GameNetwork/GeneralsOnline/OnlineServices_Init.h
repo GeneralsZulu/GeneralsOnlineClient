@@ -504,6 +504,9 @@ public:
 
 	void CancelUpdate();
 	void LaunchPatcher();
+#if defined(ZULU_GO_SELFHOST_BASE)
+	void LaunchZuluGOUpdater();
+#endif
 	void StartDownloadUpdate(std::function<void(void)> cb);
 	void ContinueUpdate();
 

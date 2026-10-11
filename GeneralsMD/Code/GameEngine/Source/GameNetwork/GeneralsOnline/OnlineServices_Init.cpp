@@ -807,6 +807,66 @@ void NGMP_OnlineServicesManager::LaunchPatcher()
 	}
 }
 
+#if defined(ZULU_GO_SELFHOST_BASE)
+// TheSuperHackers @bugfix bill-rich 04/10/2026 Update Zulu GO, not the client
+// it is installed beside.
+//
+// LaunchPatcher above runs the public service's patcher with
+// GetCurrentDirectory() as its working directory. For Zulu GO that directory
+// is the Zero Hour root, one level ABOVE our own folder, so the patcher would
+// cheerfully update the player's stock GeneralsOnline install -- leaving the
+// build that was actually refused untouched, and modifying an install this
+// package promises never to touch. (On our own service it does not even get
+// that far: there is no patchdata.json, so the version check reports Failed
+// and the player is told they cannot connect.)
+//
+// Zulu GO already has an updater of its own: ZuluGOLauncher.exe, sitting next
+// to this exe, which reads latest-go.json and runs the signed ZuluGO
+// installer. Hand off to it and quit. "-update" tells it the player has
+// already agreed, so it installs without asking again -- and says so plainly
+// when there is nothing newer to install.
+void NGMP_OnlineServicesManager::LaunchZuluGOUpdater()
+{
+	Char exePath[MAX_PATH + 1] = {};
+	::GetModuleFileNameA(NULL, exePath, MAX_PATH);
+	std::filesystem::path launcherPath =
+		std::filesystem::path(exePath).parent_path() / "ZuluGOLauncher.exe";
+	std::string strLauncherPath = launcherPath.string();
+
+	// The launcher hands its own working directory to the game it starts, and
+	// the engine resolves the retail archives against it, so it has to stay
+	// the Zero Hour root we were started with.
+	Char gameDir[MAX_PATH + 1] = {};
+	::GetCurrentDirectoryA(MAX_PATH + 1u, gameDir);
+
+	SHELLEXECUTEINFOA shellexInfo = { sizeof(shellexInfo) };
+	// "open", not "runas": the launcher runs unelevated by design and the
+	// installer it starts requests elevation for itself.
+	shellexInfo.lpVerb = "open";
+	shellexInfo.lpFile = strLauncherPath.c_str();
+	shellexInfo.lpParameters = "-update";
+	shellexInfo.lpDirectory = gameDir;
+	shellexInfo.nShow = SW_SHOWNORMAL;
+
+	NetworkLog(ELogVerbosity::LOG_RELEASE, "UPDATE: handing off to %s", strLauncherPath.c_str());
+
+	if (std::filesystem::exists(launcherPath) && ShellExecuteExA(&shellexInfo))
+	{
+		TheGameEngine->setQuitting(TRUE);
+	}
+	else
+	{
+		ClearGSMessageBoxes();
+		MessageBoxOk(UnicodeString(L"Update Failed"),
+			UnicodeString(L"Could not start ZuluGOLauncher.exe. Run the Zulu GO installer again to update. Press below to exit."),
+			[]()
+			{
+				TheGameEngine->setQuitting(TRUE);
+			});
+	}
+}
+#endif
+
 void NGMP_OnlineServicesManager::StartDownloadUpdate(std::function<void(void)> cb)
 {
 	TheDownloadManager->SetFileName("Connecting to update service...");
