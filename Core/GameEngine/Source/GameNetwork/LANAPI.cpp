@@ -1625,6 +1625,13 @@ static UnsignedShort s_observeConnectPort     = 0;
 static Int           s_observeAttemptsLeft    = 0;
 static UnsignedInt   s_observeLastBytes       = 0;
 static UnsignedInt   s_observeLastProgressMs  = 0;
+// TheSuperHackers @bugfix bill-rich 02/10/2026 Stream-rate sampling, so the
+// recorder can be told how far ahead the stream is (see updateObserver).
+static UnsignedInt   s_observeRateFirstMs     = 0;
+static UnsignedInt   s_observeRateFirstBytes  = 0;
+// How far short of the live edge playback settles, in seconds of stream. Same
+// value the online livestream watcher uses.
+static const UnsignedInt OBS_EDGE_MARGIN_SECONDS = 4;
 // Give up on a connected-but-silent host after this long without a single
 // new byte. Generous because the host may still be inside its blocking map
 // load right after game start, during which nothing is pumped.
@@ -1645,6 +1652,8 @@ void LANAPI::RequestObserve(UnsignedInt hostIP, UnsignedShort observerPort)
 	s_observeAttemptsLeft    = 2; // retries after the initial attempt
 	s_observeLastBytes       = 0;
 	s_observeLastProgressMs  = timeGetTime();
+	s_observeRateFirstMs     = 0;
+	s_observeRateFirstBytes  = 0;
 
 	stopObserverClient();
 	m_observerClient = new LANObserverClient();
@@ -1817,6 +1826,46 @@ void LANAPI::updateObserver()
 		{
 			s_observeLastBytes      = m_observerClient->bytesReceived();
 			s_observeLastProgressMs = timeGetTime();
+		}
+
+		// TheSuperHackers @bugfix bill-rich 02/10/2026 Tell the recorder how long the
+		// stream file already is. The live-observer catchup decides whether to run
+		// faster than realtime by comparing its read position against this length,
+		// and only the online livestream watcher was ever reporting it -- so on LAN
+		// the backlog read as nothing, the catchup switched itself off on the first
+		// tick and a spectator joining a match in progress watched the whole thing
+		// from frame 0 at normal speed.
+		if (TheRecorder != nullptr && m_observerClient->bytesReceived() > 0)
+		{
+			const UnsignedInt received = m_observerClient->bytesReceived();
+			TheRecorder->noteLiveObserverBytes((Int)received);
+
+			// Margin = a few seconds at the stream's own observed byte rate: a fixed
+			// byte count is minutes of an idle map and seconds of a busy one. Sampling
+			// starts only once the catch-up snapshot has fully arrived -- that part
+			// comes off the host at line speed, and a rate taken from it would read as
+			// megabytes per second and put the "stop short of live" margin minutes
+			// behind the game instead of seconds.
+			if (m_observerClient->state() == LANObserverClient::STATE_STREAMING
+			    && received > m_observerClient->snapshotSize())
+			{
+				const UnsignedInt nowMs = timeGetTime();
+				if (s_observeRateFirstMs == 0)
+				{
+					s_observeRateFirstMs    = nowMs;
+					s_observeRateFirstBytes = received;
+				}
+				else
+				{
+					const UnsignedInt elapsedMs = nowMs - s_observeRateFirstMs;
+					if (elapsedMs >= 5000 && received > s_observeRateFirstBytes)
+					{
+						const UnsignedInt bytesPerSecond =
+							(received - s_observeRateFirstBytes) * 1000 / elapsedMs;
+						TheRecorder->setLiveObserverEdgeMargin((Int)(bytesPerSecond * OBS_EDGE_MARGIN_SECONDS));
+					}
+				}
+			}
 		}
 
 		// A connected host that never sends anything (not even the 4-byte

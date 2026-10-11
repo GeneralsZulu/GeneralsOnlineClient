@@ -1092,8 +1092,16 @@ void GameEngine::update()
 		// ConnectionManager::updateRunAhead) and FrameMetrics stops sampling display
 		// FPS during catchup, which is what makes it safe to throttle here. The lead-in
 		// renders every frame for a realtime preview before control is handed back.
-		Bool catchupSkipRender = TheRecorder && TheRecorder->isResumeCatchupMode()
-			&& !TheRecorder->isResumeCatchupLeadIn();
+		// TheSuperHackers @bugfix bill-rich 02/10/2026 A live observer draining its
+		// backlog gets the same treatment. It used to render every logic frame, which
+		// pins catchup at one logic frame per rendered frame: on a vsynced 60 Hz
+		// display that is 2x realtime at best, so joining a match ten minutes in meant
+		// watching five minutes of it before reaching live. Lifting the render out of
+		// the inner loop lets the logic run as fast as the machine can simulate, which
+		// is what the resume path has always done.
+		Bool catchupSkipRender = TheRecorder
+			&& ((TheRecorder->isResumeCatchupMode() && !TheRecorder->isResumeCatchupLeadIn())
+				|| TheRecorder->isLiveObserverCatchup());
 		if (catchupSkipRender)
 		{
 			static UnsignedInt s_lastCatchupRenderMs = 0;
