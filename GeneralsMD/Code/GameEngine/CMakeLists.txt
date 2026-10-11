@@ -1198,6 +1198,7 @@ set(GAMEENGINE_SRC
     Source/GameNetwork/GeneralsOnline/HTTP/HTTPManager.cpp
     Source/GameNetwork/GeneralsOnline/HTTP/HTTPRequest.cpp
     Source/GameNetwork/GeneralsOnline/NetworkMesh.cpp
+    Source/GameNetwork/GeneralsOnline/NetworkSelfTest.cpp
     Source/GameNetwork/GeneralsOnline/OnlineServices_Init.cpp
     Source/GameNetwork/GeneralsOnline/OnlineServices_Auth.cpp
     Source/GameNetwork/GeneralsOnline/OnlineServices_LobbyInterface.cpp

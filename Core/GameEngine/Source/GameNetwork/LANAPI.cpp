@@ -650,6 +650,9 @@ void LANAPI::update()
 		{
 			// We haven't heard from the host in a while.  Bail.
 			// Actually, fake a host leaving message. :)
+			ReleaseLog("LAN guest dropping host ip=%d.%d.%d.%d lastHeard=%u now=%u delta=%u",
+				PRINTF_IP_AS_4_INTS(m_currentGame->getIP(0)),
+				m_currentGame->getLastHeard(), now, now - m_currentGame->getLastHeard());
 			LANMessage msg;
 			fillInLANMessage(&msg);
 			msg.messageType = LANMessage::MSG_REQUEST_GAME_LEAVE;

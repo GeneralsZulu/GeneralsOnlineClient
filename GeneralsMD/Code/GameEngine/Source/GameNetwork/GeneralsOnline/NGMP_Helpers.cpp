@@ -1,5 +1,6 @@
 #include "GameNetwork/GeneralsOnline/NGMP_include.h"
 #include <chrono>
+#include <cstdio>
 #include <cwctype>
 #include <ctime>
 #include <mutex>
@@ -10,7 +11,18 @@
 #include "../OnlineServices_Auth.h"
 
 std::string m_strNetworkLogFileName;
+std::string m_strNetworkLogPrevFileName;
 std::mutex m_logMutex;
+
+const char* NetworkLogGetFileName()
+{
+	return m_strNetworkLogFileName.c_str();
+}
+
+const char* NetworkLogGetPrevFileName()
+{
+	return m_strNetworkLogPrevFileName.c_str();
+}
 
 extern NGMPGame* TheNGMPGame;
 
@@ -83,6 +95,18 @@ void NetworkLog(ELogVerbosity logVerbosity, const char* fmt, ...)
 #else
 		m_strNetworkLogFileName = std::format("{}\\GeneralsOnlineData\\GeneralsOnline.log", TheGlobalData->getPath_UserData().str());
 #endif
+		// TheSuperHackers @feature bill-rich 11/10/2026 Keep the previous session's
+		// network log. The lobby and mesh phase log nowhere else, and a player who
+		// could not get a game started restarts the client, which used to erase
+		// the only evidence.
+		m_strNetworkLogPrevFileName = m_strNetworkLogFileName;
+		const size_t dot = m_strNetworkLogPrevFileName.rfind(".log");
+		if (dot != std::string::npos)
+			m_strNetworkLogPrevFileName.replace(dot, 4, ".prev.log");
+		else
+			m_strNetworkLogPrevFileName += ".prev";
+		std::remove(m_strNetworkLogPrevFileName.c_str());
+		std::rename(m_strNetworkLogFileName.c_str(), m_strNetworkLogPrevFileName.c_str());
 		/*
 			std::stringstream ss;
 

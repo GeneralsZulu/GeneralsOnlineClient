@@ -25,6 +25,13 @@ ELogVerbosity::LOG_RELEASE;
 
 void NetworkLog(ELogVerbosity logVerbosity, const char* fmt, ...);
 
+// On-disk paths of the GeneralsOnline network log for this session and for the
+// previous one (rotated on the first write of a session). Empty until the user
+// data dir is known. Shipped with the match telemetry and the diagnostic
+// uploads, because the lobby/mesh phase logs only here.
+const char* NetworkLogGetFileName();
+const char* NetworkLogGetPrevFileName();
+
 std::string to_utf8(const std::wstring& wstr);
 std::wstring from_utf8(const std::string& utf8_str);
 std::wstring NormalizeSingleLineText(const std::wstring& text);

@@ -85,6 +85,8 @@
 #include "GameLogic/CrateSystem.h"
 #include "GameLogic/FPUControl.h"
 #include "GameLogic/GameLogic.h"
+#include "Common/ReleaseLog.h"
+#include "GameNetwork/GameInfo.h"
 #include "GameLogic/Locomotor.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/Module/AIUpdate.h"
@@ -2493,6 +2495,30 @@ void GameLogic::tryStartNewGame( Bool loadingSaveGame )
 		// normally. The headless-replay path is driven separately by
 		// ReplaySimulation, which calls Begin/Collect/Export itself; that path
 		// runs in GAME_REPLAY mode so this hook stays inactive.
+		// TheSuperHackers @feature bill-rich 11/10/2026 The match header and the
+		// roster in the release log. "Factions got screwed up" and "the resume
+		// did not restore the slots" are only answerable with the slot table
+		// every client thought it was starting with.
+		if ((m_gameMode == GAME_LAN || m_gameMode == GAME_INTERNET) && TheGameInfo != nullptr)
+		{
+			ReleaseLogResetCRCHistory();
+			ReleaseLog("=== Match start: map='%s' mode=%d crcInterval=%d seed=%u logicFps=%d localSlot=%d resumeTo=%u ===",
+				TheGlobalData ? TheGlobalData->m_mapName.str() : "(null)", (int)m_gameMode,
+				TheGameInfo->getCRCInterval(), (unsigned)GetGameLogicRandomSeed(), (int)LOGICFRAMES_PER_SECOND,
+				TheGameInfo->getLocalSlotNum(), TheGameInfo->getResumeHandoffFrame());
+			for (Int rs = 0; rs < MAX_SLOTS; ++rs)
+			{
+				const GameSlot *gs = TheGameInfo->getConstSlot(rs);
+				if (gs == nullptr || !gs->isOccupied())
+					continue;
+				ReleaseLog("ROSTER slot=%d name=%ls %s template=%d color=%d start=%d team=%d ip=%d.%d.%d.%d:%u",
+					rs, gs->getName().str(), gs->isHuman() ? "human" : "ai",
+					gs->getPlayerTemplate(), gs->getColor(), gs->getStartPos(), gs->getTeamNumber(),
+					(gs->getIP() >> 24) & 0xff, (gs->getIP() >> 16) & 0xff, (gs->getIP() >> 8) & 0xff, gs->getIP() & 0xff,
+					(unsigned)gs->getPort());
+			}
+		}
+
 		if (TheGlobalData->m_exportStats
 			&& (m_gameMode == GAME_LAN || m_gameMode == GAME_INTERNET)
 			&& TheGameInfo != nullptr)

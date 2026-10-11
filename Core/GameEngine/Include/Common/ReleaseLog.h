@@ -43,6 +43,12 @@ void ReleaseLog(const char *fmt, ...);
 // Path/name of the release log file, for the telemetry uploader. Never null.
 const char *ReleaseGetLogFileName();
 
+// The release log of the previous app session ("ReleaseLog.prev.txt"). The
+// current log truncates once per session, so without this a player who
+// crashes or quits and relaunches loses exactly the log that explains it.
+// Rotated on the first write of a session. Never null; may not exist on disk.
+const char *ReleaseGetPrevLogFileName();
+
 // --- Tier 2: overall game-CRC ring buffer ----------------------------------
 // Record the overall logic CRC for a frame. Kept in a fixed-size in-memory
 // ring; nothing is written to disk until ReleaseLogDumpCRCHistory() is called.

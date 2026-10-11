@@ -32,6 +32,7 @@
 #include "GameClient/ControlBar.h"
 #include "GameLogic/Damage.h"
 #include "GameLogic/GameLogic.h"
+#include "GameNetwork/GameInfo.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/Module/BodyModule.h"
 #include "GameLogic/Module/BattlePlanUpdate.h"
@@ -935,7 +936,9 @@ AsciiString ExportGameStatsJSON(const AsciiString& replayDir, const AsciiString&
 		{"seed", GetGameLogicRandomSeed()},
 		{"replayFile", replayFileName.str()},
 		{"playerCount", s_state.gamePlayerCount},
-		{"snapshotInterval", 30}
+		{"snapshotInterval", 30},
+		{"logicFps", (int)LOGICFRAMES_PER_SECOND},
+		{"resumeFrame", TheGameInfo ? TheGameInfo->getResumeHandoffFrame() : 0u}
 	};
 
 	// Players array
@@ -963,6 +966,37 @@ AsciiString ExportGameStatsJSON(const AsciiString& replayDir, const AsciiString&
 		char colorBuf[8];
 		snprintf(colorBuf, sizeof(colorBuf), "#%06X", static_cast<unsigned int>(player->getPlayerColor()) & 0x00FFFFFFu);
 		p["color"] = colorBuf;
+
+		// Lobby slot, team and start position. Matched by name (humans) or by
+		// faction template (AI) against the game info; -1 when no slot matches.
+		{
+			Int slotIdx = -1, team = -1, startPos = -1;
+			if (TheGameInfo != nullptr)
+			{
+				const UnicodeString dispName = player->getPlayerDisplayName();
+				Int templateIdx = -1;
+				if (pt != nullptr)
+					templateIdx = ThePlayerTemplateStore->getTemplateNumByName(pt->getName());
+				for (Int si = 0; si < MAX_SLOTS && slotIdx < 0; ++si)
+				{
+					const GameSlot *gs = TheGameInfo->getConstSlot(si);
+					if (gs == nullptr || !gs->isOccupied())
+						continue;
+					const Bool byName = gs->isHuman() && gs->getName().compare(dispName) == 0;
+					const Bool byTemplate = !gs->isHuman() && player->getPlayerType() != PLAYER_HUMAN
+						&& templateIdx >= 0 && gs->getPlayerTemplate() == templateIdx;
+					if (byName || byTemplate)
+					{
+						slotIdx = si;
+						team = gs->getTeamNumber();
+						startPos = gs->getStartPos();
+					}
+				}
+			}
+			p["slot"] = slotIdx;
+			p["team"] = team;
+			p["startPosition"] = startPos;
+		}
 
 		p["money"] = player->getMoney()->countMoney();
 		p["moneyEarned"] = sk->getTotalMoneyEarned();

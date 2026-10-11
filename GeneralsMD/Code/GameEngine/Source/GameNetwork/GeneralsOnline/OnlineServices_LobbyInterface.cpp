@@ -2,6 +2,7 @@
 #include "GameNetwork/GeneralsOnline/json.hpp"
 #include "GameNetwork/GeneralsOnline/HTTP/HTTPManager.h"
 #include "GameNetwork/GeneralsOnline/OnlineServices_Init.h"
+#include "Common/ReleaseLog.h"
 #include "GameClient/MapUtil.h"
 #include "GameLogic/GameLogic.h"
 
@@ -1500,6 +1501,7 @@ void NGMP_OnlineServices_LobbyInterface::JoinLobby(LobbyEntry lobbyInfo, std::st
 							nlohmann::json jsonObject = nlohmann::json::parse(strBody);
 							JoinLobbyResponse resp = jsonObject.get<JoinLobbyResponse>();
 
+					ReleaseLog("GO lobby: join lobby %lld result=%d http=%d", (long long)lobbyInfo.lobbyID, (int)JoinResult, statusCode);
 							m_strTURNUsername = resp.turn_username;
 							m_strTURNToken = resp.turn_token;
 							NetworkLog(ELogVerbosity::LOG_DEBUG, "Got TURN username: %s, token: %s", m_strTURNUsername.c_str(), m_strTURNToken.c_str());
@@ -1615,6 +1617,7 @@ void NGMP_OnlineServices_LobbyInterface::LeaveCurrentLobby()
 		delete m_pLobbyMesh;
 		m_pLobbyMesh = nullptr;
 	}
+	ReleaseLog("GO lobby: leaving lobby %lld", (long long)m_CurrentLobby.lobbyID);
 
 	if (TheNGMPGame != nullptr)
 	{
@@ -1781,6 +1784,8 @@ void NGMP_OnlineServices_LobbyInterface::CreateLobby(UnicodeString strLobbyName,
 
 
 							// TODO_NGMP: Cleanup game + dont store 2 ptrs
+						ReleaseLog("GO lobby: create lobby result=%d id=%lld turnCreds=%s", (int)resp.result, (long long)resp.lobby_id,
+							(m_strTURNUsername.empty() || m_strTURNToken.empty()) ? "NONE" : "present");
 							if (TheNGMPGame == nullptr)
 							{
 								TheNGMPGame = new NGMPGame();

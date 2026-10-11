@@ -86,7 +86,7 @@ void StartMatchTelemetryUpload(const MatchTelemetryUpload& p);
 /// @param logsUrl Full URL of the /logs endpoint (empty disables)
 /// @param seedLabel X-Game-Seed value; header/path-sanitized internally
 /// @param playerId X-Player grouping id, sanitized the same way
-/// @param logFilePaths On-disk log files to ship (up to 4 are taken)
+/// @param logFilePaths On-disk log files to ship (up to 8 are taken)
 void StartDiagnosticLogUpload(const AsciiString& logsUrl,
                               const AsciiString& seedLabel,
                               const AsciiString& playerId,

@@ -70,6 +70,8 @@
 #include "GameNetwork/GeneralsOnline/NGMP_interfaces.h"
 #include "GameNetwork/RandomAssign.h"
 #include "Common/LobbyDiscord.h"
+#include "Common/ReleaseLog.h"
+#include "GameNetwork/GeneralsOnline/NetworkSelfTest.h"
 #include <ws2ipdef.h>
 #include <format>
 #include "../OnlineServices_Init.h"
@@ -1180,6 +1182,7 @@ static void StartPressed()
 		{
 			if (buttonStart != nullptr)
 			{
+		ReleaseLog("GO lobby: host pressed start, full mesh check requested");
 				buttonStart->winEnable(FALSE);
 			}
 
@@ -1571,6 +1574,7 @@ static void wolLobbySystemChat(const UnicodeString &text)
 	UnicodeString msg = text;
 	if (pLobbyInterface != nullptr)
 		pLobbyInterface->SendAnnouncementMessageToCurrentLobby(msg, true);
+	ReleaseLog("GO lobby (local): %ls", text.str());
 	else
 		wolLocalSystemChat(text);
 }
@@ -1579,6 +1583,7 @@ static void wolLobbySystemChat(const UnicodeString &text)
 // from the recording since arming, or when a human does not hold the resume source yet.
 static Bool wolArmedResumeStillMatches(NGMPGame *game)
 {
+	ReleaseLog("GO lobby: %ls", text.str());
 	ResumeFromReplay::SourceReplay replay;
 	UnicodeString why;
 	if (!ResumeFromReplay::readSource(replay, why)
@@ -4122,6 +4127,12 @@ Bool handleGameSetupSlashCommands(UnicodeString uText)
 #endif // defined(RTS_DEBUG)
 
 #if defined(GENERALS_ONLINE)
+	else if (token == "nettest")
+	{
+		// TheSuperHackers @feature bill-rich 11/10/2026 Network self-test, results uploaded.
+		wolLocalSystemChat(NetSelfTest_Start("chat command", TRUE));
+		return TRUE; // was a slash command
+	}
 	GadgetListBoxAddEntryText(listboxGameSetupChat, UnicodeString(L"Unknown command: Use /help to see all commands."), GameSpyColor[GSCOLOR_CHAT_NORMAL], -1, -1);
 	return TRUE;
 #else

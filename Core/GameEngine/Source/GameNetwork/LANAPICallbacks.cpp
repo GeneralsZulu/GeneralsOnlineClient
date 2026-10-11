@@ -46,6 +46,7 @@
 #include "GameLogic/GameLogic.h"
 #include "GameNetwork/FileTransfer.h"
 #include "GameNetwork/LANAPICallbacks.h"
+#include "Common/ReleaseLog.h"
 #include "GameNetwork/MapDownloadHook.h"
 #include "GameNetwork/networkutil.h"
 #include "GameNetwork/ResumeFromReplay.h"
@@ -419,6 +420,7 @@ void LANAPI::OnGameStart()
 		// a missing map rather than start a fresh match that would desync everyone.
 		if (m_currentGame->isResumeArmed())
 		{
+			ReleaseLog("Resume: armed to frame %u, transferring the source replay", m_currentGame->getResumeHandoffFrame());
 			UnicodeString resumeWhy;
 			Bool resumeOk = DoResumeReplayTransfer(m_currentGame, ResumeFromReplay::getSourceFilePath());
 			if (!resumeOk)
@@ -428,6 +430,7 @@ void LANAPI::OnGameStart()
 			if (!resumeOk)
 			{
 				DEBUG_LOG(("Resume-from-replay transfer or validation failed.  Bailing..."));
+				ReleaseLog("Resume: start aborted: %ls", resumeWhy.str());
 				OnPlayerLeave(m_name);
 				removeGame(m_currentGame);
 				m_currentGame = nullptr;

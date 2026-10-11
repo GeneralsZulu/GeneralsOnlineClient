@@ -166,6 +166,10 @@ public:
 	void noteStall(UnsignedInt frame, UnsignedInt durationMs, UnsignedInt notReadyMask);
 	void noteHitch(UnsignedInt gapMs);
 	void emitNetStats(UnsignedInt frame, Int runAhead, Int frameRate);
+	// Emit a NETSTAT line right now (match end, disconnect screen, a long stall)
+	// with the run-ahead and frame rate of the last periodic emit, so the 10 s
+	// cadence never hides the window that mattered.
+	void flushNetStats(const char *why);
 
 #if defined(RTS_DEBUG)
 	void debugPrintConnectionCommands();
@@ -266,6 +270,8 @@ private:
 	};
 	NetStats m_netStats;
 	UnsignedInt m_lastStallLogMs;
+	Int m_lastStatsRunAhead;				///< For flushNetStats: what the last periodic NETSTAT reported.
+	Int m_lastStatsFrameRate;
 	UnsignedInt m_lastResendRequestFrame;	///< Frame the last stall-driven resend request was for.
 	UnsignedInt m_lastResendRequestMs;		///< When it went out, so we do not ask every tick.
 	void resetNetStats();

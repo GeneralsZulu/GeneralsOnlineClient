@@ -15,6 +15,24 @@
 #include "../PluginInterfaces.h"
 #include <steam/isteamnetworkingsockets.h>
 #include <steam/steamnetworkingsockets.h>
+#include "Common/ReleaseLog.h"
+
+// TheSuperHackers @feature bill-rich 11/10/2026 Mesh breadcrumbs for the uploadable
+// release log. The GeneralsOnline network log has the full detail; these are the
+// lines that answer "who could not reach whom, and was it direct or relayed".
+static const char* MeshStateName(EConnectionState st)
+{
+	switch (st)
+	{
+	case EConnectionState::NOT_CONNECTED:           return "NOT_CONNECTED";
+	case EConnectionState::CONNECTING_DIRECT:       return "CONNECTING";
+	case EConnectionState::FINDING_ROUTE:           return "FINDING_ROUTE";
+	case EConnectionState::CONNECTED_DIRECT:        return "CONNECTED";
+	case EConnectionState::CONNECTION_FAILED:       return "FAILED";
+	case EConnectionState::CONNECTION_DISCONNECTED: return "DISCONNECTED";
+	default:                                        return "?";
+	}
+}
 
 bool g_bForceRelay = false;
 UnsignedInt m_exeCRCOriginal = 0;
@@ -96,6 +114,11 @@ void OnSteamNetConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t
 			pInfo->m_info.m_eEndReason,
 			pInfo->m_info.m_szEndDebug
 		);
+		ReleaseLog("GO mesh: [%s] %s reason=%d \"%s\"",
+			pInfo->m_info.m_szConnectionDescription,
+			(pInfo->m_info.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ? "closed by peer" : "problem detected locally"),
+			(int)pInfo->m_info.m_eEndReason,
+			pInfo->m_info.m_szEndDebug);
 
 		// Close our end
 		NetworkLog(ELogVerbosity::LOG_RELEASE, "[DC] Closing in callback");
@@ -124,6 +147,8 @@ void OnSteamNetConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t
 			if (bWasError) // only if it wasn't a clean disconnect (e.g. lobby leave)
 			{
 				NetworkLog(ELogVerbosity::LOG_RELEASE, "[STEAM NETWORKING][DISCONNECT HANDLER] Determined we didn't connect due to an error, Retrying: %d (currently at %d/%d attempts)", bShouldRetry, plrConnection.m_SignallingAttempts, numSignallingAttempts);
+				ReleaseLog("GO mesh: user %lld connect error, retry=%d attempts=%d/%d",
+					(long long)plrConnection.m_userID, (int)bShouldRetry, plrConnection.m_SignallingAttempts, numSignallingAttempts);
 				
 				// should we retry signaling?
 				if (bShouldRetry)
@@ -301,6 +326,7 @@ void OnSteamNetConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t
 		if (connectionID != -1 && pInfo != nullptr)
 		{
 			NetworkLog(ELogVerbosity::LOG_RELEASE, "[STEAM NETWORKING][%s] finding route\n", pInfo->m_info.m_szConnectionDescription);
+			ReleaseLog("GO mesh: [%s] finding route", pInfo->m_info.m_szConnectionDescription);
 
 			PlayerConnection& plrConnection = connections[connectionID];
 			plrConnection.UpdateState(EConnectionState::FINDING_ROUTE, pMesh);
@@ -314,6 +340,10 @@ void OnSteamNetConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t
 #endif
 
 		NetworkLog(ELogVerbosity::LOG_RELEASE, "[STEAM NETWORKING][%s] connected\n", pInfo->m_info.m_szConnectionDescription);
+		ReleaseLog("GO mesh: [%s] connected flags=0x%x%s%s",
+			pInfo->m_info.m_szConnectionDescription, (unsigned)pInfo->m_info.m_nFlags,
+			(pInfo->m_info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) ? " RELAYED" : " direct",
+			(pInfo->m_info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Fast) ? " fast" : "");
 
 		if (pInfo->m_info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Unauthenticated)
 		{
@@ -668,10 +698,20 @@ NetworkMesh::NetworkMesh()
 	NetworkLog(ELogVerbosity::LOG_RELEASE, "[Mesh] Socket library started");
 
 	// TODO_STEAM: Dont hardcode, get everything from service
+#if defined(ZULU_GO_SELFHOST_BASE)
+	// TheSuperHackers @feature bill-rich 11/10/2026 The self-hosted service issues
+	// Cloudflare Realtime TURN credentials (TURNCredentialManager), so the relay
+	// list must name Cloudflare's servers: a credential from our key is rejected by
+	// GeneralsOnline's own relay. Two UDP entries (3478, and 443 for networks that
+	// filter 3478); the user/pass lists below carry one credential per entry.
+	SteamNetworkingUtils()->SetGlobalConfigValueString(k_ESteamNetworkingConfig_P2P_STUN_ServerList, "stun:stun.cloudflare.com:3478,stun.l.google.com:19302,stun1.l.google.com:19302,stun2.l.google.com:19302,stun3.l.google.com:19302,stun4.l.google.com:19302");
+	const char* turnList = "turn:turn.cloudflare.com:3478?transport=udp,turn:turn.cloudflare.com:443?transport=udp";
+#else
 	SteamNetworkingUtils()->SetGlobalConfigValueString(k_ESteamNetworkingConfig_P2P_STUN_ServerList, "stun:stun.playgenerals.online:53,stun:stun.playgenerals.online:3478,stun.l.google.com:19302,stun1.l.google.com:19302,stun2.l.google.com:19302,stun3.l.google.com:19302,stun4.l.google.com:19302");
 
 	// comma seperated setting lists
 	const char* turnList = "turn:turn.playgenerals.online:53?transport=udp,turn:turn.playgenerals.online:3478?transport=udp";
+#endif
 
 	m_strTurnUsername = pLobbyInterface->GetLobbyTurnUsername();
 	m_strTurnToken = pLobbyInterface->GetLobbyTurnToken();
@@ -681,6 +721,12 @@ NetworkMesh::NetworkMesh()
 
 	//strUsername = "g04024f26713bae6e055295b6887b7007533f6c236534b725734b37e26ec15cd";
 	//strToken = "9ea6a5e60216c09a1fa7512987b2ce0514e3204f863f04f70fa870a100db740f";
+
+	// Relay availability is the single most useful fact when a player cannot
+	// reach the others: no credentials means every connection must punch.
+	ReleaseLog("GO mesh: ICE turn=%s turnCreds=%s relayAll=%d forceRelay=%d",
+		turnList, (m_strTurnUsername.empty() || m_strTurnToken.empty()) ? "NONE" : "present",
+		(int)pOnlineServicesMgr->GetServiceConfig().relay_all_traffic, (int)g_bForceRelay);
 
 	m_strTurnUsernameString = std::format("{},{}", m_strTurnUsername.c_str(), m_strTurnUsername.c_str());
 	m_strTurnTokenString = std::format("{},{}", m_strTurnToken.c_str(), m_strTurnToken.c_str());
@@ -961,6 +1007,8 @@ void NetworkMesh::StartConnectionSignalling(const char* szMiddlewareID, int64_t 
 
             // add attempt
             ++m_mapConnections[remoteUserID].m_SignallingAttempts;
+            ReleaseLog("GO mesh: signalling to user %lld attempt=%d preferredPort=%u",
+                (long long)remoteUserID, m_mapConnections[remoteUserID].m_SignallingAttempts, (unsigned)preferredPort);
         }
 	}
 	
@@ -1459,6 +1507,8 @@ std::string PlayerConnection::GetConnectionType()
 void PlayerConnection::UpdateState(EConnectionState newState, NetworkMesh* pOwningMesh)
 {
 	m_State = newState;
+	ReleaseLog("GO mesh: user %lld -> %s direct=%d attempts=%d",
+		(long long)m_userID, MeshStateName(newState), (int)IsDirect(), m_SignallingAttempts);
 	pOwningMesh->UpdateConnectivity(this);
 
 	NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();

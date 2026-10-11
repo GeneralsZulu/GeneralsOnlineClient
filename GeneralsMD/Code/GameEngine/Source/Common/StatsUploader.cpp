@@ -3381,7 +3381,7 @@ struct TelemetryJob
 	bool haveLogs;
 	char logsUrl[512];
 	char playerId[128];
-	TelemetryLogBuf logs[4];
+	TelemetryLogBuf logs[8];
 	unsigned int logCount;
 
 	bool haveMap;

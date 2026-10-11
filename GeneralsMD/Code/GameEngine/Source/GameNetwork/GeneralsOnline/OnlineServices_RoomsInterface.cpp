@@ -6,6 +6,8 @@
 #include "GameNetwork/GeneralsOnline/json.hpp"
 #include "../OnlineServices_Init.h"
 #include "../HTTP/HTTPManager.h"
+#include "Common/ReleaseLog.h"
+#include "GameNetwork/GeneralsOnline/NetworkSelfTest.h"
 #include "GameNetwork/GameSpy/PeerDefs.h"
 
 // -----------------------------
@@ -1092,6 +1094,34 @@ void WebSocket::Tick()
 											}
 										}
 
+										// TheSuperHackers @feature bill-rich 11/10/2026 What we are about to tell the
+										// service, per peer, in the uploadable log; and the self-test when we are
+										// the one who cannot reach somebody.
+										{
+											std::string states;
+											int expected = 0;
+											if (pLobbyInterface != nullptr)
+											{
+												for (const auto& member : pLobbyInterface->GetCurrentLobby().members)
+													if (member.IsHuman()) ++expected;
+											}
+											if (expected > 0) --expected; // not ourselves
+											if (pMesh != nullptr)
+											{
+												for (auto& conn : pMesh->GetAllConnections())
+												{
+													char tmp[96];
+													snprintf(tmp, sizeof(tmp), "%s%lld:%d%s", states.empty() ? "" : " ",
+														(long long)conn.first, (int)conn.second.GetState(), conn.second.IsDirect() ? "" : "(relay)");
+													states += tmp;
+												}
+											}
+											ReleaseLog("GO meshcheck id=%lld attempt=%d connected=%d/%d states=[%s] (3=CONNECTED)",
+												(long long)meshCheckID, meshCheckAttempt, (int)connectivityMap.size(), expected, states.c_str());
+											if ((int)connectivityMap.size() < expected)
+												NetDiag_OnMeshIncomplete("guest", (int)connectivityMap.size(), expected);
+										}
+
 										// send response
 										nlohmann::json j;
 										j["msg_id"] = EWebSocketMessageID::FULL_MESH_CONNECTIVITY_CHECK_RESPONSE;
@@ -1118,6 +1148,8 @@ void WebSocket::Tick()
 											if (!bMeshComplete)
 											{
 												NetworkLog(ELogVerbosity::LOG_RELEASE, "[FULL_MESH_CONNECTIVITY_CHECK_RESPONSE_COMPLETE_TO_HOST] Mesh is not complete for someone");
+												std::string pairs;
+												NGMP_OnlineServices_LobbyInterface* pLobbyIf = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
 												for (const auto& missingConnectionEntryIter : jsonObject["missing_connections"])
 												{
 													int64_t source_user_id = -1;
@@ -1127,11 +1159,25 @@ void WebSocket::Tick()
 													missingConnectionEntryIter["target_user_id"].get_to(target_user_id);
 
 													missingConnections.push_back(std::make_pair(source_user_id, target_user_id));
+
+													std::string srcName = std::to_string(source_user_id), dstName = std::to_string(target_user_id);
+													if (pLobbyIf != nullptr)
+													{
+														for (const auto& member : pLobbyIf->GetCurrentLobby().members)
+														{
+															if (member.user_id == source_user_id) srcName = member.display_name;
+															if (member.user_id == target_user_id) dstName = member.display_name;
+														}
+													}
+													pairs += (pairs.empty() ? "" : ", ") + srcName + " -> " + dstName;
 												}
+												ReleaseLog("GO meshcheck host result: INCOMPLETE, missing [%s]", pairs.c_str());
+												NetDiag_UploadLogs("meshhost");
 											}
 											else
 											{
 												NetworkLog(ELogVerbosity::LOG_RELEASE, "[FULL_MESH_CONNECTIVITY_CHECK_RESPONSE_COMPLETE_TO_HOST] Mesh is fully complete");
+												ReleaseLog("GO meshcheck host result: complete");
 											}
 
 											// invoke callback

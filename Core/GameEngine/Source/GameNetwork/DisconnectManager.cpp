@@ -34,6 +34,7 @@
 #include "GameNetwork/networkutil.h"
 #include "GameNetwork/GameSpy/PingThread.h"
 #include "GameNetwork/GameSpy/GSConfig.h"
+#include "Common/ReleaseLog.h"
 
 
 DisconnectManager::DisconnectManager()
@@ -233,6 +234,21 @@ void DisconnectManager::updateDisconnectStatus(ConnectionManager *conMgr) {
 				if ((newTime < 0) || (isPlayerVotedOut(slot, conMgr) == TRUE)) {
 					newTime = 0;
 					DEBUG_LOG(("DisconnectManager::updateDisconnectStatus - player %d(translated slot %d) has been voted out or timed out", i, slot));
+					// TheSuperHackers @feature bill-rich 11/10/2026 Once per (slot, frame): this branch
+					// runs every update until the drop goes through, and the reason (vote vs timeout)
+					// plus the two gates below are exactly what the "who dropped whom" question needs.
+					{
+						static Int s_lastLoggedSlot = -1;
+						static UnsignedInt s_lastLoggedFrame = 0xffffffff;
+						if (s_lastLoggedSlot != i || s_lastLoggedFrame != TheGameLogic->getFrame()) {
+							s_lastLoggedSlot = i;
+							s_lastLoggedFrame = TheGameLogic->getFrame();
+							ReleaseLog("DISCONNECT slot=%d %s frame=%u votes=%d allOnSameFrame=%d weAreNextRouter=%d",
+								i, (newTime < 0 && isPlayerVotedOut(slot, conMgr) == FALSE) ? "timed out" : "voted out",
+								TheGameLogic->getFrame(), countVotesForPlayer(i),
+								(int)allOnSameFrame(conMgr), (int)isLocalPlayerNextPacketRouter(conMgr));
+						}
+					}
 					if (allOnSameFrame(conMgr) == TRUE) {
 						DEBUG_LOG(("DisconnectManager::updateDisconnectStatus - all on same frame"));
 						if (isLocalPlayerNextPacketRouter(conMgr) == TRUE) {
@@ -318,6 +334,9 @@ void DisconnectManager::processDisconnectKeepAlive(NetCommandMsg *msg, Connectio
 void DisconnectManager::processDisconnectPlayer(NetCommandMsg *msg, ConnectionManager *conMgr) {
 	NetDisconnectPlayerCommandMsg *cmdMsg = (NetDisconnectPlayerCommandMsg *)msg;
 	DEBUG_LOG(("DisconnectManager::processDisconnectPlayer - Got disconnect player command from player %d.  Disconnecting player %d on frame %d", msg->getPlayerID(), cmdMsg->getDisconnectSlot(), cmdMsg->getDisconnectFrame()));
+	ReleaseLog("DISCONNECT command from slot=%d: drop slot=%d at frame=%u (we are on %u)%s",
+		msg->getPlayerID(), cmdMsg->getDisconnectSlot(), cmdMsg->getDisconnectFrame(), TheGameLogic->getFrame(),
+		(cmdMsg->getPlayerID() == cmdMsg->getDisconnectSlot()) ? " (self quit)" : "");
 	DEBUG_ASSERTCRASH(TheGameLogic->getFrame() == cmdMsg->getDisconnectFrame(), ("disconnecting player on the wrong frame!!!"));
     	Int slot = cmdMsg->getDisconnectSlot();
 
@@ -404,6 +423,8 @@ void DisconnectManager::processDisconnectFrame(NetCommandMsg *msg, ConnectionMan
 
 	m_disconnectFrames[playerID] = cmdMsg->getDisconnectFrame();
 	m_disconnectFramesReceived[playerID] = TRUE;
+	ReleaseLog("DISCONNECT frame report: slot=%u is on frame=%u (we are on %u)",
+		playerID, cmdMsg->getDisconnectFrame(), TheGameLogic->getFrame());
 	DEBUG_LOG(("DisconnectManager::processDisconnectFrame - Got a disconnect frame for player %d, frame = %d, local player is %d, local disconnect frame = %d, command id = %d", cmdMsg->getPlayerID(), cmdMsg->getDisconnectFrame(), conMgr->getLocalPlayerID(), m_disconnectFrames[conMgr->getLocalPlayerID()], cmdMsg->getID()));
 
 	if (playerID == conMgr->getLocalPlayerID()) {
@@ -453,6 +474,7 @@ void DisconnectManager::applyDisconnectVote(Int slot, UnsignedInt frame, Int fro
 	m_playerVotes[slot][fromSlot].frame = frame;
 	Int numVotes = countVotesForPlayer(slot);
 	DEBUG_LOG(("DisconnectManager::applyDisconnectVote - added a vote to disconnect slot %d, from slot %d, for frame %d, current votes are %d", slot, fromSlot, frame, numVotes));
+	ReleaseLog("DISCONNECT vote: drop slot=%d from slot=%d frame=%u votes=%d", slot, fromSlot, frame, numVotes);
 	Int transSlot = translatedSlotPosition(slot, conMgr->getLocalPlayerID());
 	if (transSlot != -1) {
 		TheDisconnectMenu->updateVotes(transSlot, numVotes);
@@ -468,6 +490,8 @@ void DisconnectManager::nextFrame(UnsignedInt frame, ConnectionManager *conMgr) 
 void DisconnectManager::allCommandsReady(UnsignedInt frame, ConnectionManager *conMgr, Bool waitForPacketRouter) {
 		if (m_disconnectState != DISCONNECTSTATETYPE_SCREENOFF) {
 			DEBUG_LOG(("DisconnectManager::allCommandsReady - setting screen state to off."));
+			ReleaseLog("DISCONNECT screen off frame=%u after %ums", frame,
+				m_timeOfDisconnectScreenOn ? (UnsignedInt)(timeGetTime() - m_timeOfDisconnectScreenOn) : 0u);
 
 			TheDisconnectMenu->hideScreen();
 			m_disconnectState = DISCONNECTSTATETYPE_SCREENOFF;
@@ -564,6 +588,9 @@ void DisconnectManager::resetPacketRouterTimeout() {
 void DisconnectManager::turnOnScreen(ConnectionManager *conMgr) {
 	TheDisconnectMenu->showScreen();
 	DEBUG_LOG(("DisconnectManager::turnOnScreen - turning on screen on frame %d", TheGameLogic->getFrame()));
+	ReleaseLog("DISCONNECT screen on frame=%u waiting=0x%02x", TheGameLogic->getFrame(),
+		conMgr->getNotReadyMask(TheGameLogic->getFrame()));
+	conMgr->flushNetStats("disconnect screen");
 	m_disconnectState = DISCONNECTSTATETYPE_SCREENON;
 	m_lastKeepAliveSendTime = -1;
 	populateDisconnectScreen(conMgr);
@@ -578,6 +605,10 @@ void DisconnectManager::turnOnScreen(ConnectionManager *conMgr) {
 
 void DisconnectManager::disconnectPlayer(Int slot, ConnectionManager *conMgr) {
 	DEBUG_LOG(("DisconnectManager::disconnectPlayer - Disconnecting slot number %d on frame %d", slot, TheGameLogic->getFrame()));
+	// Grep-able breadcrumb (zulu had it, the port lost it): exactly when a player
+	// was given up on, and by name, since slot numbers differ per lobby.
+	ReleaseLog("DISCONNECT dropped slot=%d name=%ls frame=%d", slot,
+		((slot >= 0) && (slot < MAX_SLOTS)) ? conMgr->getPlayerName(slot).str() : L"?", TheGameLogic->getFrame());
 	DEBUG_ASSERTCRASH((slot >= 0) && (slot < MAX_SLOTS), ("Attempting to disconnect an invalid slot number"));
 	if ((slot < 0) || (slot >= (MAX_SLOTS))) {
 		return;

@@ -77,6 +77,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include "GameNetwork/GeneralsOnline/NetworkSelfTest.h"
 
 void refreshGameList( Bool forceRefresh = FALSE );
 void refreshPlayerList( Bool forceRefresh = FALSE );
@@ -200,7 +201,14 @@ Bool handleLobbySlashCommands(UnicodeString uText, Bool *wasRateLimited)
 	remainder.nextToken(&token);
 	token.toLower();
 
-	if (token == "host")
+	if (token == "nettest")
+	{
+		// TheSuperHackers @feature bill-rich 11/10/2026 Network self-test, results uploaded.
+		UnicodeString s = NetSelfTest_Start("chat command", TRUE);
+		GadgetListBoxAddEntryText(listboxLobbyChat, s, GameSpyColor[GSCOLOR_DEFAULT], -1, -1);
+		return TRUE; // was a slash command
+	}
+	else if (token == "host")
 	{
 		// TODO_NGMP
 		/*

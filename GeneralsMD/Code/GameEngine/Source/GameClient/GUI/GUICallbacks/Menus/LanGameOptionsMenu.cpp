@@ -35,6 +35,8 @@
 #include "Common/UserPreferences.h"
 #include "Common/QuotedPrintable.h"
 #include "Common/StatsUploader.h"
+#include "Common/ReleaseLog.h"
+#include "GameNetwork/GeneralsOnline/NetworkSelfTest.h"
 #include "GameClient/AnimateWindowManager.h"
 #include "GameClient/WindowLayout.h"
 #include "GameClient/Gadget.h"
@@ -766,12 +768,14 @@ static UnsignedInt s_lanLastSeenResumeHandoff = 0; ///< the arm the last game op
 // something (wrong name, wrong slot) is usually not the host.
 static void lanSystemChat(const UnicodeString &text)
 {
+	ReleaseLog("LAN lobby: %ls", text.str());
 	if (TheLAN)
 		TheLAN->RequestChat(text, LANAPIInterface::LANCHAT_SYSTEM);
 }
 
 static void lanLocalSystemChat(const UnicodeString &text)
 {
+	ReleaseLog("LAN lobby (local): %ls", text.str());
 	if (TheLAN)
 		TheLAN->OnChat(L"SYSTEM", TheLAN->GetLocalIP(), text, LANAPI::LANCHAT_SYSTEM);
 }
@@ -1985,7 +1989,12 @@ WindowMsgHandledType LanGameOptionsMenuSystem( GameWindow *window, UnsignedInt m
 					// Echo the user's input to the chat window
 					if (!txtInput.isEmpty())
 						// TheSuperHackers @feature bill-rich 15/09/2026 "/resume" arms resume-from-replay, "/resume off" disarms
-						if (txtInput.compareNoCase(L"/resume") == 0 || txtInput.compareNoCase(L"/resume off") == 0)
+						if (txtInput.compareNoCase(L"/nettest") == 0)
+						{
+							// TheSuperHackers @feature bill-rich 11/10/2026 Network self-test, results uploaded.
+							lanLocalSystemChat(NetSelfTest_Start("chat command", TRUE));
+						}
+						else if (txtInput.compareNoCase(L"/resume") == 0 || txtInput.compareNoCase(L"/resume off") == 0)
 						{
 							if (!TheLAN->AmIHost())
 								TheLAN->OnChat(L"SYSTEM", TheLAN->GetLocalIP(), TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeHostOnly", L"Only the host can resume a game"), LANAPI::LANCHAT_SYSTEM);

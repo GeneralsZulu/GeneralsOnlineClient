@@ -28,12 +28,19 @@
 #include <stdarg.h>
 #include <string.h>
 #include <time.h>
+#include <mutex>
 
 // Log file name. Lives in the per-user data dir (same root as Replays\), not
 // the working directory: unelevated installs can have a read-only game dir,
 // which silently disabled the log while a stale copy kept being re-uploaded.
 static const char *const RELEASE_LOG_FILE_NAME = "ReleaseLog.txt";
+static const char *const RELEASE_LOG_PREV_FILE_NAME = "ReleaseLog.prev.txt";
 static char s_releaseLogPath[512] = "";
+static char s_releaseLogPrevPath[512] = "";
+
+// Background workers (the network self-test, the telemetry uploader) write
+// here too, so the lazy open and every write are serialized.
+static std::mutex s_releaseLogMutex;
 
 // Full path, resolved lazily because TheGlobalData doesn't exist during very
 // early startup. Returns NULL while the user data dir is still unknown.
@@ -49,6 +56,8 @@ static const char *releaseLogPath()
 		return NULL;
 	strcpy(s_releaseLogPath, dir.str());
 	strcat(s_releaseLogPath, RELEASE_LOG_FILE_NAME);
+	strcpy(s_releaseLogPrevPath, dir.str());
+	strcat(s_releaseLogPrevPath, RELEASE_LOG_PREV_FILE_NAME);
 	return s_releaseLogPath;
 }
 
@@ -60,6 +69,7 @@ static Bool  s_releaseLogOpenFailed = FALSE;
 
 void ReleaseLog(const char *fmt, ...)
 {
+	std::lock_guard<std::mutex> lock(s_releaseLogMutex);
 	if (s_releaseLogFile == NULL)
 	{
 		if (s_releaseLogOpenFailed)
@@ -67,6 +77,11 @@ void ReleaseLog(const char *fmt, ...)
 		const char *path = releaseLogPath();
 		if (path == NULL)
 			return; // user data dir not known yet; try again on the next call
+		// Keep the previous session's log as ReleaseLog.prev.txt. It is what
+		// a crash or a "the game just froze, I restarted" report needs, and
+		// the end-of-match upload ships it once per session.
+		remove(s_releaseLogPrevPath);
+		rename(path, s_releaseLogPrevPath);
 		s_releaseLogFile = fopen(path, "w");
 		if (s_releaseLogFile == NULL)
 		{
@@ -94,6 +109,12 @@ const char *ReleaseGetLogFileName()
 {
 	const char *path = releaseLogPath();
 	return path != NULL ? path : RELEASE_LOG_FILE_NAME;
+}
+
+const char *ReleaseGetPrevLogFileName()
+{
+	const char *path = releaseLogPath();
+	return path != NULL ? s_releaseLogPrevPath : RELEASE_LOG_PREV_FILE_NAME;
 }
 
 // ---------------------------------------------------------------------------

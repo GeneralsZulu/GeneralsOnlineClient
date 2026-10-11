@@ -70,7 +70,10 @@ extern NGMPGame* TheNGMPGame;
 
 // TheSuperHackers @feature bill-rich 15/09/2026 Resume-from-replay milestones go to the release log online.
 #if defined(GENERALS_ONLINE)
-#define RESUME_LOG(...) NetworkLog(ELogVerbosity::LOG_RELEASE, __VA_ARGS__)
+// Both logs: the network log for GO's own tooling, the release log because that
+// is the one the end-of-match upload ships (a failed resume used to leave no
+// server-side trace at all).
+#define RESUME_LOG(...) do { ReleaseLog(__VA_ARGS__); NetworkLog(ELogVerbosity::LOG_RELEASE, __VA_ARGS__); } while (0)
 #else
 #define RESUME_LOG(...) DEBUG_LOG((__VA_ARGS__))
 #endif
@@ -1131,7 +1134,10 @@ void RecorderClass::stopRecording() {
 	logGameEnd();
 
 	// Release diagnostics (always compiled): mark the end of the match in the
-	// uploadable release log.
+	// uploadable release log, with one last NETSTAT so the final seconds are
+	// covered even when the periodic line is up to 10 s stale.
+	if (TheNetwork != nullptr && TheNetwork->GetConnectionManager() != nullptr)
+		TheNetwork->GetConnectionManager()->flushNetStats("match end");
 	ReleaseLog("=== Match end: frame=%d desync=%d ===",
 		TheGameLogic ? TheGameLogic->getFrame() : -1, (int)m_wasDesync);
 	if (TheNetwork)
@@ -1281,7 +1287,15 @@ void RecorderClass::stopRecording() {
 				{
 					s_prevObserverLogSent = TRUE;
 					up.logFilePaths.push_back(AsciiString(LANObsGetPrevLogFileName()));
+					// Same deal for the release log and the GeneralsOnline network
+					// log of the previous session: a player who froze or crashed
+					// and relaunched is the one whose previous logs matter.
+					up.logFilePaths.push_back(AsciiString(ReleaseGetPrevLogFileName()));
+					up.logFilePaths.push_back(AsciiString(NetworkLogGetPrevFileName()));
 				}
+				// The GeneralsOnline network log: the lobby, signalling and mesh
+				// phase of an online game log only here (the tail is uploaded).
+				up.logFilePaths.push_back(AsciiString(NetworkLogGetFileName()));
 			}
 
 			// Map check + conditional map upload. Look up the played map's CRC

@@ -338,6 +338,8 @@ void ConnectionManager::init()
 	m_runAheadLowerTicks = 0;
 	m_frameGroupingMs = 0;
 	m_lastStallLogMs = 0;
+	m_lastStatsRunAhead = 0;
+	m_lastStatsFrameRate = 0;
 	m_lastResendRequestFrame = 0;
 	m_lastResendRequestMs = 0;
 	resetNetStats();
@@ -2268,6 +2270,11 @@ PlayerLeaveCode ConnectionManager::disconnectPlayer(Int slot) {
 #if defined(GENERALS_ONLINE)
 PlayerLeaveCode ConnectionManager::disconnectPlayer(int64_t userID)
 {
+	// The mesh tells us a peer's transport closed. Nothing acts on it here (see
+	// the commented-out body), so at least record it: in-game it is the first
+	// sign that the lockstep is about to stall on that slot.
+	ReleaseLog("GO mesh: transport to user %lld closed at frame %u (no lockstep action)",
+		(long long)userID, TheGameLogic ? TheGameLogic->getFrame() : 0u);
 	return PLAYERLEAVECODE_UNKNOWN;
 // 	if (TheNGMPGame != nullptr)
 // 	{
@@ -3121,6 +3128,9 @@ void ConnectionManager::noteStall(UnsignedInt frame, UnsignedInt durationMs, Uns
 		if ((m_lastStallLogMs == 0) || ((now - m_lastStallLogMs) >= 5000)) {
 			m_lastStallLogMs = now;
 			ReleaseLog("NETSTALL frame=%u waited=%ums on=0x%02x", frame, durationMs, notReadyMask);
+			// The link counters at the moment of a stall are the evidence; the
+			// periodic line can be up to 10 s away from it.
+			flushNetStats("stall");
 		}
 	}
 }
@@ -3132,7 +3142,17 @@ void ConnectionManager::noteHitch(UnsignedInt gapMs) {
 	}
 }
 
+void ConnectionManager::flushNetStats(const char *why) {
+	if (TheGameLogic == nullptr) {
+		return;
+	}
+	ReleaseLog("NETSTAT flush: %s", why ? why : "");
+	emitNetStats(TheGameLogic->getFrame(), m_lastStatsRunAhead, m_lastStatsFrameRate);
+}
+
 void ConnectionManager::emitNetStats(UnsignedInt frame, Int runAhead, Int frameRate) {
+	m_lastStatsRunAhead = runAhead;
+	m_lastStatsFrameRate = frameRate;
 	// links=[slot:retries+repeats/srttms ...] one entry per live connection.
 	// Retries fired the adaptive timer (probable loss); repeats are the deliberate
 	// per-packet frame-info redundancy and are normal whenever the round trip
