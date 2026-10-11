@@ -172,6 +172,7 @@ static const char *gadgetsToHide[] =
 	"ButtonRandomize",
 	// Radarvan Pick took Record Stats' place in that row, so it is covered too.
 	"ButtonMapVote",
+	"ButtonResume",
 
 	nullptr
 };

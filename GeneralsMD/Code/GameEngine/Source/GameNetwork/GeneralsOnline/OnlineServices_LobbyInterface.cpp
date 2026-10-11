@@ -79,7 +79,8 @@ enum class ELobbyUpdateField
 	HOST_ACTION_BULK_SLOT_UPDATE = 19,
 	HOST_ACTION_ARM_RESUME = 20,            // TheSuperHackers @feature bill-rich 15/09/2026 resume-from-replay arming (see ResumeFromReplay)
 	LOCAL_PLAYER_HAS_RESUME_REPLAY = 21,    // TheSuperHackers @feature bill-rich 24/09/2026 this member holds a usable copy of the resume source
-	LOBBY_ENFORCE_RANDOM = 22               // TheSuperHackers @feature bill-rich 27/09/2026 lock every slot to a random faction and team
+	LOBBY_ENFORCE_RANDOM = 22,              // TheSuperHackers @feature bill-rich 27/09/2026 lock every slot to a random faction and team
+	HOST_ACTION_ALIGN_SLOTS = 23            // TheSuperHackers @feature bill-rich 11/10/2026 resume-from-replay: the whole slot table at once
 };
 
 std::string Base64Encode(const std::vector<uint8_t>& data);
@@ -123,7 +124,7 @@ namespace
 	}
 }
 
-void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_Map(AsciiString strMap, AsciiString strMapPath, bool bIsOfficial, int newMaxPlayers, uint32_t mapCRC)
+void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_Map(AsciiString strMap, AsciiString strMapPath, bool bIsOfficial, int newMaxPlayers, uint32_t mapCRC, std::function<void(bool bSuccess)> onDone)
 {
 	// reset autostart if host changes anything (because ready flag will reset too)
 #if !defined(GENERALS_ONLINE_DISABLE_AUTO_ACCEPT)
@@ -157,13 +158,17 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_Map(AsciiString strM
 	std::string strPostData = j.dump();
 
 	// convert
-	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendPOSTRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, strPostData.c_str(), [=](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
+	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendPOSTRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, strPostData.c_str(), [onDone](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
 		{
-			
+			const bool bOK = bSuccess && statusCode >= 200 && statusCode < 300;
+			if (!bOK)
+				NetworkLog(ELogVerbosity::LOG_RELEASE, "UpdateCurrentLobby_Map failed: success=%d, status=%d", bSuccess, statusCode);
+			if (onDone)
+				onDone(bOK);
 		});
 }
 
-void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_LimitSuperweapons(bool bLimitSuperweapons)
+void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_LimitSuperweapons(bool bLimitSuperweapons, std::function<void(bool bSuccess)> onDone)
 {
 	// reset autostart if host changes anything (because ready flag will reset too)
 #if !defined(GENERALS_ONLINE_DISABLE_AUTO_ACCEPT)
@@ -181,9 +186,13 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_LimitSuperweapons(bo
 	std::string strPostData = j.dump();
 
 	// convert
-	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendPOSTRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, strPostData.c_str(), [=](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
+	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendPOSTRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, strPostData.c_str(), [onDone](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
 		{
-
+			const bool bOK = bSuccess && statusCode >= 200 && statusCode < 300;
+			if (!bOK)
+				NetworkLog(ELogVerbosity::LOG_RELEASE, "UpdateCurrentLobby_LimitSuperweapons failed: success=%d, status=%d", bSuccess, statusCode);
+			if (onDone)
+				onDone(bOK);
 		});
 }
 
@@ -210,7 +219,7 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_EnforceRandom(bool b
 		});
 }
 
-void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_StartingCash(UnsignedInt startingCashValue)
+void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_StartingCash(UnsignedInt startingCashValue, std::function<void(bool bSuccess)> onDone)
 {
 	// reset autostart if host changes anything (because ready flag will reset too)
 #if !defined(GENERALS_ONLINE_DISABLE_AUTO_ACCEPT)
@@ -228,9 +237,13 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_StartingCash(Unsigne
 	std::string strPostData = j.dump();
 
 	// convert
-	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendPOSTRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, strPostData.c_str(), [=](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
+	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendPOSTRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, strPostData.c_str(), [onDone](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
 		{
-
+			const bool bOK = bSuccess && statusCode >= 200 && statusCode < 300;
+			if (!bOK)
+				NetworkLog(ELogVerbosity::LOG_RELEASE, "UpdateCurrentLobby_StartingCash failed: success=%d, status=%d", bSuccess, statusCode);
+			if (onDone)
+				onDone(bOK);
 		});
 }
 
@@ -624,6 +637,66 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_BulkSlotUpdate(const
 			}
 			if (onDone)
 				onDone(bOK);
+		});
+}
+
+// TheSuperHackers @feature bill-rich 11/10/2026 Resume-from-replay: the whole slot table in one host action.
+// The service rebuilds its member table from this (humans moved, AI and empty slots re-created) or refuses
+// the lot with a reason; nothing is half-applied. The next lobby push shows the result everywhere.
+void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_AlignSlots(const std::vector<LobbySlotSpec>& slots, std::function<void(bool bSuccess, const std::string& error)> onDone)
+{
+#if !defined(GENERALS_ONLINE_DISABLE_AUTO_ACCEPT)
+	ClearAutoReadyCountdown();
+#endif
+	if (TheNGMPGame && TheNGMPGame->IsCountdownStarted())
+		TheNGMPGame->StopCountdown();
+
+	std::string strURI = std::format("{}/{}", NGMP_OnlineServicesManager::GetAPIEndpoint("Lobby"), m_CurrentLobby.lobbyID);
+	std::map<std::string, std::string> mapHeaders;
+
+	nlohmann::json j;
+	j["field"] = ELobbyUpdateField::HOST_ACTION_ALIGN_SLOTS;
+	nlohmann::json slotsArray = nlohmann::json::array();
+	for (const LobbySlotSpec& spec : slots)
+	{
+		nlohmann::json e;
+		e["slot_index"] = spec.slotIndex;
+		e["slot_state"] = spec.slotState;
+		if (spec.slotState == SlotState::SLOT_PLAYER)
+			e["user_id"] = spec.userID;
+		e["side"] = spec.side;
+		e["color"] = spec.color;
+		e["start_pos"] = spec.startPos;
+		e["team"] = spec.team;
+		slotsArray.push_back(e);
+	}
+	j["slots"] = slotsArray;
+	std::string strPostData = j.dump();
+	NetworkLog(ELogVerbosity::LOG_RELEASE, "UpdateCurrentLobby_AlignSlots: %s", strPostData.c_str());
+
+	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendPOSTRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, strPostData.c_str(), [onDone](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
+		{
+			bool bOK = bSuccess && statusCode >= 200 && statusCode < 300;
+			std::string error;
+			try
+			{
+				nlohmann::json jResp = nlohmann::json::parse(strBody);
+				if (bOK)
+					bOK = jResp.value("success", false);
+				error = jResp.value("error", std::string());
+			}
+			catch (...)
+			{
+				bOK = false;
+			}
+			if (!bOK)
+			{
+				if (error.empty())
+					error = std::format("service error {}", statusCode);
+				NetworkLog(ELogVerbosity::LOG_RELEASE, "UpdateCurrentLobby_AlignSlots failed: success=%d, status=%d, error=%s", bSuccess, statusCode, error.c_str());
+			}
+			if (onDone)
+				onDone(bOK, error);
 		});
 }
 

@@ -99,6 +99,20 @@ struct LobbyEntry
 	int latency = 0;
 };
 
+// TheSuperHackers @feature bill-rich 11/10/2026 One slot of a HOST_ACTION_ALIGN_SLOTS request: what the
+// slot must hold once the service has applied the whole arrangement. A human is named by user id, an
+// AI by its difficulty state; open and closed slots carry nothing else.
+struct LobbySlotSpec
+{
+	int slotIndex = -1;
+	int slotState = SlotState::SLOT_OPEN;
+	int64_t userID = -1;
+	int side = -1;
+	int color = -1;
+	int startPos = -1;
+	int team = -1;
+};
+
 enum class EJoinLobbyResult
 {
 	JoinLobbyResult_Success, // The room was joined.
@@ -226,10 +240,12 @@ public:
 	
 
 	// updates
-	void UpdateCurrentLobby_Map(AsciiString strMap, AsciiString strMapPath, bool bIsOfficial, int newMaxPlayers, uint32_t mapCRC = 0);
-	void UpdateCurrentLobby_LimitSuperweapons(bool bLimitSuperweapons);
+	// TheSuperHackers @feature bill-rich 11/10/2026 The three settings a resume has to align carry an optional
+	// completion callback, so the arm can run them one after another and only then send the arm.
+	void UpdateCurrentLobby_Map(AsciiString strMap, AsciiString strMapPath, bool bIsOfficial, int newMaxPlayers, uint32_t mapCRC = 0, std::function<void(bool bSuccess)> onDone = nullptr);
+	void UpdateCurrentLobby_LimitSuperweapons(bool bLimitSuperweapons, std::function<void(bool bSuccess)> onDone = nullptr);
 	void UpdateCurrentLobby_EnforceRandom(bool bEnforceRandom);
-	void UpdateCurrentLobby_StartingCash(UnsignedInt startingCashValue);
+	void UpdateCurrentLobby_StartingCash(UnsignedInt startingCashValue, std::function<void(bool bSuccess)> onDone = nullptr);
 
 	void UpdateCurrentLobby_HasMap();
 
@@ -247,6 +263,10 @@ public:
 	// TheSuperHackers @feature bill-rich 15/09/2026 Randomize: send the slots a roll changed (only the fields it
 	// changed, with the occupant's user id so the service can skip a slot that changed hands) and report the outcome.
 	void UpdateCurrentLobby_BulkSlotUpdate(const std::vector<RandomSlotAssignment>& changes, std::function<void(bool bSuccess)> onDone);
+
+	// TheSuperHackers @feature bill-rich 11/10/2026 Resume-from-replay: place every slot the way the recording
+	// had it, in one host action the service applies whole or not at all. On refusal `error` says why.
+	void UpdateCurrentLobby_AlignSlots(const std::vector<LobbySlotSpec>& slots, std::function<void(bool bSuccess, const std::string& error)> onDone);
 
 	// TheSuperHackers @feature bill-rich 15/09/2026 Resume-from-replay (see ResumeFromReplay). The host uploads
 	// the resume source, then arms with the handoff frame and the replay's seed (handoff 0 disarms);

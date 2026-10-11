@@ -1,81 +1,95 @@
-# Resume From Replay (FF Resume)
+# Resume From Replay
 
 ## What it is
 
-A host-only button in the LAN lobby that arms the last-recorded
-replay (`00000000.rep`) for a fast-forward replay. On match start
-the engine plays back the replay at the maximum FPS until it hits
-the live frame the recording ended at, then drops to normal play
-and hands control back to live commands.
+A dead match (a crash, a drop, a desync vote) is continued from the host's
+recording instead of being played again. The host arms the resume in the
+lobby, every client receives the same replay file, and on start everyone
+replays it in lockstep at full speed up to a handoff point ten seconds
+before the recording ended. The last ten seconds run at normal speed, a
+ten second countdown freezes the game, then live control is handed back
+and a fresh recording of the resumed match begins.
 
-In effect: "I crashed mid-game, let me resume from where we
-left off."
+Works in the LAN lobby and the online (GeneralsOnline) lobby.
 
-The button is de-armed automatically on entering the lobby
-(commit `11fc3d761`) so a host who has resumed once and then
-returns to the lobby normally doesn't accidentally re-resume the
-old recording.
+## How to use it
 
-## Why
+1. Do not start anything else first. The source is the host's last
+   recording (`00000000.rep`), and any new start overwrites it, including a
+   fifteen second abort.
+2. The player who hosted the dead match hosts again. Only that player can
+   resume: the recorded host is in slot 1 and the recording is theirs.
+3. Everyone who was in the match joins under the same name. Slots, factions,
+   colors, start positions and teams do not have to be right: the arm fixes
+   them. AI opponents are re-created at their recorded difficulty.
+4. The host presses **RESUME** (or types `/resume`).
+   - LAN: the lobby is reordered locally and the arm goes out in the game
+     options; the replay is pushed to the guests when the game starts.
+   - Online: the client walks the service through what differs from the
+     recording, in order, each step from the previous one's completion:
+     map, starting cash, superweapon limit, then the whole slot table in one
+     `HOST_ACTION_ALIGN_SLOTS` request (humans moved, AI and empty slots
+     re-created), then the replay upload, then the arm. The arm has to be
+     last because the service disarms on any of those changes.
+5. Guests see "Resume armed by the host ..." from the lobby state itself,
+   the button turns into **RESUME ARMED**, and online each guest downloads
+   the replay and reports in chat whether its copy matches.
+6. The host presses Start. Online the host cannot start until every human
+   holds the replay; if the lobby drifted since arming, Start says so and
+   asks for Resume again.
 
-Generals matches are long and one of the most common ways a LAN
-session ends is a single player's machine crashing or a flaky
-network drop. Without resume the only options are "start the
-match over" or "let it end with that player gone." FF Resume
-lets the lobby rebuild the disconnected player's session by
-replaying the host's recording fast-forward to the disconnect
-point.
+**CANCEL RESUME** (the same button while armed, or `/resume off`) makes the
+next start a fresh game. Changing the map, starting cash or superweapon
+limit disarms as well.
 
-This is also the foundation that LAN Observer Mode reused
-(`RECORDERMODETYPE_LIVE_OBSERVER`): the live-observer path is
-essentially "FF Resume but the host keeps appending to the `.rep`
-file while we play it back."
+## What can refuse, and what it tells you
+
+Every refusal names the problem and who fixes it, in the lobby chat:
+
+| Refusal | Fix |
+|---|---|
+| the last replay is too short / unreadable / from another version | nothing in the lobby helps; the host's last recording is what resumes |
+| the host's copy of the map differs from the one the match was played on | host reinstalls that map |
+| a recorded player is not in the lobby, or the count differs | get exactly those players in, press Resume again |
+| only X, the host of the recorded game, can resume it | X hosts |
+| the service refused the map / cash / limit change | host sets it by hand, presses Resume again |
+| the lobby could not be arranged like the recording (reason) | everyone takes the slot they had, host presses Resume again |
+| the replay upload failed | press Resume again; the service caps the held replay size |
+| a guest's download failed or does not match | host presses Cancel Resume, then Resume |
+| in game: the replay ends before the handoff | that client leaves; everyone else validated the same file, so this is a torn copy |
+
+All of it is also written to ReleaseLog (`Resume: ...` lines) and uploaded
+with the match telemetry.
 
 ## Code surface
 
-Big initial commit (`a2b916c0c`) — about 600 lines of engine code
-plus a regenerated `.wnd` and `generals.csf`:
-
-- `GeneralsMD/Code/GameEngine/Source/Common/Recorder.cpp` — the
-  bulk of the new logic. Adds the FF-resume playback mode,
-  `m_TiVOFastMode` use, and the frame-target / catch-up handling
-  that LAN Observer Mode later piggybacked on.
-- `Core/GameEngine/Source/Common/FramePacer.cpp` — FPS boost
-  during catch-up.
-- `Core/GameEngine/Source/GameNetwork/Network.cpp` — frame-target
-  coordination so commands queue against the catch-up cursor
-  instead of the live wallclock.
-- `GeneralsMD/Code/GameEngine/Source/GameClient/GUI/GUICallbacks/Menus/LanGameOptionsMenu.cpp`
-  — the lobby button and the host-only arm path. The de-arm-on-
-  lobby-entry fix is in this file (`11fc3d761`).
-- `assets/Data/English/generals.csf` — adds the resume-button
-  GameText strings.
-- `MISMATCH_NOTES.md` — the original commit also wrote the
-  upstream mismatch-notes document (now lives in repo root).
+- `GeneralsMD/Code/GameEngine/Source/GameNetwork/ResumeFromReplay.cpp` ,
+  the shared checks: source copy and header, roster, slot-by-slot match,
+  handoff computation, the game start validation.
+- `GeneralsMD/.../Menus/WOLGameSetupMenu.cpp`: online arming
+  (`wolTryArmResumeFromReplay`, `wolResumeArmStep`), the guest download,
+  the button (`wolUpdateResumeButton`).
+- `GeneralsMD/.../Menus/LanGameOptionsMenu.cpp`: LAN arming
+  (`tryArmResumeFromReplay`, `reorderLobbyForResume`), the button.
+- `GeneralsMD/.../GeneralsOnline/OnlineServices_LobbyInterface.cpp` ,
+  `UpdateCurrentLobby_AlignSlots`, upload and download of the source,
+  `UpdateCurrentLobby_ArmResume`.
+- Services: `LobbyController.cs` `HOST_ACTION_ALIGN_SLOTS` (23),
+  `LobbyManager.cs` `Lobby.AlignSlots` (refuses the whole request unless
+  all eight slots are named, every human placed once, the owner in slot 0);
+  `UpdateMap` / `UpdateStartingCash` / `UpdateLimitSuperweapons` disarm only
+  on a real change.
+- `GeneralsMD/Code/GameEngine/Source/Common/Recorder.cpp`: the catch-up
+  playback, lead-in, freeze and handoff.
+- Layouts: `LanGameOptionsMenu.wnd:ButtonResumeFromReplay`,
+  `GameSpyGameOptionsMenu.wnd:ButtonResume` (bottom row, between Randomize
+  and Buddies).
 
 ## Concerns
 
-- **Mismatch risk.** Resume replays the recording on the host
-  binary in its current state; if any sim behavior has changed
-  since the recording (e.g. an AI fix on a newer Zulu binary), the
-  replay diverges. The `ZULU` magic + feature-version block in the
-  replay header (see [tactical-ai.md](tactical-ai.md)) is what
-  prevents this: a Zulu binary playing back a replay tagged with
-  a newer feature version refuses, and a binary playing back its
-  own version replay is by definition consistent.
-- **Save / replay format.** No on-disk format changes from the FF
-  Resume work itself. The `m_TiVOFastMode` flag is in-memory only.
-- **Lobby button visibility.** Host-only. Non-host clients don't
-  see the button. If a non-host had the most-recent `.rep`, they
-  can't resume — only the host can, because the resumed match
-  re-broadcasts as a fresh game with the host as the recording
-  origin.
-- **Single-replay assumption.** FF Resume always arms
-  `00000000.rep`, the last-recorded replay slot. If the engine
-  later supports rotating through multiple replay slots, the
-  button needs a picker or has to be reworked.
-- **Catch-up FPS spike.** FPS during catch-up is boosted (the
-  exact value lives in `Recorder.cpp`). On weaker machines this
-  can briefly stress the CPU; the catch-up duration is bounded by
-  the replay length and is over within seconds for a typical
-  disconnect.
+- **Version lock.** The replay must come from the same build (version, exe
+  CRC, INI CRC); a resume across builds is refused up front.
+- **One source file.** `Resume.rep` in the replay directory is the only
+  source; the host's `00000000.rep` is copied there on every arm.
+- **Catch-up CPU.** The fast-forward runs as fast as the slowest machine
+  simulates; lockstep still waits for every peer each frame.

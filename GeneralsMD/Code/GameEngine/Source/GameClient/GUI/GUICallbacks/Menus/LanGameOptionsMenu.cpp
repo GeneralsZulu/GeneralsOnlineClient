@@ -130,6 +130,8 @@ static NameKeyType buttonRandomizeID = NAMEKEY_INVALID;
 static NameKeyType buttonEmoteID = NAMEKEY_INVALID;
 static NameKeyType buttonSelectMapID = NAMEKEY_INVALID;
 static NameKeyType buttonMapVoteID = NAMEKEY_INVALID;
+// TheSuperHackers @feature bill-rich 11/10/2026 Resume-from-replay button, back on the layout: the host arms or cancels, guests see the state.
+static NameKeyType buttonResumeFromReplayID = NAMEKEY_INVALID;
 static NameKeyType checkboxLimitSuperweaponsID = NAMEKEY_INVALID;
 static NameKeyType checkboxEnforceRandomID = NAMEKEY_INVALID;
 static NameKeyType comboBoxStartingCashID = NAMEKEY_INVALID;
@@ -144,6 +146,26 @@ static GameWindow *buttonRandomize = nullptr;
 static Int s_randomizeCount = 0;
 static GameWindow *buttonSelectMap = nullptr;
 static GameWindow *buttonMapVote = nullptr;
+static GameWindow *buttonResumeFromReplay = nullptr;
+
+// What the Resume button says: RESUME or CANCEL RESUME for the host, RESUME ARMED
+// (disabled) for a guest while one is pending, so the state is visible without the chat.
+static void lanUpdateResumeButton()
+{
+	if (buttonResumeFromReplay == nullptr || TheLAN == nullptr)
+		return;
+	const Bool host = TheLAN->AmIHost();
+	const Bool armed = TheLAN->GetMyGame() != nullptr && TheLAN->GetMyGame()->isResumeArmed();
+	buttonResumeFromReplay->winEnable(host);
+	if (host)
+		buttonResumeFromReplay->winSetText(armed
+			? TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeCancel", L"CANCEL RESUME")
+			: TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeFromReplay", L"RESUME"));
+	else
+		buttonResumeFromReplay->winSetText(armed
+			? TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeArmedButton", L"RESUME ARMED")
+			: TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeFromReplay", L"RESUME"));
+}
 static GameWindow *buttonEmote = nullptr;
 static GameWindow *textEntryChat = nullptr;
 static GameWindow *textEntryMapDisplay = nullptr;
@@ -859,6 +881,7 @@ static void disarmResumeFromReplay()
 		TheLAN->RequestGameOptions(GenerateGameOptionsString(), true);
 		lanSystemChat(TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeDisarmed", L"Resume disarmed: the next start is a fresh game"));
 	}
+	lanUpdateResumeButton();
 }
 
 // A host change to a setting the recording fixes (map, starting cash, superweapon limit)
@@ -869,6 +892,7 @@ static void lanDisarmResumeForSettingsChange()
 		return;
 	lanClearResumeArm();
 	lanSystemChat(TheGameText->FETCH_OR_SUBSTITUTE("GUI:ResumeDisarmedSettings", L"Resume disarmed: the game settings changed"));
+	lanUpdateResumeButton();
 }
 
 // Guests: the arm arrives in the host's game options (RH=). The file itself is sent when the
@@ -881,6 +905,7 @@ static void lanCheckResumeArmChange(LANGameInfo *game)
 	if (handoff == s_lanLastSeenResumeHandoff)
 		return;
 	s_lanLastSeenResumeHandoff = handoff;
+	lanUpdateResumeButton();
 	if (handoff != 0)
 		lanLocalSystemChat(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ResumeArmedGuest",
 			L"Resume armed by the host: the replay is sent when the game starts and replays to %ls", ResumeFromReplay::formatGameTime(handoff).str()));
@@ -941,6 +966,7 @@ static void tryArmResumeFromReplay()
 
 	lanSystemChat(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ResumeArmed",
 		L"Resume armed: the next start replays the last match to %ls, then hands control back", ResumeFromReplay::formatGameTime(handoff).str()));
+	lanUpdateResumeButton();
 }
 
 void InitLanGameGadgets()
@@ -956,6 +982,7 @@ void InitLanGameGadgets()
 	buttonEmoteID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:ButtonEmote" );
 	buttonSelectMapID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:ButtonSelectMap" );
 	buttonMapVoteID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:ButtonMapVote" );
+	buttonResumeFromReplayID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:ButtonResumeFromReplay" );
   checkboxLimitSuperweaponsID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:CheckboxLimitSuperweapons" );
   checkboxEnforceRandomID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:CheckboxEnforceRandom" );
   comboBoxStartingCashID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:ComboBoxStartingCash" );
@@ -977,6 +1004,8 @@ void InitLanGameGadgets()
 	buttonRandomize = TheWindowManager->winGetWindowFromId( parentLanGameOptions, buttonRandomizeID ); // absent from older .wnd layouts
 	if (buttonRandomize)
 		buttonRandomize->winSetText(TheGameText->FETCH_OR_SUBSTITUTE("GUI:Randomize", L"Randomize")); // no .csf change needed
+	buttonResumeFromReplay = TheWindowManager->winGetWindowFromId( parentLanGameOptions, buttonResumeFromReplayID ); // absent from older .wnd layouts
+	lanUpdateResumeButton();
 	buttonBack = TheWindowManager->winGetWindowFromId( parentLanGameOptions,  buttonBackID);
 	DEBUG_ASSERTCRASH(buttonBack, ("Could not find the buttonBack"));
 	listboxChatWindowLanGame = TheWindowManager->winGetWindowFromId( parentLanGameOptions, listboxChatWindowLanGameID );
@@ -1096,6 +1125,7 @@ void DeinitLanGameGadgets()
 	buttonStart = nullptr;
 	buttonBack = nullptr;
 	buttonRandomize = nullptr;
+	buttonResumeFromReplay = nullptr;
 	listboxChatWindowLanGame = nullptr;
 	textEntryChat = nullptr;
 	textEntryMapDisplay = nullptr;
@@ -1192,6 +1222,7 @@ void LanGameOptionsMenuInit( WindowLayout *layout, void *userData )
 			buttonMapVote->winEnable( FALSE );
 		if (buttonRandomize)
 			buttonRandomize->winEnable( FALSE );
+		lanUpdateResumeButton();
     checkboxLimitSuperweapons->winEnable( FALSE ); // Can look but only host can touch
     if (checkboxEnforceRandom)
       checkboxEnforceRandom->winEnable( FALSE );   // Ditto
@@ -1706,6 +1737,17 @@ WindowMsgHandledType LanGameOptionsMenuSystem( GameWindow *window, UnsignedInt m
 				else if ( controlID == buttonMapVoteID )
 				{
 					handleMapVoteClick();
+				}
+				else if ( controlID == buttonResumeFromReplayID )
+				{
+					// TheSuperHackers @feature bill-rich 11/10/2026 Same as /resume and /resume off.
+					if (TheLAN->AmIHost())
+					{
+						if (TheLAN->GetMyGame() && TheLAN->GetMyGame()->isResumeArmed())
+							disarmResumeFromReplay();
+						else
+							tryArmResumeFromReplay();
+					}
 				}
 				else if ( controlID == buttonSelectMapID )
 				{
