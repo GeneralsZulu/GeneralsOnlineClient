@@ -729,6 +729,16 @@ void WebSocket::Tick()
                         if (m_bReconnecting)
                         {
                             NetworkLog(ELogVerbosity::LOG_RELEASE, "[WebSocket] Re-Connected");
+
+                            // TheSuperHackers @bugfix bill-rich 12/10/2026 Lobby pushes sent while the
+                            // socket was down are gone for good, and a guest that missed one sits on a
+                            // stale slot table (and never sees a resume arm). Re-pull the lobby now.
+                            NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+                            if (pLobbyInterface != nullptr && pLobbyInterface->IsInLobby())
+                            {
+                                ReleaseLog("GO lobby: websocket reconnected, refreshing the lobby");
+                                pLobbyInterface->UpdateRoomDataCache(nullptr);
+                            }
                         }
                         else
                         {
