@@ -191,6 +191,12 @@ public:
 	void SendACPacket(uint32_t userID, const void* pData, uint32_t dataLen);
 
 	void StartConnectionSignalling(const char* szMiddlewareID, int64_t remoteUserID, uint16_t preferredPort);
+	// TheSuperHackers @bugfix bill-rich 11/10/2026 A guest's TURN credentials
+	// arrive in the join response, usually after the lobby push that created this
+	// mesh and started signalling, so every connection began with no relay.
+	// Hands the credentials to the socket library and restarts the connections
+	// that are not up yet so they can gather relay candidates.
+	void ApplyTurnCredentials(const std::string& strUsername, const std::string& strToken);
 	void DisconnectUser(int64_t remoteUserID);
 	void Disconnect();
 

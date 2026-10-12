@@ -2,6 +2,7 @@
 #include "GameNetwork/GeneralsOnline/json.hpp"
 #include "GameNetwork/GeneralsOnline/HTTP/HTTPManager.h"
 #include "GameNetwork/GeneralsOnline/OnlineServices_Init.h"
+#include "GameNetwork/GeneralsOnline/NetworkMesh.h"
 #include "Common/ReleaseLog.h"
 #include "GameClient/MapUtil.h"
 #include "GameLogic/GameLogic.h"
@@ -1590,6 +1591,11 @@ void NGMP_OnlineServices_LobbyInterface::JoinLobby(LobbyEntry lobbyInfo, std::st
 							m_strTURNUsername = resp.turn_username;
 							m_strTURNToken = resp.turn_token;
 							NetworkLog(ELogVerbosity::LOG_DEBUG, "Got TURN username: %s, token: %s", m_strTURNUsername.c_str(), m_strTURNToken.c_str());
+							// The lobby push that created the mesh has usually beaten this response.
+							if (NetworkMesh* pMesh = NGMP_OnlineServicesManager::GetNetworkMesh())
+							{
+								pMesh->ApplyTurnCredentials(m_strTURNUsername, m_strTURNToken);
+							}
 						}
 						catch (...)
 						{
@@ -1860,6 +1866,10 @@ void NGMP_OnlineServices_LobbyInterface::CreateLobby(UnicodeString strLobbyName,
 						ReleaseLog("GO lobby: create lobby result=%d id=%lld turnCreds=%s", (int)resp.result, (long long)resp.lobby_id,
 							(m_strTURNUsername.empty() || m_strTURNToken.empty()) ? "NONE" : "present");
 
+						if (NetworkMesh* pMesh = NGMP_OnlineServicesManager::GetNetworkMesh())
+						{
+							pMesh->ApplyTurnCredentials(m_strTURNUsername, m_strTURNToken);
+						}
 
 						if (resp.result == ECreateLobbyResponseResult::SUCCEEDED)
 						{

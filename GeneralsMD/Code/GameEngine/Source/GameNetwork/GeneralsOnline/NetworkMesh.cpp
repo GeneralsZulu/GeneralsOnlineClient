@@ -888,6 +888,59 @@ void NetworkMesh::SendACPacket(uint32_t userID, const void* pData, uint32_t data
 	}
 }
 
+void NetworkMesh::ApplyTurnCredentials(const std::string& strUsername, const std::string& strToken)
+{
+	if (strUsername.empty() || strToken.empty())
+	{
+		return;
+	}
+	if (strUsername == m_strTurnUsername && strToken == m_strTurnToken)
+	{
+		return;
+	}
+
+	m_strTurnUsername = strUsername;
+	m_strTurnToken = strToken;
+	m_strTurnUsernameString = std::format("{},{}", m_strTurnUsername, m_strTurnUsername);
+	m_strTurnTokenString = std::format("{},{}", m_strTurnToken, m_strTurnToken);
+	SteamNetworkingUtils()->SetGlobalConfigValueString(k_ESteamNetworkingConfig_P2P_TURN_UserList, m_strTurnUsernameString.c_str());
+	SteamNetworkingUtils()->SetGlobalConfigValueString(k_ESteamNetworkingConfig_P2P_TURN_PassList, m_strTurnTokenString.c_str());
+
+	// Connections already in flight were started without a relay. The ones that
+	// are not up yet are restarted by the side that signals (the higher user id),
+	// exactly as a failed attempt is retried.
+	int pending = 0;
+	int restarted = 0;
+	std::shared_ptr<WebSocket> pWS = NGMP_OnlineServicesManager::GetWebSocket();
+	NGMP_OnlineServices_AuthInterface* pAuthInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_AuthInterface>();
+	if (pWS && pAuthInterface != nullptr)
+	{
+		const int64_t myUserID = pAuthInterface->GetUserID();
+		std::vector<int64_t> vecRestart;
+		{
+			std::lock_guard<std::recursive_mutex> lock(m_mapConnectionsMutex);
+			for (auto& kvPair : m_mapConnections)
+			{
+				if (kvPair.second.GetState() == EConnectionState::CONNECTED_DIRECT)
+				{
+					continue;
+				}
+				++pending;
+				if (myUserID > kvPair.first)
+				{
+					vecRestart.push_back(kvPair.first);
+				}
+			}
+		}
+		for (int64_t remoteUserID : vecRestart)
+		{
+			pWS->SendData_RequestSignalling(remoteUserID);
+			++restarted;
+		}
+	}
+	ReleaseLog("GO mesh: TURN credentials applied after mesh start, pending=%d restarted=%d", pending, restarted);
+}
+
 void NetworkMesh::StartConnectionSignalling(const char* szMiddlewareID, int64_t remoteUserID, uint16_t preferredPort)
 {
 	// Thread safety: Lock connection map during access
