@@ -461,6 +461,18 @@ Int parseLogsUrl(char *args[], int num)
 	return 1;
 }
 
+// -crashUrl <url>: where crash reports go (see GlobalData::m_crashUrl), for
+// pointing a test client at a local receiver.
+Int parseCrashUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_crashUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
 // TheSuperHackers @feature Path to a JSON-lines file that batch replay
 // simulation appends a per-replay verdict to (OK / OK_RETAIL_UNCHECKED /
 // DESYNC / INCOMPLETE / CANT_OPEN). Forwarded to worker processes when
@@ -1432,6 +1444,7 @@ static CommandLineParam paramsForStartup[] =
 
 	// Override the client log-upload endpoint (GameData.ini LogsUrl).
 	{ "-logsUrl", parseLogsUrl },
+	{ "-crashUrl", parseCrashUrl },
 
 	// Path to a JSON-lines result log for batch replay simulation. Each replay
 	// appends one line with its verdict (OK / OK_RETAIL_UNCHECKED / DESYNC /

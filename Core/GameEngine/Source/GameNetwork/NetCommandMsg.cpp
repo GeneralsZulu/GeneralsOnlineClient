@@ -1215,6 +1215,28 @@ NetCommandMsg::Select NetFrameResendRequestCommandMsg::getSmallNetPacketSelect()
 }
 
 //-------------------------
+// NetRouterWaitCommandMsg
+//-------------------------
+NetRouterWaitCommandMsg::NetRouterWaitCommandMsg() {
+	m_commandType = NETCOMMANDTYPE_ROUTERWAIT;
+	m_waitFrame = 0;
+	m_waitMask = 0;
+}
+
+NetRouterWaitCommandMsg::~NetRouterWaitCommandMsg() {
+}
+
+NetCommandMsg::Select NetRouterWaitCommandMsg::getSmallNetPacketSelect() const {
+	Select select;
+	select.useCommandType = 1;
+	select.useRelay = 1;
+	select.useFrame = 0;
+	select.usePlayerId = 1;
+	select.useCommandId = 0;
+	return select;
+}
+
+//-------------------------
 // NetLoadCompleteCommandMsg
 //-------------------------
 NetLoadCompleteCommandMsg::NetLoadCompleteCommandMsg() {

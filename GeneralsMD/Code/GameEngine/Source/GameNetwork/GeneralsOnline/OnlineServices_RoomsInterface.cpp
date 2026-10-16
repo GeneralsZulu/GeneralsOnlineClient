@@ -589,217 +589,31 @@ static bool JSONGetAsObject(nlohmann::json& jsonObject, T* outMsg)
 }
 
 //static std::string strSignal = "str:1 ";
-void WebSocket::Tick()
+// One websocket frame in and dispatched. The receive buffer is a member
+// rather than 32 KB of stack zeroed on every tick.
+CURLcode WebSocket::RecvOne()
 {
-    if (!AcquireLock())
-    {
-        return;
-    }
-
-	// attempting to reconnect?
-	if (m_bReconnecting)
+	static constexpr size_t WS_RECV_CHUNK = 8196 * 4;
+	if (m_recvBuffer.size() < WS_RECV_CHUNK + 1)
 	{
-		int64_t currTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::utc_clock::now().time_since_epoch()).count();
-
-		int maxReconnectAttempts = (TheNGMPGame != nullptr && TheNGMPGame->isGameInProgress()) ? maxReconnectAttempts_Ingame : maxReconnectAttempts_Frontend;
-		if (m_numReconnectAttempts >= maxReconnectAttempts)
-		{
-			// fully disconnect
-            NetworkLog(ELogVerbosity::LOG_RELEASE, "Going to teardown (reconnect 1)");
-            NGMP_OnlineServicesManager::GetInstance()->SetPendingFullTeardown(EGOTearDownReason::LOST_CONNECTION);
-            m_bConnected = false;
-            m_vecWSPartialBuffer.clear();
-
-            // clear reconnection flags
-            m_bReconnecting = false;
-            m_numReconnectAttempts = 0;
-            m_lastReconnectAttempt = -1;
-		}
-		else
-		{
-			int timeBetweenReconnectAttempts = (TheNGMPGame != nullptr && TheNGMPGame->isGameInProgress()) ? timeBetweenReconnectAttempts_Ingame : timeBetweenReconnectAttempts_Frontend;
-
-            if (currTime - m_lastReconnectAttempt >= timeBetweenReconnectAttempts)
-            {
-                m_lastReconnectAttempt = currTime;
-                ++m_numReconnectAttempts;
-
-				Connect(m_strWebsocketAddr.c_str(), true, nullptr);
-            }
-		}
+		m_recvBuffer.resize(WS_RECV_CHUNK + 1);
 	}
+	char* bufferThisRecv = m_recvBuffer.data();
+	const size_t bufferCapacity = WS_RECV_CHUNK;
 
-
-
-	/*
-	if (strSignal.length() == 6)
-	{
-		for (int i = 0; i < 5000 - 6; ++i)
-		{
-			if (i == 5000 - 6 - 1)
-			{
-				strSignal += "+";
-			}
-			else
-			{
-				strSignal += i % 2 == 0 ? 'a' : 'b';
-			}
-		}
-	}
-
-	WebSocket* pWS = NGMP_OnlineServicesManager::GetWebSocket();;
-	pWS->SendData_Signalling(strSignal);
-	*/
-
-	// ping?
-	int64_t currTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::utc_clock::now().time_since_epoch()).count();
-	if ((currTime - m_lastPing) > m_timeBetweenUserPings)
-	{
-		m_lastPing = currTime;
-		Ping();
-	};
-
-    int numReqs = 0;
-    curl_multi_perform(m_pMulti, &numReqs);
-    curl_multi_poll(m_pMulti, NULL, 0, 0, NULL);
-
-    {
-        // Check for completed requests (initial connection only)
-        int msgq = 0;
-        CURLMsg* m = nullptr;
-        while ((m = curl_multi_info_read(m_pMulti, &msgq)) != nullptr)
-        {
-            if (m->msg == CURLMSG_DONE)
-            {
-                CURL* pCurlHandle = m->easy_handle;
-
-                if (pCurlHandle == m_pCurlWS) // shouldnt hear about anything else
-                {
-					int httpResponseCode = -1;
-					curl_easy_getinfo(pCurlHandle, CURLINFO_RESPONSE_CODE, &httpResponseCode);
-
-					/* Check for errors */
-                    if (m->data.result != CURLE_OK)
-                    {
-                        m_bConnected = false;
-                        m_vecWSPartialBuffer.clear();
-                        NetworkLog(ELogVerbosity::LOG_RELEASE, "[WebSocket] Failed to connect (%d - %s)", m->data.result, curl_easy_strerror(m->data.result));
-
-                        // reconnecting? give up eventually
-                        if (m_bReconnecting)
-                        {
-                            int maxReconnectAttempts = (TheNGMPGame != nullptr && TheNGMPGame->isGameInProgress()) ? maxReconnectAttempts_Ingame : maxReconnectAttempts_Frontend;
-
-                            if (m_numReconnectAttempts >= maxReconnectAttempts || (m->data.result == CURLE_HTTP_RETURNED_ERROR && httpResponseCode == 205)) // 205 = need full teardown
-                            {
-                                if (httpResponseCode == 205)
-                                {
-                                    NetworkLog(ELogVerbosity::LOG_RELEASE, "Going to teardown (reconnect 205)");
-                                }
-                                else
-                                {
-                                    NetworkLog(ELogVerbosity::LOG_RELEASE, "Going to teardown (reconnect 2)");
-                                }
-
-                                NGMP_OnlineServicesManager::GetInstance()->SetPendingFullTeardown(EGOTearDownReason::LOST_CONNECTION);
-                                m_bConnected = false;
-                                m_vecWSPartialBuffer.clear();
-
-                                // clear reconnection flags
-                                m_bReconnecting = false;
-                                m_numReconnectAttempts = 0;
-                                m_lastReconnectAttempt = -1;
-                            }
-                        }
-                        else // give up immediately
-                        {
-                            NetworkLog(ELogVerbosity::LOG_RELEASE, "Going to teardown (initial connect)");
-                            NGMP_OnlineServicesManager::GetInstance()->SetPendingFullTeardown(EGOTearDownReason::LOST_CONNECTION);
-                            m_bConnected = false;
-                            m_vecWSPartialBuffer.clear();
-
-                            // clear reconnection flags
-                            m_bReconnecting = false;
-                            m_numReconnectAttempts = 0;
-                            m_lastReconnectAttempt = -1;
-                        }
-                    }
-                    else
-                    {
-                        if (m_bReconnecting)
-                        {
-                            NetworkLog(ELogVerbosity::LOG_RELEASE, "[WebSocket] Re-Connected");
-
-                            // TheSuperHackers @bugfix bill-rich 12/10/2026 Lobby pushes sent while the
-                            // socket was down are gone for good, and a guest that missed one sits on a
-                            // stale slot table (and never sees a resume arm). Re-pull the lobby now.
-                            NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
-                            if (pLobbyInterface != nullptr && pLobbyInterface->IsInLobby())
-                            {
-                                ReleaseLog("GO lobby: websocket reconnected, refreshing the lobby");
-                                pLobbyInterface->UpdateRoomDataCache(nullptr);
-                            }
-                        }
-                        else
-                        {
-                            NetworkLog(ELogVerbosity::LOG_RELEASE, "[WebSocket] Connected");
-                        }
-
-                        /* connected and ready */
-                        m_bConnected = true;
-                        m_vecWSPartialBuffer.clear();
-
-                        // clear reconnection flags
-                        m_bReconnecting = false;
-                        m_numReconnectAttempts = 0;
-                        m_lastReconnectAttempt = -1;
-
-                        // connecting is as good as a pong
-                        m_lastPong = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::utc_clock::now().time_since_epoch()).count();
-
-                        if (m_fnWebsocketConnectedCallback != nullptr)
-                        {
-                            m_fnWebsocketConnectedCallback();
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (!m_bConnected)
-    {
-        ReleaseLock();
-        return;
-    }
-
-	// send anything we have buffered (e.g. things that were queued while not connected)
-	for (std::string& strPayload : m_vecQueuedOutboungMsgs)
-	{
-        size_t sent;
-        CURLcode result = curl_ws_send(m_pCurlWS, strPayload.c_str(), strPayload.length(), &sent, 0, CURLWS_BINARY);
-
-        if (result != CURLE_OK)
-        {
-            NetworkLog(ELogVerbosity::LOG_RELEASE, "curl_ws_send() failed: %s\n", curl_easy_strerror(result));
-        }
-	}
-	m_vecQueuedOutboungMsgs.clear();
-
-	// do recv
 	size_t rlen = 0;
 	const struct curl_ws_frame* meta = nullptr;
-	char bufferThisRecv[8196 * 4] = { 0 };
 
 	CURLcode ret = CURL_LAST;
-	ret = curl_ws_recv(m_pCurlWS, bufferThisRecv, sizeof(bufferThisRecv), &rlen, &meta);
+	ret = curl_ws_recv(m_pCurlWS, bufferThisRecv, bufferCapacity, &rlen, &meta);
 
 	// SECURITY FIX: Validate rlen is within buffer bounds
-	if (rlen > sizeof(bufferThisRecv))
+	if (rlen > bufferCapacity)
 	{
-		NetworkLog(ELogVerbosity::LOG_RELEASE, "[WebSocket] Received data size %zu exceeds buffer size %zu, discarding", rlen, sizeof(bufferThisRecv));
-		return;
+		NetworkLog(ELogVerbosity::LOG_RELEASE, "[WebSocket] Received data size %zu exceeds buffer size %zu, discarding", rlen, bufferCapacity);
+		return CURLE_AGAIN;
 	}
+	bufferThisRecv[rlen] = '\0'; // the debug log below prints it as a string
 
 	if (ret != CURLE_RECV_ERROR && ret != CURL_LAST && ret != CURLE_AGAIN && ret != CURLE_GOT_NOTHING)
 	{
@@ -823,7 +637,7 @@ void WebSocket::Tick()
 				{
 					NetworkLog(ELogVerbosity::LOG_RELEASE, "[WebSocket] Partial buffer overflow, discarding message");
 					m_vecWSPartialBuffer.clear();
-					return;
+					return CURLE_AGAIN;
 				}
 				
 				// SECURITY FIX: Store old size BEFORE resize to avoid off-by-one error in memcpy
@@ -1129,7 +943,7 @@ void WebSocket::Tick()
 											ReleaseLog("GO meshcheck id=%lld attempt=%d connected=%d/%d states=[%s] (3=CONNECTED)",
 												(long long)meshCheckID, meshCheckAttempt, (int)connectivityMap.size(), expected, states.c_str());
 											if ((int)connectivityMap.size() < expected)
-												NetDiag_OnMeshIncomplete("guest", (int)connectivityMap.size(), expected);
+												NetDiag_OnMeshIncomplete("guest", (int)connectivityMap.size(), expected, (int)meshCheckAttempt);
 										}
 
 										// send response
@@ -1692,6 +1506,227 @@ void WebSocket::Tick()
             sentry_capture_event(sentry_value_new_message_event(SENTRY_LEVEL_ERROR, "WEBSOCKET_DISCONNECT_ERROR", sentryMsg.str()));
         }
 #endif
+	}
+
+
+	return ret;
+}
+
+void WebSocket::Tick()
+{
+    if (!AcquireLock())
+    {
+        return;
+    }
+
+	// attempting to reconnect?
+	if (m_bReconnecting)
+	{
+		int64_t currTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::utc_clock::now().time_since_epoch()).count();
+
+		int maxReconnectAttempts = (TheNGMPGame != nullptr && TheNGMPGame->isGameInProgress()) ? maxReconnectAttempts_Ingame : maxReconnectAttempts_Frontend;
+		if (m_numReconnectAttempts >= maxReconnectAttempts)
+		{
+			// fully disconnect
+            NetworkLog(ELogVerbosity::LOG_RELEASE, "Going to teardown (reconnect 1)");
+            NGMP_OnlineServicesManager::GetInstance()->SetPendingFullTeardown(EGOTearDownReason::LOST_CONNECTION);
+            m_bConnected = false;
+            m_vecWSPartialBuffer.clear();
+
+            // clear reconnection flags
+            m_bReconnecting = false;
+            m_numReconnectAttempts = 0;
+            m_lastReconnectAttempt = -1;
+		}
+		else
+		{
+			int timeBetweenReconnectAttempts = (TheNGMPGame != nullptr && TheNGMPGame->isGameInProgress()) ? timeBetweenReconnectAttempts_Ingame : timeBetweenReconnectAttempts_Frontend;
+
+            if (currTime - m_lastReconnectAttempt >= timeBetweenReconnectAttempts)
+            {
+                m_lastReconnectAttempt = currTime;
+                ++m_numReconnectAttempts;
+
+				Connect(m_strWebsocketAddr.c_str(), true, nullptr);
+            }
+		}
+	}
+
+
+
+	/*
+	if (strSignal.length() == 6)
+	{
+		for (int i = 0; i < 5000 - 6; ++i)
+		{
+			if (i == 5000 - 6 - 1)
+			{
+				strSignal += "+";
+			}
+			else
+			{
+				strSignal += i % 2 == 0 ? 'a' : 'b';
+			}
+		}
+	}
+
+	WebSocket* pWS = NGMP_OnlineServicesManager::GetWebSocket();;
+	pWS->SendData_Signalling(strSignal);
+	*/
+
+	// ping?
+	int64_t currTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::utc_clock::now().time_since_epoch()).count();
+	if ((currTime - m_lastPing) > m_timeBetweenUserPings)
+	{
+		m_lastPing = currTime;
+		Ping();
+	};
+
+    int numReqs = 0;
+    curl_multi_perform(m_pMulti, &numReqs);
+    curl_multi_poll(m_pMulti, NULL, 0, 0, NULL);
+
+    {
+        // Check for completed requests (initial connection only)
+        int msgq = 0;
+        CURLMsg* m = nullptr;
+        while ((m = curl_multi_info_read(m_pMulti, &msgq)) != nullptr)
+        {
+            if (m->msg == CURLMSG_DONE)
+            {
+                CURL* pCurlHandle = m->easy_handle;
+
+                if (pCurlHandle == m_pCurlWS) // shouldnt hear about anything else
+                {
+					int httpResponseCode = -1;
+					curl_easy_getinfo(pCurlHandle, CURLINFO_RESPONSE_CODE, &httpResponseCode);
+
+					/* Check for errors */
+                    if (m->data.result != CURLE_OK)
+                    {
+                        m_bConnected = false;
+                        m_vecWSPartialBuffer.clear();
+                        NetworkLog(ELogVerbosity::LOG_RELEASE, "[WebSocket] Failed to connect (%d - %s)", m->data.result, curl_easy_strerror(m->data.result));
+
+                        // reconnecting? give up eventually
+                        if (m_bReconnecting)
+                        {
+                            int maxReconnectAttempts = (TheNGMPGame != nullptr && TheNGMPGame->isGameInProgress()) ? maxReconnectAttempts_Ingame : maxReconnectAttempts_Frontend;
+
+                            if (m_numReconnectAttempts >= maxReconnectAttempts || (m->data.result == CURLE_HTTP_RETURNED_ERROR && httpResponseCode == 205)) // 205 = need full teardown
+                            {
+                                if (httpResponseCode == 205)
+                                {
+                                    NetworkLog(ELogVerbosity::LOG_RELEASE, "Going to teardown (reconnect 205)");
+                                }
+                                else
+                                {
+                                    NetworkLog(ELogVerbosity::LOG_RELEASE, "Going to teardown (reconnect 2)");
+                                }
+
+                                NGMP_OnlineServicesManager::GetInstance()->SetPendingFullTeardown(EGOTearDownReason::LOST_CONNECTION);
+                                m_bConnected = false;
+                                m_vecWSPartialBuffer.clear();
+
+                                // clear reconnection flags
+                                m_bReconnecting = false;
+                                m_numReconnectAttempts = 0;
+                                m_lastReconnectAttempt = -1;
+                            }
+                        }
+                        else // give up immediately
+                        {
+                            NetworkLog(ELogVerbosity::LOG_RELEASE, "Going to teardown (initial connect)");
+                            NGMP_OnlineServicesManager::GetInstance()->SetPendingFullTeardown(EGOTearDownReason::LOST_CONNECTION);
+                            m_bConnected = false;
+                            m_vecWSPartialBuffer.clear();
+
+                            // clear reconnection flags
+                            m_bReconnecting = false;
+                            m_numReconnectAttempts = 0;
+                            m_lastReconnectAttempt = -1;
+                        }
+                    }
+                    else
+                    {
+                        if (m_bReconnecting)
+                        {
+                            NetworkLog(ELogVerbosity::LOG_RELEASE, "[WebSocket] Re-Connected");
+
+                            // TheSuperHackers @bugfix bill-rich 12/10/2026 Lobby pushes sent while the
+                            // socket was down are gone for good, and a guest that missed one sits on a
+                            // stale slot table (and never sees a resume arm). Re-pull the lobby now.
+                            NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+                            if (pLobbyInterface != nullptr && pLobbyInterface->IsInLobby())
+                            {
+                                ReleaseLog("GO lobby: websocket reconnected, refreshing the lobby");
+                                pLobbyInterface->UpdateRoomDataCache(nullptr);
+                            }
+                        }
+                        else
+                        {
+                            NetworkLog(ELogVerbosity::LOG_RELEASE, "[WebSocket] Connected");
+                        }
+
+                        /* connected and ready */
+                        m_bConnected = true;
+                        m_vecWSPartialBuffer.clear();
+
+                        // clear reconnection flags
+                        m_bReconnecting = false;
+                        m_numReconnectAttempts = 0;
+                        m_lastReconnectAttempt = -1;
+
+                        // connecting is as good as a pong
+                        m_lastPong = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::utc_clock::now().time_since_epoch()).count();
+
+                        if (m_fnWebsocketConnectedCallback != nullptr)
+                        {
+                            m_fnWebsocketConnectedCallback();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (!m_bConnected)
+    {
+        ReleaseLock();
+        return;
+    }
+
+	// send anything we have buffered (e.g. things that were queued while not connected)
+	for (std::string& strPayload : m_vecQueuedOutboungMsgs)
+	{
+        size_t sent;
+        CURLcode result = curl_ws_send(m_pCurlWS, strPayload.c_str(), strPayload.length(), &sent, 0, CURLWS_BINARY);
+
+        if (result != CURLE_OK)
+        {
+            NetworkLog(ELogVerbosity::LOG_RELEASE, "curl_ws_send() failed: %s\n", curl_easy_strerror(result));
+        }
+	}
+	m_vecQueuedOutboungMsgs.clear();
+
+	// do recv: drain what the service has queued, up to a cap per tick. One
+	// frame per tick fell behind an 8-player lobby's bursts of full lobby-state
+	// pushes (2026-10-14: eight members, every member change pushed to all).
+	static constexpr int WS_MAX_FRAMES_PER_TICK = 32;
+	CURLcode ret = CURL_LAST;
+	int framesThisTick = 0;
+	while (framesThisTick < WS_MAX_FRAMES_PER_TICK)
+	{
+		ret = RecvOne();
+		if (ret != CURLE_OK || !m_bConnected)
+		{
+			break;
+		}
+		++framesThisTick;
+	}
+	if (framesThisTick >= WS_MAX_FRAMES_PER_TICK)
+	{
+		NetworkLog(ELogVerbosity::LOG_RELEASE, "[WebSocket] drained %d frames this tick, more may be waiting", framesThisTick);
 	}
 
 	// time since last pong?

@@ -896,6 +896,64 @@ void ReleaseCrash(const char *reason)
 	_exit(1);
 }
 
+void ReleaseCrashRecordUnhandled(struct _EXCEPTION_POINTERS* e_info)
+{
+	if (TheGlobalData == nullptr)
+	{
+		return;
+	}
+
+#ifdef RTS_ENABLE_CRASHDUMP
+	if (e_info != nullptr && TheMiniDumper && TheMiniDumper->IsInitialized())
+	{
+		TheMiniDumper->TriggerMiniDumpForException(e_info, DumpType_Minimal);
+	}
+#endif
+
+	// Registers, the faulting address and the crashing thread's stack, into
+	// g_LastErrorDump, exactly as the engine's own exception filter would.
+	unsigned int code = 0;
+	void *address = nullptr;
+	if (e_info != nullptr && e_info->ExceptionRecord != nullptr)
+	{
+		code = e_info->ExceptionRecord->ExceptionCode;
+		address = e_info->ExceptionRecord->ExceptionAddress;
+		DumpExceptionInfo(code, e_info);
+	}
+
+	char prevbuf[ _MAX_PATH ];
+	char curbuf[ _MAX_PATH ];
+	strlcpy(prevbuf, TheGlobalData->getPath_UserData().str(), ARRAY_SIZE(prevbuf));
+	strlcat(prevbuf, RELEASECRASH_FILE_NAME_PREV, ARRAY_SIZE(prevbuf));
+	strlcpy(curbuf, TheGlobalData->getPath_UserData().str(), ARRAY_SIZE(curbuf));
+	strlcat(curbuf, RELEASECRASH_FILE_NAME, ARRAY_SIZE(curbuf));
+	remove(prevbuf);
+	if (rename(curbuf, prevbuf) != 0)
+	{
+		remove(curbuf);
+	}
+
+	FILE *f = fopen(curbuf, "w");
+	if (f == nullptr)
+	{
+		return;
+	}
+	// The exe's load address, so a bare address in the dump below can be
+	// turned into an offset into the PDB without the module list.
+	const void *exeBase = (const void *)GetModuleHandle(nullptr);
+	fprintf(f, "Release Crash at %s; Reason Unhandled exception 0x%08X at 0x%p on thread %lu (exe base 0x%p)\n",
+		getCurrentTimeString(), code, address, (unsigned long)GetCurrentThreadId(), exeBase);
+	fprintf(f, "\nLast error:\n%s\n\nCurrent stack:\n", g_LastErrorDump.str());
+	if (e_info != nullptr && e_info->ContextRecord != nullptr)
+	{
+		theReleaseCrashLogFile = f;
+		::StackDumpFromContext(e_info->ContextRecord->Eip, e_info->ContextRecord->Esp, e_info->ContextRecord->Ebp, releaseCrashLogOutput);
+		theReleaseCrashLogFile = nullptr;
+	}
+	fflush(f);
+	fclose(f);
+}
+
 void ReleaseCrashLocalized(const AsciiString& p, const AsciiString& m)
 {
 	if (!TheGameText) {

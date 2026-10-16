@@ -106,6 +106,54 @@ it sends a client) are teed from container stderr into a per-day file
 on the logs volume, so a redeploy no longer erases the record of a
 player's failed session.
 
+## Crash reports
+
+The GeneralsOnline client ships sentry-native (`cmake/networking.cmake`,
+breakpad backend, static). In the public client it reports to the
+GeneralsOnline team's Sentry project; in Zulu GO it reports to our own
+receiver on cncstats, which stores each report on the logs volume next to the
+match logs instead of running a Sentry server.
+
+- **Where.** `GlobalData::m_crashUrl`, default
+  `https://cncstats.computersrfun.org/crash/1`, override with `-crashUrl`.
+  `NGMP_OnlineServicesManager::InitSentry` turns it into a DSN by inserting
+  the cncstats client key (`CNCSTATS_ZULU_CLIENT_KEY`, the same key the log
+  and stats uploads use) as the Sentry public key, so the SDK POSTs to
+  `/crash/api/1/envelope/` with the key in `X-Sentry-Auth`. No key or no URL
+  means no reporting, logged as `CRASHREPORT disabled`.
+- **What.** Release `zulugo@<version>`, environment `zulugo`, the player's
+  id and display name as tags, and the breakpad minidump as an attachment.
+  Session envelopes are off: nothing is sent unless something crashed.
+- **The engine's own record.** sentry-native installs its handler after
+  `WinMain`'s, so a crash outside `GameEngine::update` used to leave
+  nothing locally (no `ReleaseCrashInfo.txt`, no engine minidump). The
+  SDK's `on_crash` hook now calls `ReleaseCrashRecordUnhandled`, which
+  writes `ReleaseCrashInfo.txt` (exception code, address, thread, exe base,
+  registers and the crashing thread's stack) and a minidump under
+  `CrashDumps\`, so the next launch's crash upload ships it to `/logs`
+  even if the report never leaves the machine.
+- **Launch checks** (`NetDiag_CheckForCrashOnLaunch`, main menu): a crash
+  record newer than the last shipped one is uploaded with the previous
+  session's logs; so is a previous session that never wrote the
+  `ReleaseLog.cleanexit` marker, which `NetDiag_NoteCleanShutdown` leaves
+  at an orderly exit. A record older than a day at the first launch that
+  sees it is not shipped.
+- **Route telemetry.** The connect-time `GO mesh: [...] connected flags=`
+  line is the route when the link came up; `GO route: user N RELAYED|direct
+  ping= quality=` is logged whenever a live link's route changes (first
+  probe included) and `GO routes: id:R|D/ping/quality/pending ...` every
+  30 s for every link, from `NetworkMesh::Tick`. `GetDetailedConnectionStatus`
+  (candidates, addresses, relay) goes to GeneralsOnline.log once per
+  connect. Before 2.0.5 `direct=` in the mesh check and state lines was
+  always 1: `IsDirect()` searched that status text for "Relayed", which it
+  never contains (upstream `2e0cd6e1d`).
+- **Reading a report.** `GET /get_logs?seed=crash-YYYYMMDD` on cncstats
+  returns the day's reports; each has `summary.txt` with the frames as
+  `module+offset`. `scripts/zulugo/symbolicate.sh <report dir>` resolves
+  them against that build's PDB, which `make zulugo-installer-release`
+  uploads to `gs://zulu-installer/symbols/zulugo/v<version>/` beside the
+  installer (and keeps in `build/installer-go-tmp/symbols/`).
+
 ## Concerns
 
 - **Privacy.** The replay and stats uploads include player names,

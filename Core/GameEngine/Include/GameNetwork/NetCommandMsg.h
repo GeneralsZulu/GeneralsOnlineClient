@@ -659,6 +659,25 @@ protected:
 	UnsignedInt m_frameToResend;
 };
 
+// See NETCOMMANDTYPE_ROUTERWAIT.
+class NetRouterWaitCommandMsg : public NetCommandMsgT<NetPacketRouterWaitCommand, SmallNetPacketRouterWaitCommand>
+{
+	MEMORY_POOL_GLUE_WITH_USERLOOKUP_CREATE(NetRouterWaitCommandMsg, "NetRouterWaitCommandMsg")
+public:
+	NetRouterWaitCommandMsg();
+
+	UnsignedInt getWaitFrame() const { return m_waitFrame; }
+	void setWaitFrame(UnsignedInt frame) { m_waitFrame = frame; }
+	UnsignedInt getWaitMask() const { return m_waitMask; }
+	void setWaitMask(UnsignedInt mask) { m_waitMask = mask; }
+
+	virtual Select getSmallNetPacketSelect() const override;
+
+protected:
+	UnsignedInt m_waitFrame;	///< The frame the router is stuck on.
+	UnsignedInt m_waitMask;		///< Bit per slot whose data for that frame it does not have.
+};
+
 class NetLoadCompleteCommandMsg : public NetCommandMsgT<NetPacketLoadCompleteCommand, SmallNetPacketLoadCompleteCommand>
 {
 	MEMORY_POOL_GLUE_WITH_USERLOOKUP_CREATE(NetLoadCompleteCommandMsg, "NetLoadCompleteCommandMsg")

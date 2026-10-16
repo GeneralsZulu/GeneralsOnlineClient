@@ -8,6 +8,8 @@
 #include "../NGMP_include.h"
 
 #include <steam/isteamnetworkingmessages.h>
+#include <deque>
+#include <vector>
 
 #ifdef RTS_USE_LEGACY_NETWORK_VENDOR
 #pragma comment(lib, "ValveNetworkingSockets/GameNetworkingSockets.lib")
@@ -63,4 +65,29 @@ private:
 	OutgoingPacketState m_outPacketState[MAX_MESSAGES];
 	// Track which incoming buffer slots are occupied (handles zero-length packets)
 	bool m_inBufferOccupied[MAX_MESSAGES];
+
+	// TheSuperHackers @bugfix bill-rich 16/10/2026 Packets that arrive while
+	// every m_inBuffer slot is still unread. The buffer is MAX_MESSAGES (256)
+	// deep and drained once per engine tick, but a single doRecv can pull up to
+	// 255 messages per peer out of the socket library, and after a resume
+	// catch-up or during a resend storm it does: 7901 packets were dropped on
+	// the floor on 2026-10-14, every one of them during a burst, and dropping
+	// frame data in the middle of a resend storm is what keeps the storm going.
+	// Held packets go into the buffer, oldest first, as slots free up.
+	struct HeldPacket
+	{
+		TransportMessageHeader header;
+		std::vector<UnsignedByte> data;
+	};
+	static constexpr size_t MAX_HELD_PACKETS = 8192;	// ~1.2 KB each at the worst, a burst's worth
+	std::deque<HeldPacket> m_held;
+	UnsignedInt m_heldHighWater = 0;
+	UnsignedInt m_heldDropped = 0;
+	UnsignedInt m_lastHeldLogMs = 0;
+
+	Int findFreeInSlot();
+	void writeInSlot(Int slot, const TransportMessageHeader& header, const UnsignedByte* payload, UnsignedInt payloadLen, int64_t userID);
+	void drainHeld();
+	bool storeIncoming(const TransportMessage& incoming, UnsignedInt payloadLen, int64_t userID);
+	void logHeld(UnsignedInt now);
 };

@@ -98,6 +98,10 @@ public:
 	int64_t pingSent = -1;
 
 	int m_SignallingAttempts = 0;
+
+	// Route telemetry (NetworkMesh::Tick): the last relayed/direct state this
+	// link was logged with, -1 before the first probe.
+	int m_lastLoggedRelayed = -1;
 	
 	int GetLatency();
 	int GetJitter();
@@ -234,4 +238,8 @@ private:
 	std::string m_strTurnToken;
 	std::string m_strTurnUsernameString;
 	std::string m_strTurnTokenString;
+
+	// Route telemetry pacing (NetworkMesh::Tick).
+	uint32_t m_lastRouteProbeMs = 0;
+	uint32_t m_lastRouteSummaryMs = 0;
 };

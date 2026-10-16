@@ -508,6 +508,7 @@ GlobalData* GlobalData::m_theOriginal = nullptr;
 	{ "PlayStats",									INI::parseInt,				nullptr,			offsetof( GlobalData, m_playStats ) },
 
 	{ "LogsUrl",										INI::parseAsciiString,nullptr,			offsetof( GlobalData, m_logsUrl ) },
+	{ "CrashUrl",										INI::parseAsciiString,nullptr,			offsetof( GlobalData, m_crashUrl ) },
 
 #if defined(RTS_DEBUG)
 	{ "DisableCameraFade",			INI::parseBool,				nullptr,			offsetof( GlobalData, m_disableCameraFade ) },
@@ -643,6 +644,7 @@ GlobalData::GlobalData()
 	m_exportStats = TRUE;
 	m_statsUrl = "https://cncstats.computersrfun.org/stats";
 	m_logsUrl = "https://cncstats.computersrfun.org/logs";
+	m_crashUrl = "https://cncstats.computersrfun.org/crash/1";
 	m_replayUrl = "https://www.radarvan.com/api/upload_replay";
 	m_mapCheckUrl = "https://cncstats.computersrfun.org/map_exists";
 	m_mapUploadUrl = "https://cncstats.computersrfun.org/add_map";

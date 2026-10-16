@@ -163,6 +163,12 @@ public:
 	// never turned up, rather than waiting for the disconnect screen to do it 20
 	// seconds later. Called from Network::update while the simulation is stalled.
 	void requestMissingFrameData(UnsignedInt frame);
+	// TheSuperHackers @feature bill-rich 16/10/2026 The packet router, while
+	// stalled, tells everyone which slot it is waiting on (NETCOMMANDTYPE_ROUTERWAIT),
+	// and a guest whose only missing slot is the router charges the stall to
+	// that slot instead. Telemetry only: the disconnect vote is untouched.
+	void broadcastRouterWait(UnsignedInt frame);
+	UnsignedInt getBlameMask(UnsignedInt notReadyMask);	///< notReadyMask, or what the router is waiting on when the router is all we miss.
 	void noteStall(UnsignedInt frame, UnsignedInt durationMs, UnsignedInt notReadyMask);
 	void noteHitch(UnsignedInt gapMs);
 	void emitNetStats(UnsignedInt frame, Int runAhead, Int frameRate);
@@ -198,6 +204,7 @@ private:
 	void processTimeOutGameStart( NetCommandMsg *msg );
 	void processWrapper(NetCommandRef *ref);
 	void processFrameResendRequest(NetFrameResendRequestCommandMsg *msg);
+	void processRouterWait(NetRouterWaitCommandMsg *msg);
 
 	void processFile(NetFileCommandMsg *ref);
 	void processFileAnnounce(NetFileAnnounceCommandMsg *ref);
@@ -274,6 +281,11 @@ private:
 	Int m_lastStatsFrameRate;
 	UnsignedInt m_lastResendRequestFrame;	///< Frame the last stall-driven resend request was for.
 	UnsignedInt m_lastResendRequestMs;		///< When it went out, so we do not ask every tick.
+	UnsignedInt m_lastRouterWaitSendMs;		///< broadcastRouterWait rate limit.
+	UnsignedInt m_lastResendServeMs[MAX_SLOTS];	///< processFrameResendRequest: last serve per requesting slot.
+	UnsignedInt m_routerWaitMask;			///< Last ROUTERWAIT received: the router's own not-ready mask...
+	UnsignedInt m_routerWaitFrame;			///< ...for this frame...
+	UnsignedInt m_routerWaitMs;				///< ...received at this time (0 = never).
 	void resetNetStats();
 
 	// -----------------------------------------------------------------------------

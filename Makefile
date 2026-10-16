@@ -510,6 +510,14 @@ GO_README   ?= scripts/zulugo/README.txt
 GO_VCREDIST := scripts/stage-vcredist.sh
 
 GO_INSTALLER_OUT     := $(GO_TMP_DIR)/ZuluGO_Setup.exe
+# The debug symbols of the client inside the release installer. Kept when the
+# payload is dropped and uploaded beside the release, because a crash report
+# is addresses until the PDB of that exact build is at hand
+# (scripts/zulugo/symbolicate.sh). The PDB keeps its build name: the exe's
+# debug directory names GeneralsOnlineZH.pdb, and that is what a symbolizer
+# looks for next to the exe. Not public: the bucket grant is per object.
+GO_SYMBOLS_DIR       := $(GO_TMP_DIR)/symbols
+GO_SOURCE_PDB         = $(GO_BUILD_SUBDIR)/GeneralsMD/GeneralsOnlineZH.pdb
 GO_INSTALLER_OUT_DEV := $(GO_TMP_DIR)/ZuluGO_Setup_Dev.exe
 GO_LATEST_JSON       := $(GO_TMP_DIR)/latest-go.json
 GO_LATEST_DEV_JSON   := $(GO_TMP_DIR)/latest-go-dev.json
@@ -534,6 +542,7 @@ GO_GCS_URI                = gs://$(GCS_BUCKET)/$(GO_RELEASE_NAME)
 GO_PUBLIC_URL             = https://storage.googleapis.com/$(GCS_BUCKET)/$(GO_RELEASE_NAME)
 GO_LATEST_GCS_URI         = gs://$(GCS_BUCKET)/latest-go.json
 GO_LATEST_PUBLIC_URL      = https://storage.googleapis.com/$(GCS_BUCKET)/latest-go.json
+GO_SYMBOLS_GCS_URI        = gs://$(GCS_BUCKET)/symbols/zulugo/v$(GO_APPVERSION)
 
 .PHONY: zulugo-installer zulugo-installer-release zulugo-installer-dev \
         zulugo-exe zulugo-exe-log zulugo-launcher zulugo-launcher-dev \
@@ -724,6 +733,13 @@ $(GO_INSTALLER_OUT): $(GO_PAYLOAD_STAMP) $(GO_NSI)
 		-DSIGN_CMD="$(SIGN)" \
 		$(GO_NSI)
 	@sha256sum "$(GO_PAYLOAD)/$(GO_EXE_NAME)" | cut -d' ' -f1 > "$(GO_EXE_SHA_FILE)"
+	@# Symbols for this exact client, taken before the payload goes: the PDB
+	@# and the signed exe it belongs to (signing does not touch the debug id).
+	@rm -rf "$(GO_SYMBOLS_DIR)"; mkdir -p "$(GO_SYMBOLS_DIR)"
+	@test -s "$(GO_SOURCE_PDB)" || { echo "ERROR: $(GO_SOURCE_PDB) is missing; the build did not produce debug symbols."; exit 1; }
+	@cp "$(GO_SOURCE_PDB)" "$(GO_SYMBOLS_DIR)/$(notdir $(GO_SOURCE_PDB))"
+	@cp "$(GO_PAYLOAD)/$(GO_EXE_NAME)" "$(GO_SYMBOLS_DIR)/$(GO_EXE_NAME)"
+	@echo "[symbols] $(GO_SYMBOLS_DIR): $$(ls "$(GO_SYMBOLS_DIR)" | tr '\n' ' ')"
 	@rm -rf "$(GO_PAYLOAD)" "$(GO_PAYLOAD_STAMP)"
 
 $(GO_TMP_DIR):
@@ -749,6 +765,11 @@ zulugo-installer-release: $(GO_INSTALLER_OUT) | $(GO_TMP_DIR)
 	@$(GCLOUD) storage objects update "$(GO_GCS_URI)" \
 		--add-acl-grant=entity=AllUsers,role=READER \
 		|| echo "[note] per-object ACL grant failed; if the bucket uses uniform bucket-level access, ensure allUsers is granted Storage Object Viewer at the bucket level."
+	@# The symbols go up with the release they belong to. No public grant:
+	@# they are for symbolicating crash reports, not for players.
+	@test -s "$(GO_SYMBOLS_DIR)/$(notdir $(GO_SOURCE_PDB))" || { \
+		echo "ERROR: $(GO_SYMBOLS_DIR) has no PDB; run 'make clean-zulugo-installer' and build again."; exit 1; }
+	$(GCLOUD) storage cp "$(GO_SYMBOLS_DIR)/$(notdir $(GO_SOURCE_PDB))" "$(GO_SYMBOLS_DIR)/$(GO_EXE_NAME)" "$(GO_SYMBOLS_GCS_URI)/"
 	@# Cache-Control is overridden on the manifest only: the installer object
 	@# is immutable (its name carries the version), while a cached manifest
 	@# would hide a fresh release for up to GCS's default hour.
@@ -782,6 +803,7 @@ zulugo-installer-release: $(GO_INSTALLER_OUT) | $(GO_TMP_DIR)
 	@echo "Public installer URL: $(GO_PUBLIC_URL)"
 	@echo "Update manifest:      $(GO_LATEST_GCS_URI)"
 	@echo "Manifest URL:         $(GO_LATEST_PUBLIC_URL)"
+	@echo "Symbols:              $(GO_SYMBOLS_GCS_URI)/"
 
 # Publish the dev channel: a fixed object name so a dev launcher always has a
 # stable URL, no-cache on both objects because both are overwritten in place.

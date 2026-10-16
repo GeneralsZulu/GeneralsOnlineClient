@@ -883,6 +883,9 @@ void Network::update()
 		if (inGame && !resumeFrozen && (m_stallStartMs != 0)
 				&& ((nowMs - m_stallStartMs) >= (UnsignedInt)NET_RESEND_REQUEST_MS)) {
 			m_conMgr->requestMissingFrameData(TheGameLogic->getFrame());
+			// And if we are the router, say whom we are waiting on, so the
+			// guests' logs do not all blame us for it.
+			m_conMgr->broadcastRouterWait(TheGameLogic->getFrame());
 		}
 	}
 

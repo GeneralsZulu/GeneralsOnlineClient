@@ -6,7 +6,10 @@ set(SENTRY_BUILD_TESTS OFF CACHE BOOL "Do not build Sentry tests" FORCE)
 set(SENTRY_BUILD_EXAMPLES OFF CACHE BOOL "Do not build Sentry examples" FORCE)
 set(SENTRY_ENABLE_INSTALL OFF CACHE BOOL "Do not install Sentry" FORCE)
 set(SENTRY_TRANSPORT winhttp CACHE STRING "Use WinHTTP for Sentry transport" FORCE)
-set(SENTRY_BACKEND inproc CACHE STRING "Use in-process Sentry crash capture" FORCE)
+# breakpad rather than inproc: inproc captures the crashing thread's frames
+# only, breakpad writes a real minidump (every thread, registers, stack memory)
+# and attaches it to the report, with no external handler process to ship.
+set(SENTRY_BACKEND breakpad CACHE STRING "Use the in-process breakpad backend for Sentry crash capture" FORCE)
 
 FetchContent_Declare(
     sentry_native

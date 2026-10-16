@@ -136,8 +136,15 @@ void OnSteamNetConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t
 			NetworkLog(ELogVerbosity::LOG_RELEASE, "[DC] Closing connection %lld", plrConnection.m_userID);
 
 			ServiceConfig& serviceConf = NGMP_OnlineServicesManager::GetInstance()->GetServiceConfig();
-			const int numSignallingAttempts = 3;
-			bool bShouldRetry = plrConnection.m_SignallingAttempts < numSignallingAttempts && serviceConf.retry_signalling;
+			// Upstream GeneralsOnline d60a850c9 / 3f1ebe4a7 / 92289d416: only the later joiner of a
+			// pair gives up; unknown join order caps both sides; a departed peer is capped without
+			// leaving; and a running match keeps repairing the link until the service drops the player.
+			const int numSignallingAttempts = 2;
+			NGMP_OnlineServices_LobbyInterface* pJoinOrderLobby = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+			const bool bWeJoinedLater = pJoinOrderLobby == nullptr || !pJoinOrderLobby->IsJoinOrderKnown() || pJoinOrderLobby->JoinedAfter(plrConnection.m_userID);
+			const bool bPeerLeft = pJoinOrderLobby != nullptr && pJoinOrderLobby->IsJoinOrderKnown() && !pJoinOrderLobby->IsLobbyMember(plrConnection.m_userID);
+			const bool bInMatch = TheGameLogic != nullptr && TheGameLogic->isInInternetGame();
+			bool bShouldRetry = serviceConf.retry_signalling && ((bInMatch && !bPeerLeft) || (!bWeJoinedLater && !bPeerLeft) || plrConnection.m_SignallingAttempts < numSignallingAttempts);
 
 			bool bWasError = pInfo->m_info.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally || pInfo->m_info.m_eEndReason != k_ESteamNetConnectionEnd_App_Generic;
 			plrConnection.SetDisconnected(bWasError, pMesh, bShouldRetry && bWasError);
@@ -186,20 +193,34 @@ void OnSteamNetConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t
 					}
 				}
 
-				if (!bShouldRetry)
+				if (!bShouldRetry && bPeerLeft)
+				{
+					NetworkLog(ELogVerbosity::LOG_RELEASE, "[STEAM NETWORKING][DISCONNECT HANDLER] Not retrying, user %lld is no longer in the lobby", plrConnection.m_userID);
+					ReleaseLog("GO mesh: user %lld left the lobby, not retrying", (long long)plrConnection.m_userID);
+				}
+				else if (!bShouldRetry && !bWeJoinedLater)
+				{
+					NetworkLog(ELogVerbosity::LOG_RELEASE, "[STEAM NETWORKING][DISCONNECT HANDLER] Not retrying, user %lld joined after us and will leave", plrConnection.m_userID);
+					ReleaseLog("GO mesh: user %lld joined after us and will leave, not retrying", (long long)plrConnection.m_userID);
+				}
+				else if (!bShouldRetry)
 				{
 					NetworkLog(ELogVerbosity::LOG_RELEASE, "[STEAM NETWORKING][DISCONNECT HANDLER] Not retrying, handling disconnect as failure...");
 
 					NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
-					if (pLobbyInterface != nullptr)
+					if (pLobbyInterface != nullptr && pLobbyInterface->IsHost())
+					{
+						// Upstream dfe5b29d1: the host keeps its lobby; the peer that can't connect is the one to go
+						NetworkLog(ELogVerbosity::LOG_RELEASE, "[STEAM NETWORKING][DISCONNECT HANDLER] Not leaving, we host this lobby; dropping user %lld only", plrConnection.m_userID);
+						ReleaseLog("GO mesh: cannot reach user %lld; we host, staying", (long long)plrConnection.m_userID);
+					}
+					else if (pLobbyInterface != nullptr)
 					{
 						NetworkLog(ELogVerbosity::LOG_RELEASE, "[STEAM NETWORKING][DISCONNECT HANDLER] Performing local removal for user %lld from lobby due to failure to connect\n", plrConnection.m_userID);
-						// Local copy to avoid TOCTOU race: check-then-use window
-						auto callbackCopy = pLobbyInterface->m_OnCannotConnectToLobbyCallback;
-						if (callbackCopy != nullptr)
-						{
-							callbackCopy();
-						}
+						ReleaseLog("GO mesh: cannot reach user %lld; leaving the lobby", (long long)plrConnection.m_userID);
+
+						// Upstream 2e04467af, deferred: the handler leaves the lobby, which deletes this mesh while we're still inside its RunCallbacks
+						pLobbyInterface->QueueCannotConnectToLobby();
 					}
 				}
 			}
@@ -344,6 +365,16 @@ void OnSteamNetConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t
 			pInfo->m_info.m_szConnectionDescription, (unsigned)pInfo->m_info.m_nFlags,
 			(pInfo->m_info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) ? " RELAYED" : " direct",
 			(pInfo->m_info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Fast) ? " fast" : "");
+
+		{
+			// The route the library settled on (candidate types, addresses, the
+			// relay if any). Once per connect, to the uploadable network log.
+			char szDetail[2048] = { 0 };
+			if (SteamNetworkingSockets()->GetDetailedConnectionStatus(pInfo->m_hConn, szDetail, sizeof(szDetail)) >= 0 && szDetail[0] != '\0')
+			{
+				NetworkLog(ELogVerbosity::LOG_RELEASE, "[STEAM NETWORKING][%s] route detail:\n%s", pInfo->m_info.m_szConnectionDescription, szDetail);
+			}
+		}
 
 		if (pInfo->m_info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Unauthenticated)
 		{
@@ -954,18 +985,23 @@ void NetworkMesh::StartConnectionSignalling(const char* szMiddlewareID, int64_t 
         // create a local user type
         {
             std::lock_guard<std::recursive_mutex> lock(m_mapConnectionsMutex);
+            auto it = m_mapConnections.find(remoteUserID);
+            int previousAttempts = it != m_mapConnections.end() ? it->second.m_SignallingAttempts : 0;
             m_mapConnections[remoteUserID] = PlayerConnection(remoteUserID, szMiddlewareID);
 
-            // add attempt
-            ++m_mapConnections[remoteUserID].m_SignallingAttempts;
+            // Upstream d65d9d656: add attempt; carried over so the retry cap holds across re-signals
+            m_mapConnections[remoteUserID].m_SignallingAttempts = previousAttempts + 1;
         }
 	}
 	else
 	{
         // if we already have a connection to this use, drop it, having a single-direction connection will break signalling
+        int previousAttempts = 0;
         auto it = m_mapConnections.find(remoteUserID);
         if (it != m_mapConnections.end())
         {
+            previousAttempts = it->second.m_SignallingAttempts;
+
             if (it->second.m_hSteamConnection != k_HSteamNetConnection_Invalid)
             {
                 NetworkLog(ELogVerbosity::LOG_RELEASE, "[DC] Closing connection %lld, new connection is being negotiated", remoteUserID);
@@ -1058,8 +1094,8 @@ void NetworkMesh::StartConnectionSignalling(const char* szMiddlewareID, int64_t 
             std::lock_guard<std::recursive_mutex> lock(m_mapConnectionsMutex);
             m_mapConnections[remoteUserID] = PlayerConnection(remoteUserID, hSteamConnection);
 
-            // add attempt
-            ++m_mapConnections[remoteUserID].m_SignallingAttempts;
+            // Upstream d65d9d656: add attempt; carried over so the retry cap holds across re-signals
+            m_mapConnections[remoteUserID].m_SignallingAttempts = previousAttempts + 1;
             ReleaseLog("GO mesh: signalling to user %lld attempt=%d preferredPort=%u",
                 (long long)remoteUserID, m_mapConnections[remoteUserID].m_SignallingAttempts, (unsigned)preferredPort);
         }
@@ -1181,6 +1217,60 @@ void NetworkMesh::Tick()
 	{
 		PlayerConnection& conn = kvPair.second;
 		conn.UpdateLatencyHistogram();
+	}
+
+	// TheSuperHackers @feature bill-rich 16/10/2026 Route telemetry. The flags
+	// line at connect time is the route then; ICE can move a link between a
+	// relay and a direct path afterwards, and nothing said so. Every 5 s each
+	// live link is probed; a change of route is logged at once, and every 30 s
+	// one line carries every link's route, ping, quality and send backlog.
+	{
+		const uint32_t nowMs = GetTickCount();
+		if (nowMs - m_lastRouteProbeMs >= 5000)
+		{
+			m_lastRouteProbeMs = nowMs;
+			const bool bSummary = (nowMs - m_lastRouteSummaryMs >= 30000);
+			std::string strSummary;
+			for (auto& kvPair : m_mapConnections)
+			{
+				PlayerConnection& conn = kvPair.second;
+				if (conn.m_hSteamConnection == k_HSteamNetConnection_Invalid)
+					continue;
+				SteamNetConnectionInfo_t info;
+				if (!SteamNetworkingSockets()->GetConnectionInfo(conn.m_hSteamConnection, &info))
+					continue;
+				if (info.m_eState != k_ESteamNetworkingConnectionState_Connected)
+					continue;
+				const int relayed = (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0 ? 1 : 0;
+				SteamNetConnectionRealTimeStatus_t status;
+				const bool bHaveStatus = SteamNetworkingSockets()->GetConnectionRealTimeStatus(conn.m_hSteamConnection, &status, 0, nullptr) == k_EResultOK;
+				const int ping = bHaveStatus ? status.m_nPing : -1;
+				const float quality = bHaveStatus ? status.m_flConnectionQualityLocal : -1.0f;
+				const int pending = bHaveStatus ? (status.m_cbPendingReliable + status.m_cbPendingUnreliable) : -1;
+				if (relayed != conn.m_lastLoggedRelayed)
+				{
+					ReleaseLog("GO route: user %lld %s ping=%dms quality=%.2f%s",
+						(long long)kvPair.first, relayed ? "RELAYED" : "direct", ping, quality,
+						conn.m_lastLoggedRelayed == -1 ? "" : " (changed)");
+					conn.m_lastLoggedRelayed = relayed;
+				}
+				if (bSummary)
+				{
+					char tmp[96];
+					snprintf(tmp, sizeof(tmp), "%s%lld:%s/%dms/q%.2f/pend%d", strSummary.empty() ? "" : " ",
+						(long long)kvPair.first, relayed ? "R" : "D", ping, quality, pending);
+					strSummary += tmp;
+				}
+			}
+			if (bSummary)
+			{
+				m_lastRouteSummaryMs = nowMs;
+				if (!strSummary.empty())
+				{
+					ReleaseLog("GO routes: %s", strSummary.c_str());
+				}
+			}
+		}
 	}
 
 	// the game transport isn't created until the game begins, but we want to transfer AC packets in the lobby first, so consider this a liteupdate
@@ -1551,15 +1641,29 @@ std::string PlayerConnection::GetConnectionType()
 	if (m_hSteamConnection == k_HSteamNetConnection_Invalid)
 		return "(disconnected)";
 
-	char szBuf[2048] = { 0 };
-	int ret = SteamNetworkingSockets()->GetDetailedConnectionStatus(m_hSteamConnection, szBuf, 2048);
-	NetworkLog(ELogVerbosity::LOG_DEBUG, "[STEAM] PlayerConnection::GetConnectionType returned %d", ret);
-	return std::string(szBuf);
+	// Upstream GeneralsOnline 2e0cd6e1d. IsDirect() looks for "Relayed" in this
+	// string, and GetDetailedConnectionStatus never says it: every link in the
+	// 2026-10-14 logs was tagged direct=1 while the socket library's own flags
+	// said half of them, and all five of the peer that killed the 6-player game,
+	// were going through TURN.
+	SteamNetConnectionInfo_t info;
+	if (!SteamNetworkingSockets()->GetConnectionInfo(m_hSteamConnection, &info))
+	{
+		NetworkLog(ELogVerbosity::LOG_DEBUG, "[STEAM] PlayerConnection::GetConnectionType failed to get connection info");
+		return "(unknown)";
+	}
+
+	return (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0 ? "Relayed" : "Direct";
 }
 
 void PlayerConnection::UpdateState(EConnectionState newState, NetworkMesh* pOwningMesh)
 {
 	m_State = newState;
+
+	if (newState == EConnectionState::CONNECTED_DIRECT)
+	{
+		m_SignallingAttempts = 0; // upstream d65d9d656: a link that came up starts a fresh retry budget
+	}
 	ReleaseLog("GO mesh: user %lld -> %s direct=%d attempts=%d",
 		(long long)m_userID, MeshStateName(newState), (int)IsDirect(), m_SignallingAttempts);
 	pOwningMesh->UpdateConnectivity(this);

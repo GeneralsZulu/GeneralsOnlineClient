@@ -53,6 +53,7 @@ class NetFileProgressCommandMsg;
 class NetDisconnectFrameCommandMsg;
 class NetDisconnectScreenOffCommandMsg;
 class NetFrameResendRequestCommandMsg;
+class NetRouterWaitCommandMsg;
 class NetLoadCompleteCommandMsg;
 class NetTimeOutGameStartCommandMsg;
 
@@ -1178,6 +1179,44 @@ struct NetPacketFrameResendRequestCommandBase
 };
 
 ////////////////////////////////////////////////////////////////////////////////
+// NetPacketRouterWaitCommand
+////////////////////////////////////////////////////////////////////////////////
+
+struct NetPacketRouterWaitCommandData
+{
+	typedef NetRouterWaitCommandMsg CommandMsg;
+
+	struct FixedData
+	{
+		UnsignedInt waitFrame;
+		UnsignedInt waitMask;
+	};
+
+	static size_t getSize(const NetCommandMsg &msg) { return sizeof(FixedData); }
+	static size_t copyBytes(UnsignedByte *buffer, const NetCommandRef &ref);
+	static size_t readMessage(NetCommandRef &ref, NetPacketBuf buf);
+};
+
+// Fire and forget, like a keep-alive: no command id, no ack.
+struct NetPacketRouterWaitCommandBase
+{
+	typedef NetRouterWaitCommandMsg CommandMsg;
+
+	struct CommandBase
+	{
+		NetPacketCommandTypeField commandType;
+		NetPacketRelayField relay;
+		//NetPacketFrameField frame;
+		NetPacketPlayerIdField playerId;
+		//NetPacketCommandIdField commandId;
+		NetPacketDataField dataHeader;
+	};
+
+	static size_t getSize() { return sizeof(CommandBase); }
+	static size_t copyBytes(UnsignedByte *buffer, const NetCommandRef &ref);
+};
+
+////////////////////////////////////////////////////////////////////////////////
 
 struct NetPacketAckCommand                      : public NetPacketCommandTemplate<NetPacketAckCommandBase, NetPacketAckCommandData> {};
 struct NetPacketFrameCommand                    : public NetPacketCommandTemplate<NetPacketFrameCommandBase, NetPacketFrameCommandData> {};
@@ -1204,6 +1243,7 @@ struct NetPacketTimeOutGameStartCommand         : public NetPacketCommandTemplat
 struct NetPacketDisconnectFrameCommand          : public NetPacketCommandTemplate<NetPacketDisconnectFrameCommandBase, NetPacketDisconnectFrameCommandData> {};
 struct NetPacketDisconnectScreenOffCommand      : public NetPacketCommandTemplate<NetPacketDisconnectScreenOffCommandBase, NetPacketDisconnectScreenOffCommandData> {};
 struct NetPacketFrameResendRequestCommand       : public NetPacketCommandTemplate<NetPacketFrameResendRequestCommandBase, NetPacketFrameResendRequestCommandData> {};
+struct NetPacketRouterWaitCommand               : public NetPacketCommandTemplate<NetPacketRouterWaitCommandBase, NetPacketRouterWaitCommandData> {};
 
 struct SmallNetPacketAckCommand                 : public SmallNetPacketCommandTemplate<SmallNetPacketCommandBase, NetPacketAckCommandData> {};
 struct SmallNetPacketFrameCommand               : public SmallNetPacketCommandTemplate<SmallNetPacketCommandBase, NetPacketFrameCommandData> {};
@@ -1230,6 +1270,7 @@ struct SmallNetPacketTimeOutGameStartCommand    : public SmallNetPacketCommandTe
 struct SmallNetPacketDisconnectFrameCommand     : public SmallNetPacketCommandTemplate<SmallNetPacketCommandBase, NetPacketDisconnectFrameCommandData> {};
 struct SmallNetPacketDisconnectScreenOffCommand : public SmallNetPacketCommandTemplate<SmallNetPacketCommandBase, NetPacketDisconnectScreenOffCommandData> {};
 struct SmallNetPacketFrameResendRequestCommand  : public SmallNetPacketCommandTemplate<SmallNetPacketCommandBase, NetPacketFrameResendRequestCommandData> {};
+struct SmallNetPacketRouterWaitCommand          : public SmallNetPacketCommandTemplate<SmallNetPacketCommandBase, NetPacketRouterWaitCommandData> {};
 
 // Restore normal struct packing
 #pragma pack(pop)

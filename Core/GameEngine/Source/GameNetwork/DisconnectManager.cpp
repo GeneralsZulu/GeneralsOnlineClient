@@ -588,8 +588,11 @@ void DisconnectManager::resetPacketRouterTimeout() {
 void DisconnectManager::turnOnScreen(ConnectionManager *conMgr) {
 	TheDisconnectMenu->showScreen();
 	DEBUG_LOG(("DisconnectManager::turnOnScreen - turning on screen on frame %d", TheGameLogic->getFrame()));
-	ReleaseLog("DISCONNECT screen on frame=%u waiting=0x%02x", TheGameLogic->getFrame(),
-		conMgr->getNotReadyMask(TheGameLogic->getFrame()));
+	{
+		const UnsignedInt waiting = conMgr->getNotReadyMask(TheGameLogic->getFrame());
+		ReleaseLog("DISCONNECT screen on frame=%u waiting=0x%02x blame=0x%02x", TheGameLogic->getFrame(),
+			waiting, conMgr->getBlameMask(waiting));
+	}
 	conMgr->flushNetStats("disconnect screen");
 	m_disconnectState = DISCONNECTSTATETYPE_SCREENON;
 	m_lastKeepAliveSendTime = -1;

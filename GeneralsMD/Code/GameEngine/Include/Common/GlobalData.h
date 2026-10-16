@@ -137,6 +137,11 @@ public:
 	// URL to POST per-match client debug logs (gzip'd, multipart) after a game.
 	AsciiString m_logsUrl;
 
+	// Crash reports (sentry-native envelopes) go here: <base>/crash/<project>,
+	// turned into a DSN with the cncstats client key at Sentry init. Empty
+	// disables crash reporting.
+	AsciiString m_crashUrl;
+
 	// URL to POST the replay file after stats are uploaded.
 	AsciiString m_replayUrl;
 

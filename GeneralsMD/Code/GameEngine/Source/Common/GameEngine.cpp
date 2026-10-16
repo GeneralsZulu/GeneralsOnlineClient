@@ -114,6 +114,7 @@
 
 // GENERALS ONLINE
 #include "../OnlineServices_Init.h"
+#include "GameNetwork/GeneralsOnline/NetworkSelfTest.h"
 #include "GameNetwork/GeneralsOnline/DiscordRichPresence.h"
 #include "GameNetwork/GeneralsOnline/OnlineServices_LobbyInterface.h"
 #include "GameNetwork/GameSpyOverlay.h"
@@ -313,6 +314,10 @@ GameEngine::GameEngine()
 //-------------------------------------------------------------------------------------------------
 GameEngine::~GameEngine()
 {
+	// An orderly exit: the next launch must not treat this session as a death.
+	// First thing, while TheGlobalData (the user data path) still exists.
+	NetDiag_NoteCleanShutdown();
+
 	delete m_discordRichPresence;
 	m_discordRichPresence = nullptr;
 

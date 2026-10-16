@@ -1,5 +1,9 @@
 #include "GameNetwork/GeneralsOnline/NGMP_interfaces.h"
 #include "GameNetwork/GeneralsOnline/HTTP/HTTPManager.h"
+#include "Common/version.h"
+#include "Common/Debug.h"
+#include "CncStatsClientKey.h"
+#include "Common/ReleaseLog.h"
 #include "../json.hpp"
 #include "GameClient/MessageBox.h"
 #include "Common/FileSystem.h"
@@ -1133,6 +1137,48 @@ void NGMP_OnlineServicesManager::Tick()
 	}
 }
 
+// TheSuperHackers @bugfix bill-rich 16/10/2026 Crash reports go to our own
+// receiver. The public client's DSN pointed every Zulu GO crash at the
+// GeneralsOnline team's Sentry project under their own release tag, so the
+// three 2026-10-14 match-start deaths were captured and we could not see them.
+// The DSN is <CrashUrl> with the cncstats client key as the Sentry public key:
+// https://<key>@cncstats.computersrfun.org/crash/1, which the SDK turns into
+// POST /crash/api/1/envelope/ with the key in X-Sentry-Auth.
+static std::string ZuluCrashDsn()
+{
+	if (TheGlobalData == nullptr || TheGlobalData->m_crashUrl.isEmpty())
+	{
+		return std::string();
+	}
+	const char* key = CNCSTATS_ZULU_CLIENT_KEY;
+	if (key == nullptr || key[0] == '\0')
+	{
+		return std::string();
+	}
+	std::string url = TheGlobalData->m_crashUrl.str();
+	size_t scheme = url.find("://");
+	if (scheme == std::string::npos)
+	{
+		return std::string();
+	}
+	return url.substr(0, scheme + 3) + key + "@" + url.substr(scheme + 3);
+}
+
+// The SDK's crash hook runs on the crashing thread, inside the exception
+// filter, before the report is written. Leave the engine's own record behind
+// (ReleaseCrashInfo.txt plus a minidump) so the next launch's crash upload has
+// something to ship even if the report never leaves the machine.
+static sentry_value_t ZuluSentryOnCrash(const sentry_ucontext_t* uctx, sentry_value_t event, void* /*closure*/)
+{
+	EXCEPTION_POINTERS* pointers = nullptr;
+	if (uctx != nullptr)
+	{
+		pointers = const_cast<EXCEPTION_POINTERS*>(&uctx->exception_ptrs);
+	}
+	ReleaseCrashRecordUnhandled(pointers);
+	return event;
+}
+
 void NGMP_OnlineServicesManager::InitSentry()
 {
 	// Initialize libcurl global state here, before any plugins (e.g. EasyAntiCheat) are loaded.
@@ -1147,19 +1193,28 @@ void NGMP_OnlineServicesManager::InitSentry()
 		std::filesystem::create_directory(strDumpPath);
 	}
 
+	std::string strDsn = ZuluCrashDsn();
+	if (strDsn.empty())
+	{
+		ReleaseLog("CRASHREPORT disabled: no CrashUrl or no client key in this build");
+		return;
+	}
+
 	sentry_options_t* options = sentry_options_new();
 
-	sentry_options_set_dsn(options, "https://61750bebd112d279bcc286d617819269@o4509316925554688.ingest.us.sentry.io/4509316927586304");
+	sentry_options_set_dsn(options, strDsn.c_str());
 	sentry_options_set_database_path(options, strDumpPath.c_str());
 
-	std::string strVersionStr = std::format("generalsonline-client@{}", GENERALS_ONLINE_VERSION_STRING);
+	// Our own release string, never the public client's build code: the two
+	// must stay distinguishable in whatever receives them.
+	std::string strVersionStr = std::format("zulugo@{}", TheVersion != nullptr ? TheVersion->getAsciiVersion().str() : "unknown");
 	sentry_options_set_release(options, strVersionStr.c_str());
-
-#if defined(USE_TEST_ENV)
-	sentry_options_set_environment(options, "test");
-#else
-	sentry_options_set_environment(options, "production");
-#endif
+	sentry_options_set_environment(options, "zulugo");
+	sentry_options_set_on_crash(options, ZuluSentryOnCrash, nullptr);
+	// No session envelopes: they would POST once per launch for nothing. The
+	// receiver only wants crashes.
+	sentry_options_set_auto_session_tracking(options, 0);
+	ReleaseLog("CRASHREPORT enabled: %s -> %s", strVersionStr.c_str(), TheGlobalData->m_crashUrl.str());
 
 	// local player info
 	int64_t userID = -1;
@@ -1197,7 +1252,11 @@ void NGMP_OnlineServicesManager::InitSentry()
 	}, nullptr);
 #endif
 
-	sentry_init(options);
+	const int initResult = sentry_init(options);
+	if (initResult != 0)
+	{
+		ReleaseLog("CRASHREPORT init failed (%d): crashes will not be reported", initResult);
+	}
 #endif
 }
 

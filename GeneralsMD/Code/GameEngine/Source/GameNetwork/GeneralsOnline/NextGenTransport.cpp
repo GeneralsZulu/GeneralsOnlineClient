@@ -1,3 +1,4 @@
+#include "Common/ReleaseLog.h"
 #include "PreRTS.h" // This must go first in EVERY cpp file int the GameEngine
 
 #include "Common/CRC.h"
@@ -41,6 +42,10 @@ Bool NextGenTransport::init(UnsignedInt ip, UnsignedShort port)
 
 void NextGenTransport::reset(void)
 {
+    m_held.clear();
+    m_heldHighWater = 0;
+    m_heldDropped = 0;
+    m_lastHeldLogMs = 0;
     // Clear buffers and statistics to avoid stale state.
     std::memset(m_inBuffer, 0, sizeof(m_inBuffer));
     std::memset(m_outBuffer, 0, sizeof(m_outBuffer));
@@ -110,6 +115,14 @@ Bool NextGenTransport::doRecv(void)
     {
         NetworkLog(ELogVerbosity::LOG_DEBUG, "Game Packet Recv: No network mesh");
         return FALSE;
+    }
+
+    // Slots the simulation freed since the last tick take the packets held
+    // from the last burst before anything new is read.
+    drainHeld();
+    if (!m_held.empty() || m_heldDropped != 0)
+    {
+        logHeld(now);
     }
 
     if (AnticheatPlugInterface::DoesACPluginProvideSecureGameTransport())
@@ -240,75 +253,7 @@ Bool NextGenTransport::doRecv(void)
                     m_incomingPackets[m_statisticsSlot]++;
                     m_incomingBytes[m_statisticsSlot] += numBytes;
 
-                    // Store into first free slot in m_inBuffer
-                    bool stored = false;
-                    int fullCount = 0;
-                    for (int i = 0; i < MAX_MESSAGES; ++i)
-                    {
-                        // Check if slot is occupied using flag, not length
-                        // (length could be 0 for legitimate empty packets)
-                        // However, if the packet has been consumed (length cleared to 0 by outside code),
-                        // clear the occupied flag too
-                        if (m_inBuffer[i].length == 0 && m_inBufferOccupied[i])
-                        {
-                            m_inBufferOccupied[i] = false;
-                        }
-
-                        if (m_inBufferOccupied[i])
-                        {
-                            fullCount++;
-                            continue;
-                        }
-
-                        // Clear slot
-                        std::memset(&m_inBuffer[i], 0, sizeof(m_inBuffer[i]));
-
-                        // Copy header
-                        m_inBuffer[i].header = incomingMessage.header;
-
-                        // Copy payload with bounds check
-                        if (payloadLen > 0)
-                        {
-                            const size_t dstCap = sizeof(m_inBuffer[i].data);
-                            const size_t toCopy = (payloadLen <= dstCap) ? payloadLen : dstCap;
-
-                            if (payloadLen > dstCap)
-                            {
-                                NetworkLog(ELogVerbosity::LOG_RELEASE,
-                                    "Game Packet Recv: WARNING - Truncating payload from %u to %zu bytes for inBuffer[%d] from user %lld. "
-                                    "This indicates the incoming packet exceeds the buffer capacity and data will be lost. "
-                                    "Consider increasing MAX_MESSAGE_LEN or MAX_PACKET_SIZE.",
-                                    payloadLen, dstCap, i, static_cast<long long>(userID));
-                            }
-
-                            std::memcpy(m_inBuffer[i].data,
-                                incomingMessage.data,
-                                toCopy);
-
-                            m_inBuffer[i].length = static_cast<Int>(toCopy);
-                        }
-                        else
-                        {
-                            // Zero-length packet - store with length=0 but mark as occupied
-                            m_inBuffer[i].length = 0;
-                        }
-
-                        // Mark slot as occupied
-                        m_inBufferOccupied[i] = true;
-                        stored = true;
-                        break;
-                    }
-
-                    if (!stored)
-                    {
-                        // Buffer is full - log this as it indicates potential packet loss
-                        NetworkLog(ELogVerbosity::LOG_RELEASE,
-                            "Game Packet Recv: ERROR - m_inBuffer is FULL (%d/%d slots occupied), dropping packet from user %lld. "
-                            "Incoming packets will be lost until buffer slots are freed. "
-                            "Consider increasing MAX_MESSAGES (%d) to handle higher packet rates.",
-                            fullCount, MAX_MESSAGES, static_cast<long long>(userID), MAX_MESSAGES);
-                    }
-                    else
+                    if (storeIncoming(incomingMessage, payloadLen, userID))
                     {
                         ++numRead;
                         bRet = TRUE;
@@ -481,75 +426,7 @@ Bool NextGenTransport::doRecv(void)
                         m_incomingPackets[m_statisticsSlot]++;
                         m_incomingBytes[m_statisticsSlot] += vecPacketDataWithoutHeader.size();
 
-                        // Store into first free slot in m_inBuffer
-                        bool stored = false;
-                        int fullCount = 0;
-                        for (int i = 0; i < MAX_MESSAGES; ++i)
-                        {
-                            // Check if slot is occupied using flag, not length
-                            // (length could be 0 for legitimate empty packets)
-                            // However, if the packet has been consumed (length cleared to 0 by outside code),
-                            // clear the occupied flag too
-                            if (m_inBuffer[i].length == 0 && m_inBufferOccupied[i])
-                            {
-                                m_inBufferOccupied[i] = false;
-                            }
-
-                            if (m_inBufferOccupied[i])
-                            {
-                                fullCount++;
-                                continue;
-                            }
-
-                            // Clear slot
-                            std::memset(&m_inBuffer[i], 0, sizeof(m_inBuffer[i]));
-
-                            // Copy header
-                            m_inBuffer[i].header = incomingMessage.header;
-
-                            // Copy payload with bounds check
-                            if (payloadLen > 0)
-                            {
-                                const size_t dstCap = sizeof(m_inBuffer[i].data);
-                                const size_t toCopy = (payloadLen <= dstCap) ? payloadLen : dstCap;
-
-                                if (payloadLen > dstCap)
-                                {
-                                    NetworkLog(ELogVerbosity::LOG_RELEASE,
-                                        "Game Packet Recv: WARNING - Truncating payload from %u to %zu bytes for inBuffer[%d] from user %lld. "
-                                        "This indicates the incoming packet exceeds the buffer capacity and data will be lost. "
-                                        "Consider increasing MAX_MESSAGE_LEN or MAX_PACKET_SIZE.",
-                                        payloadLen, dstCap, i, static_cast<long long>(kvPair.second.m_userID));
-                                }
-
-                                std::memcpy(m_inBuffer[i].data,
-                                    incomingMessage.data,
-                                    toCopy);
-
-                                m_inBuffer[i].length = static_cast<Int>(toCopy);
-                            }
-                            else
-                            {
-                                // Zero-length packet - store with length=0 but mark as occupied
-                                m_inBuffer[i].length = 0;
-                            }
-
-                            // Mark slot as occupied
-                            m_inBufferOccupied[i] = true;
-                            stored = true;
-                            break;
-                        }
-
-                        if (!stored)
-                        {
-                            // Buffer is full - log this as it indicates potential packet loss
-                            NetworkLog(ELogVerbosity::LOG_RELEASE,
-                                "Game Packet Recv: ERROR - m_inBuffer is FULL (%d/%d slots occupied), dropping packet from user %lld. "
-                                "Incoming packets will be lost until buffer slots are freed. "
-                                "Consider increasing MAX_MESSAGES (%d) to handle higher packet rates.",
-                                fullCount, MAX_MESSAGES, static_cast<long long>(kvPair.second.m_userID), MAX_MESSAGES);
-                        }
-                        else
+                        if (storeIncoming(incomingMessage, payloadLen, kvPair.second.m_userID))
                         {
                             ++numRead;
                             bRet = TRUE;
@@ -572,6 +449,124 @@ Bool NextGenTransport::doRecv(void)
         "Game Packet Recv: Read %d packets this frame", numRead);
 
     return bRet;
+}
+
+// -----------------------------------------------------------------------------
+// Incoming buffer management (see HeldPacket in the header)
+// -----------------------------------------------------------------------------
+
+// First free m_inBuffer slot, lowest index first: ConnectionManager::doRelay
+// reads the buffer from 0 and stops at the first empty slot, so the fill has
+// to stay contiguous. A slot the simulation consumed (length cleared) is
+// released here. -1 when every slot is still unread.
+Int NextGenTransport::findFreeInSlot()
+{
+    for (Int i = 0; i < MAX_MESSAGES; ++i)
+    {
+        if (m_inBuffer[i].length == 0 && m_inBufferOccupied[i])
+        {
+            m_inBufferOccupied[i] = false;
+        }
+        if (!m_inBufferOccupied[i])
+        {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void NextGenTransport::writeInSlot(Int slot, const TransportMessageHeader& header, const UnsignedByte* payload, UnsignedInt payloadLen, int64_t userID)
+{
+    std::memset(&m_inBuffer[slot], 0, sizeof(m_inBuffer[slot]));
+    m_inBuffer[slot].header = header;
+
+    if (payloadLen > 0)
+    {
+        const size_t dstCap = sizeof(m_inBuffer[slot].data);
+        const size_t toCopy = (payloadLen <= dstCap) ? payloadLen : dstCap;
+        if (payloadLen > dstCap)
+        {
+            NetworkLog(ELogVerbosity::LOG_RELEASE,
+                "Game Packet Recv: WARNING - Truncating payload from %u to %zu bytes for inBuffer[%d] from user %lld. "
+                "This indicates the incoming packet exceeds the buffer capacity and data will be lost. "
+                "Consider increasing MAX_MESSAGE_LEN or MAX_PACKET_SIZE.",
+                payloadLen, dstCap, slot, static_cast<long long>(userID));
+        }
+        std::memcpy(m_inBuffer[slot].data, payload, toCopy);
+        m_inBuffer[slot].length = static_cast<Int>(toCopy);
+    }
+    else
+    {
+        // Zero-length packet - store with length=0 but mark as occupied
+        m_inBuffer[slot].length = 0;
+    }
+    m_inBufferOccupied[slot] = true;
+}
+
+void NextGenTransport::drainHeld()
+{
+    while (!m_held.empty())
+    {
+        const Int slot = findFreeInSlot();
+        if (slot < 0)
+        {
+            return;
+        }
+        const HeldPacket& held = m_held.front();
+        writeInSlot(slot, held.header, held.data.data(), static_cast<UnsignedInt>(held.data.size()), -1);
+        m_held.pop_front();
+    }
+}
+
+// Into the buffer if a slot is free and nothing older is waiting, else onto
+// the hold. False only when the hold itself is full, which is the old
+// behaviour (the packet is lost).
+bool NextGenTransport::storeIncoming(const TransportMessage& incoming, UnsignedInt payloadLen, int64_t userID)
+{
+    if (m_held.empty())
+    {
+        const Int slot = findFreeInSlot();
+        if (slot >= 0)
+        {
+            writeInSlot(slot, incoming.header, incoming.data, payloadLen, userID);
+            return true;
+        }
+    }
+
+    if (m_held.size() >= MAX_HELD_PACKETS)
+    {
+        ++m_heldDropped;
+        logHeld(timeGetTime());
+        return false;
+    }
+
+    HeldPacket held;
+    held.header = incoming.header;
+    const size_t cap = sizeof(incoming.data);
+    const size_t toKeep = (payloadLen <= cap) ? payloadLen : cap;
+    held.data.assign(incoming.data, incoming.data + toKeep);
+    m_held.push_back(std::move(held));
+    if (m_held.size() > m_heldHighWater)
+    {
+        m_heldHighWater = static_cast<UnsignedInt>(m_held.size());
+    }
+    return true;
+}
+
+// One NETRECV line per 5 s while anything is held or has been dropped, so a
+// burst shows up in the uploadable log without 4000 lines of its own.
+void NextGenTransport::logHeld(UnsignedInt now)
+{
+    if (m_lastHeldLogMs != 0 && (now - m_lastHeldLogMs) < 5000)
+    {
+        return;
+    }
+    m_lastHeldLogMs = now ? now : 1;
+    ReleaseLog("NETRECV inbuffer full: held=%u highwater=%u dropped=%u (buffer %d slots)",
+        static_cast<UnsignedInt>(m_held.size()), m_heldHighWater, m_heldDropped, (int)MAX_MESSAGES);
+    NetworkLog(ELogVerbosity::LOG_RELEASE,
+        "Game Packet Recv: m_inBuffer full, holding %u packet(s) (high water %u, dropped %u)",
+        static_cast<UnsignedInt>(m_held.size()), m_heldHighWater, m_heldDropped);
 }
 
 Bool NextGenTransport::doSend(void)

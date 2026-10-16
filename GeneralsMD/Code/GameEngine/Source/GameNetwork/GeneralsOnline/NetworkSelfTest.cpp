@@ -476,16 +476,27 @@ UnicodeString NetSelfTest_Start(const char *reason, Bool uploadWhenDone)
 // Mesh-check failure hook
 // -----------------------------------------------------------------------------
 
-void NetDiag_OnMeshIncomplete(const char *who, Int connected, Int expected)
+// The service gives the mesh this many checks before it gives up on the start
+// (LobbyManager.MaxFullMeshCheckAttempts). Only the last one is worth a test:
+// on 2026-10-14 eleven self-tests ran for first attempts that completed on the
+// second and started fine.
+static const Int MESH_CHECK_FINAL_ATTEMPT = 2;
+
+void NetDiag_OnMeshIncomplete(const char *who, Int connected, Int expected, Int attempt)
 {
-	// Once per two minutes: the service retries the check and re-signals, and
-	// every attempt would otherwise fire this again.
+	if (attempt < MESH_CHECK_FINAL_ATTEMPT)
+	{
+		ReleaseLog("NETDIAG mesh incomplete (%s): connected=%d expected=%d on attempt %d, waiting for the retry", who ? who : "", connected, expected, attempt);
+		return;
+	}
+	// Once per two minutes: the service re-signals, and every attempt would
+	// otherwise fire this again.
 	static DWORD s_lastMs = 0;
 	const DWORD now = GetTickCount();
 	if (s_lastMs != 0 && (now - s_lastMs) < 120000)
 		return;
 	s_lastMs = now;
-	ReleaseLog("NETDIAG mesh incomplete (%s): connected=%d expected=%d, running the self-test", who ? who : "", connected, expected);
+	ReleaseLog("NETDIAG mesh incomplete (%s): connected=%d expected=%d on attempt %d, running the self-test", who ? who : "", connected, expected, attempt);
 	NetSelfTest_Start("mesh incomplete", TRUE);
 }
 
@@ -502,41 +513,120 @@ static bool fileMTime(const char *path, time_t &out)
 	return true;
 }
 
+// The clean-shutdown marker. Written by NetDiag_NoteCleanShutdown at the end
+// of an orderly exit and removed at the first launch check, so at that check
+// "no marker, but there is a previous log" means the last session died: a
+// crash the reporter never saw (the 2026-10-14 match-start deaths left no
+// ReleaseCrashInfo.txt at all), a hard kill, a freeze the player ended from
+// the task manager.
+static AsciiString cleanExitMarkerPath()
+{
+	AsciiString p = TheGlobalData->getPath_UserData();
+	p.concat("ReleaseLog.cleanexit");
+	return p;
+}
+
+void NetDiag_NoteCleanShutdown()
+{
+	if (TheGlobalData == nullptr)
+		return;
+	FILE *f = fopen(cleanExitMarkerPath().str(), "w");
+	if (f != nullptr)
+	{
+		fprintf(f, "%lld\n", (long long)time(nullptr));
+		fclose(f);
+	}
+}
+
+// A crash record older than this at the first launch that sees it is history,
+// not news: the first launch of 2.0.4 shipped eight ReleaseCrashInfo.txt files
+// dating back to August.
+static const time_t CRASH_RECORD_MAX_AGE_S = 24 * 60 * 60;
+
 void NetDiag_CheckForCrashOnLaunch()
 {
 	static Bool s_done = FALSE;
 	static DWORD s_firstMs = 0;
+	static Bool s_crashed = FALSE;
+	static Bool s_unclean = FALSE;
+	static time_t s_crashTime = 0;
 	if (s_done || TheGlobalData == nullptr)
 		return;
-	if (s_firstMs == 0)
-		s_firstMs = GetTickCount();
 
 	AsciiString crashPath = TheGlobalData->getPath_UserData();
 	crashPath.concat("ReleaseCrashInfo.txt");
 	AsciiString markerPath = TheGlobalData->getPath_UserData();
 	markerPath.concat("ReleaseCrashInfo.uploaded");
 
-	time_t crashTime = 0;
-	if (!fileMTime(crashPath.str(), crashTime))
+	if (s_firstMs == 0)
 	{
-		s_done = TRUE;	// nothing to report
-		return;
-	}
-	// Already shipped this one?
-	{
-		FILE *f = fopen(markerPath.str(), "r");
-		if (f != nullptr)
+		s_firstMs = GetTickCount();
+
+		// Rotating the release log is what makes the previous session's copy
+		// exist; it happens on the first line written, which this is if nothing
+		// else has logged yet.
+		ReleaseLog("NETDIAG launch check");
+
+		// 1. A crash record the engine wrote (ReleaseCrash, or the crash
+		//    reporter's hook), newer than the last one we shipped.
+		if (fileMTime(crashPath.str(), s_crashTime))
 		{
-			long long seen = 0;
-			if (fscanf(f, "%lld", &seen) == 1 && (time_t)seen == crashTime)
+			long long seen = -1;
+			FILE *f = fopen(markerPath.str(), "r");
+			if (f != nullptr)
 			{
+				if (fscanf(f, "%lld", &seen) != 1)
+					seen = -1;
 				fclose(f);
-				s_done = TRUE;
-				return;
 			}
-			fclose(f);
+			if ((time_t)seen != s_crashTime)
+			{
+				// Without a marker at all this is the first launch of a build
+				// with the uploader: only a fresh record is worth shipping.
+				if (seen != -1 || (time(nullptr) - s_crashTime) < CRASH_RECORD_MAX_AGE_S)
+					s_crashed = TRUE;
+				f = fopen(markerPath.str(), "w");
+				if (f != nullptr)
+				{
+					fprintf(f, "%lld\n", (long long)s_crashTime);
+					fclose(f);
+				}
+			}
+		}
+
+		// 2. No orderly shutdown last time, and there is a previous log to show
+		//    for it. The marker is consumed here so this session starts out
+		//    "unclean" until it exits properly.
+		time_t prevLogTime = 0;
+		const Bool havePrevLog = fileMTime(ReleaseGetPrevLogFileName(), prevLogTime);
+		const AsciiString cleanPath = cleanExitMarkerPath();
+		time_t cleanTime = 0;
+		const Bool haveClean = fileMTime(cleanPath.str(), cleanTime);
+		remove(cleanPath.str());
+		// "A build with this check has run here before": without it the
+		// previous session may be an older build that never wrote the marker,
+		// so its missing marker means nothing. Written on every launch.
+		AsciiString seenPath = TheGlobalData->getPath_UserData();
+		seenPath.concat("ReleaseLog.cleanexit.seen");
+		time_t seenTime = 0;
+		const Bool seenBefore = fileMTime(seenPath.str(), seenTime);
+		{
+			FILE *f = fopen(seenPath.str(), "w");
+			if (f != nullptr)
+				fclose(f);
+		}
+		if (havePrevLog && !haveClean && seenBefore && !s_crashed)
+		{
+			s_unclean = TRUE;
+		}
+
+		if (!s_crashed && !s_unclean)
+		{
+			s_done = TRUE;	// nothing to report
+			return;
 		}
 	}
+
 	// Give the online login up to 20 s so the upload carries a name, then go
 	// regardless: an unattributed report still beats none.
 	if (diagNick() == "anonymous" && (GetTickCount() - s_firstMs) < 20000)
@@ -545,16 +635,14 @@ void NetDiag_CheckForCrashOnLaunch()
 	s_done = TRUE;
 	if (TheGlobalData->m_logsUrl.isEmpty())
 		return;
-	FILE *f = fopen(markerPath.str(), "w");
-	if (f != nullptr)
-	{
-		fprintf(f, "%lld\n", (long long)crashTime);
-		fclose(f);
-	}
 	std::string seedLabel, playerId;
-	diagLabels("crash", seedLabel, playerId);
-	ReleaseLog("NETDIAG previous session crashed (ReleaseCrashInfo.txt mtime %lld); uploading it with the previous logs as %s/%s",
-		(long long)crashTime, seedLabel.c_str(), playerId.c_str());
+	diagLabels(s_crashed ? "crash" : "prevabort", seedLabel, playerId);
+	if (s_crashed)
+		ReleaseLog("NETDIAG previous session crashed (ReleaseCrashInfo.txt mtime %lld); uploading it with the previous logs as %s/%s",
+			(long long)s_crashTime, seedLabel.c_str(), playerId.c_str());
+	else
+		ReleaseLog("NETDIAG previous session did not shut down cleanly; uploading its logs as %s/%s",
+			seedLabel.c_str(), playerId.c_str());
 	s_diagUploads.fetch_add(1);
-	diagUpload(TheGlobalData->m_logsUrl.str(), seedLabel, playerId, TRUE, TRUE);
+	diagUpload(TheGlobalData->m_logsUrl.str(), seedLabel, playerId, TRUE, s_crashed);
 }

@@ -93,6 +93,9 @@ static constexpr const Int NET_RUNAHEAD_DECAY_TICKS = 6;
 // See ConnectionManager::requestMissingFrameData.
 static constexpr const Int NET_RESEND_REQUEST_MS = 500;
 static constexpr const Int NET_RESEND_REQUEST_REPEAT_MS = 500;
+// The serving side will not re-serve the same slot within this window; well
+// under the requester's repeat so a genuine retry is never refused.
+static constexpr const Int NET_RESEND_SERVE_MIN_MS = 200;
 
 // ReleaseLog telemetry pacing. See ConnectionManager::emitNetStats.
 static constexpr const Int NET_STATS_INTERVAL_MS = 10000;
@@ -240,6 +243,15 @@ enum NetCommandType CPP_11(: Int) {
 	NETCOMMANDTYPE_DISCONNECTFRAME,
 	NETCOMMANDTYPE_DISCONNECTSCREENOFF,
 	NETCOMMANDTYPE_DISCONNECTEND,
+
+	// TheSuperHackers @feature bill-rich 16/10/2026 Sent by the packet router
+	// while it is stalled: the frame it is on and the slots it is waiting for.
+	// Everything a guest receives comes through the router, so when the router
+	// itself is stuck every guest sees "frame data missing from the router" and
+	// the peer actually at fault is named only in the router's own log
+	// (2026-10-14: the host's NETSTAT named WildCard while all five guests
+	// blamed slot 0). After the disconnect section so no existing value moves.
+	NETCOMMANDTYPE_ROUTERWAIT,
 };
 
 enum NetLocalStatus CPP_11(: Int) {

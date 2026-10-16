@@ -156,6 +156,12 @@ public:
 
 	std::vector<char> m_vecWSPartialBuffer;
 
+	// One curl_ws_recv and its dispatch. Returns what curl_ws_recv returned:
+	// CURLE_OK when a frame (or part of one) was consumed, CURLE_AGAIN when
+	// nothing was waiting. Tick calls it in a loop.
+	CURLcode RecvOne();
+	std::vector<char> m_recvBuffer;
+
 	std::vector<std::string> m_vecQueuedOutboungMsgs;
 
 	std::function<void(void)> m_fnWebsocketConnectedCallback = nullptr;

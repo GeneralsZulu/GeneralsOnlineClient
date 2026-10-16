@@ -241,6 +241,9 @@ NetCommandMsg *SmallNetPacketCommandBase::constructNetCommandMsg(const CommandBa
 	case NETCOMMANDTYPE_FRAMERESENDREQUEST:
 		msg = newInstance(NetFrameResendRequestCommandMsg);
 		break;
+	case NETCOMMANDTYPE_ROUTERWAIT:
+		msg = newInstance(NetRouterWaitCommandMsg);
+		break;
 	default:
 		DEBUG_CRASH(("SmallNetPacketCommandBase::constructNetCommandMsg: Unexpected command type '%d' encountered.", commandType));
 		return nullptr;
@@ -1425,6 +1428,45 @@ size_t NetPacketFrameResendRequestCommandBase::copyBytes(UnsignedByte *buffer, c
 	//base.frame.frame = msg->getExecutionFrame();
 	base.playerId.playerId = msg->getPlayerID();
 	base.commandId.commandId = msg->getID();
+
+	return network::writeObject(buffer, base);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// NetPacketRouterWaitCommand
+////////////////////////////////////////////////////////////////////////////////
+
+size_t NetPacketRouterWaitCommandData::copyBytes(UnsignedByte *buffer, const NetCommandRef &ref)
+{
+	const CommandMsg *cmdMsg = static_cast<const CommandMsg *>(ref.getCommand());
+	FixedData data;
+	data.waitFrame = cmdMsg->getWaitFrame();
+	data.waitMask = cmdMsg->getWaitMask();
+
+	return network::writeObject(buffer, data);
+}
+
+size_t NetPacketRouterWaitCommandData::readMessage(NetCommandRef &ref, NetPacketBuf buf)
+{
+	CommandMsg *cmdMsg = static_cast<CommandMsg *>(ref.getCommand());
+	FixedData data;
+	data.waitFrame = 0;
+	data.waitMask = 0;
+
+	size_t size = network::readObject(data, buf);
+	cmdMsg->setWaitFrame(data.waitFrame);
+	cmdMsg->setWaitMask(data.waitMask);
+
+	return size;
+}
+
+size_t NetPacketRouterWaitCommandBase::copyBytes(UnsignedByte *buffer, const NetCommandRef &ref)
+{
+	const NetCommandMsg *msg = ref.getCommand();
+	CommandBase base;
+	base.commandType.commandType = msg->getNetCommandType();
+	base.relay.relay = ref.getRelay();
+	base.playerId.playerId = msg->getPlayerID();
 
 	return network::writeObject(buffer, base);
 }

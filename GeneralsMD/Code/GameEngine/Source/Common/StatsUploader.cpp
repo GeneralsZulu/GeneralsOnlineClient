@@ -822,7 +822,13 @@ static bool readWholeFile(const char *path, unsigned char **outBuf, unsigned int
 // session that already finished. Keeps a future runaway logger from turning
 // end-of-match telemetry into a multi-megabyte POST, the way the per-frame
 // observer checkpoints did at 15 MB a session.
-static const unsigned int LOG_UPLOAD_MAX_BYTES = 1024 * 1024;
+//
+// 8 MB, not 1: at 1 MB 22 of the 99 uploads on 2026-10-14 were cut, up to
+// 1.45 MB each, and what fell off the front of GeneralsOnline.log was the
+// lobby, signalling and mesh phase of the very match being reported. The
+// files travel gzipped (roughly 10:1 for these logs) under the server's 64 MiB
+// per request cap.
+static const unsigned int LOG_UPLOAD_MAX_BYTES = 8 * 1024 * 1024;
 
 // Read at most the last maxBytes of a file. Under the cap this is exactly
 // readWholeFile. Over it, the returned buffer opens on a line boundary and

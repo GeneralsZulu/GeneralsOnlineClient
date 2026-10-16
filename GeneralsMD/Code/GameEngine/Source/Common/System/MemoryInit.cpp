@@ -602,6 +602,7 @@ static PoolSizeRec sizes[] =
 	{ "NetDisconnectFrameCommandMsg", 32, 32 },
 	{ "NetDisconnectScreenOffCommandMsg", 32, 32 },
 	{ "NetFrameResendRequestCommandMsg", 32, 32 },
+	{ "NetRouterWaitCommandMsg", 32, 32 },
 	{ "NetKeepAliveCommandMsg", 32, 32 },
 	{ "NetDisconnectKeepAliveCommandMsg", 32, 32 },
 	{ "NetDisconnectPlayerCommandMsg", 32, 32 },

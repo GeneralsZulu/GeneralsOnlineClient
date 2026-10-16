@@ -342,6 +342,11 @@ void ConnectionManager::init()
 	m_lastStatsFrameRate = 0;
 	m_lastResendRequestFrame = 0;
 	m_lastResendRequestMs = 0;
+	m_lastRouterWaitSendMs = 0;
+	memset(m_lastResendServeMs, 0, sizeof(m_lastResendServeMs));
+	m_routerWaitMask = 0;
+	m_routerWaitFrame = 0;
+	m_routerWaitMs = 0;
 	resetNetStats();
 
 	m_frameMetrics.init();
@@ -667,9 +672,76 @@ Bool ConnectionManager::processNetCommand(NetCommandRef *ref) {
 			processFrameResendRequest((NetFrameResendRequestCommandMsg *)msg);
 			return TRUE;
 
+		case NETCOMMANDTYPE_ROUTERWAIT:
+			processRouterWait((NetRouterWaitCommandMsg *)msg);
+			return TRUE;
+
 		default:
 			return FALSE;
 	}
+}
+
+void ConnectionManager::processRouterWait(NetRouterWaitCommandMsg *msg) {
+	if ((Int)msg->getPlayerID() != m_packetRouterSlot) {
+		return;	// a stale one from a router that has since been replaced
+	}
+	m_routerWaitMask = msg->getWaitMask();
+	m_routerWaitFrame = msg->getWaitFrame();
+	const UnsignedInt now = timeGetTime();
+	m_routerWaitMs = now ? now : 1;
+}
+
+// Once per NET_RESEND_REQUEST_REPEAT_MS while we are the router and stalled.
+// Direct to every connected slot: there is nobody to relay through.
+void ConnectionManager::broadcastRouterWait(UnsignedInt frame) {
+	if ((m_packetRouterSlot < 0) || ((Int)m_localSlot != m_packetRouterSlot)) {
+		return;
+	}
+	const UnsignedInt mask = getNotReadyMask(frame);
+	if (mask == 0) {
+		return;
+	}
+	const UnsignedInt now = timeGetTime();
+	if ((m_lastRouterWaitSendMs != 0) && ((now - m_lastRouterWaitSendMs) < (UnsignedInt)NET_RESEND_REQUEST_REPEAT_MS)) {
+		return;
+	}
+	m_lastRouterWaitSendMs = now ? now : 1;
+
+	UnsignedByte relay = 0;
+	Int i;
+	for (i = 0; i < MAX_SLOTS; ++i) {
+		if ((i != (Int)m_localSlot) && (m_connections[i] != nullptr) && isPlayerConnected(i)) {
+			relay |= (1 << i);
+		}
+	}
+	if (relay == 0) {
+		return;
+	}
+	NetRouterWaitCommandMsg *msg = newInstance(NetRouterWaitCommandMsg);
+	msg->setPlayerID(m_localSlot);
+	msg->setWaitFrame(frame);
+	msg->setWaitMask(mask);
+	sendLocalCommandDirect(msg, relay);
+	msg->detach();
+}
+
+UnsignedInt ConnectionManager::getBlameMask(UnsignedInt notReadyMask) {
+	if ((m_packetRouterSlot < 0) || ((Int)m_localSlot == m_packetRouterSlot)) {
+		return notReadyMask;
+	}
+	if (notReadyMask != (1u << m_packetRouterSlot)) {
+		return notReadyMask;	// we are missing someone besides the router: that is real
+	}
+	if (m_routerWaitMs == 0 || m_routerWaitMask == 0) {
+		return notReadyMask;
+	}
+	const UnsignedInt now = timeGetTime();
+	if ((now - m_routerWaitMs) > 2000) {
+		return notReadyMask;	// the router's word is stale
+	}
+	// The router is stuck too, and says on whom. Never ourselves.
+	const UnsignedInt blame = m_routerWaitMask & ~(1u << m_localSlot);
+	return blame != 0 ? blame : notReadyMask;
 }
 
 void ConnectionManager::processFrameResendRequest(NetFrameResendRequestCommandMsg *msg) {
@@ -680,15 +752,26 @@ void ConnectionManager::processFrameResendRequest(NetFrameResendRequestCommandMs
 		return;
 	}
 
-	// Rare by design, so no rate limit: a resend request means a peer's copy of a
-	// frame was inconsistent and it is waiting on us to rebuild it.
-	ReleaseLog("NETRESEND serving slot=%u from frame %u (we are on %u)",
-		playerID, msg->getFrameToResend(), TheGameLogic->getFrame());
-
 	// make sure this player is still in our game.
 	if ((m_connections[playerID] == nullptr) || (m_connections[playerID]->isQuitting() == TRUE)) {
 		return;
 	}
+
+	// A serve is the whole window from that frame to ours, and the requester
+	// asks once per NET_RESEND_REQUEST_REPEAT_MS. Serving the same slot faster
+	// than that is only ever duplicate or stale requests arriving in a burst,
+	// and during a resend storm each duplicate serve is more of the storm.
+	const UnsignedInt now = timeGetTime();
+	if ((m_lastResendServeMs[playerID] != 0)
+			&& ((now - m_lastResendServeMs[playerID]) < (UnsignedInt)NET_RESEND_SERVE_MIN_MS)) {
+		ReleaseLog("NETRESEND not serving slot=%u again for frame %u: served %ums ago",
+			playerID, msg->getFrameToResend(), now - m_lastResendServeMs[playerID]);
+		return;
+	}
+	m_lastResendServeMs[playerID] = now ? now : 1;
+
+	ReleaseLog("NETRESEND serving slot=%u from frame %u (we are on %u)",
+		playerID, msg->getFrameToResend(), TheGameLogic->getFrame());
 
 	sendFrameDataToPlayer(playerID, msg->getFrameToResend());
 }
@@ -3118,8 +3201,9 @@ void ConnectionManager::noteStall(UnsignedInt frame, UnsignedInt durationMs, Uns
 	if (durationMs > m_netStats.stallMaxMs) {
 		m_netStats.stallMaxMs = durationMs;
 	}
+	const UnsignedInt blame = getBlameMask(notReadyMask);
 	for (Int i = 0; i < MAX_SLOTS; ++i) {
-		if (notReadyMask & (1 << i)) {
+		if (blame & (1 << i)) {
 			++m_netStats.stallOn[i];
 		}
 	}
@@ -3127,7 +3211,11 @@ void ConnectionManager::noteStall(UnsignedInt frame, UnsignedInt durationMs, Uns
 		const UnsignedInt now = timeGetTime();
 		if ((m_lastStallLogMs == 0) || ((now - m_lastStallLogMs) >= 5000)) {
 			m_lastStallLogMs = now;
-			ReleaseLog("NETSTALL frame=%u waited=%ums on=0x%02x", frame, durationMs, notReadyMask);
+			if (blame != notReadyMask) {
+				ReleaseLog("NETSTALL frame=%u waited=%ums on=0x%02x router=0x%02x@%u", frame, durationMs, notReadyMask, blame, m_routerWaitFrame);
+			} else {
+				ReleaseLog("NETSTALL frame=%u waited=%ums on=0x%02x", frame, durationMs, notReadyMask);
+			}
 			// The link counters at the moment of a stall are the evidence; the
 			// periodic line can be up to 10 s away from it.
 			flushNetStats("stall");
@@ -3194,7 +3282,16 @@ void ConnectionManager::emitNetStats(UnsignedInt frame, Int runAhead, Int frameR
 		}
 	}
 
-	ReleaseLog("NETSTAT frame=%u ra=%d fps=%d router=%d lat=%d/%d links=[%s] stall=%u/%ums/max%u on=[%s] hitch=%u/max%u rreq=%u/%u peers=[%s]",
+	// rwait=mask@frame: the router's last word on whom it was waiting for, if
+	// it said anything in the last two seconds (guests only).
+	char rwait[32];
+	rwait[0] = 0;
+	if ((m_routerWaitMs != 0) && ((Int)m_localSlot != m_packetRouterSlot)
+			&& ((timeGetTime() - m_routerWaitMs) <= 2000)) {
+		snprintf(rwait, sizeof(rwait), " rwait=0x%02x@%u", m_routerWaitMask, m_routerWaitFrame);
+	}
+
+	ReleaseLog("NETSTAT frame=%u ra=%d fps=%d router=%d lat=%d/%d links=[%s] stall=%u/%ums/max%u on=[%s] hitch=%u/max%u rreq=%u/%u peers=[%s]%s",
 		frame, runAhead, frameRate, (Int)m_packetRouterSlot,
 		(Int)(m_frameMetrics.getAverageLatency() * 1000.0f),
 		(Int)(getReportedRunAheadLatency() * 1000.0f),
@@ -3203,6 +3300,6 @@ void ConnectionManager::emitNetStats(UnsignedInt frame, Int runAhead, Int frameR
 		on,
 		m_netStats.hitchCount, m_netStats.hitchMaxMs,
 		m_netStats.resendReqTx, m_netStats.resendReqRx,
-		peers);
+		peers, rwait);
 	resetNetStats();
 }

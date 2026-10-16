@@ -53,9 +53,15 @@ UnicodeString NetSelfTest_Start(const char *reason, Bool uploadWhenDone);
 void NetDiag_UploadLogs(const char *phase);
 
 // A guest's answer to the service's full-mesh check came back with peers it
-// could not reach, or the host was told the mesh is incomplete. Logs, runs the
-// self-test once and uploads (rate limited).
-void NetDiag_OnMeshIncomplete(const char *who, Int connected, Int expected);
+// could not reach, or the host was told the mesh is incomplete. Logs every
+// time; runs the self-test and uploads (rate limited) only when attempt is the
+// service's last one, since the first attempt usually completes on the retry.
+void NetDiag_OnMeshIncomplete(const char *who, Int connected, Int expected, Int attempt);
+
+// Called once from the engine's orderly shutdown. Leaves the marker that tells
+// the next launch the previous session ended on purpose; a launch that finds
+// the marker missing uploads the previous session's logs.
+void NetDiag_NoteCleanShutdown();
 
 // Called from the main menu update. Once per launch: if the previous session
 // left a crash record (ReleaseCrashInfo.txt newer than the last upload

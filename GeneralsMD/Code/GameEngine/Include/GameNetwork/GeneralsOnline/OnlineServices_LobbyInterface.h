@@ -11,6 +11,7 @@
 #include "GameClient/InGameUI.h"
 #include "GameLogic/VictoryConditions.h"
 #include <atomic>
+#include <set>
 #include <memory>
 #include <vector>
 
@@ -447,6 +448,49 @@ public:
 	{
 		m_OnCannotConnectToLobbyCallback = nullptr;
 	}
+
+	// Upstream GeneralsOnline 2e04467af: raised from inside the mesh's GNS
+	// callbacks, dispatched by Tick once the mesh is done with them. The
+	// handler leaves the lobby, which deletes the mesh that is still inside
+	// its RunCallbacks.
+	bool m_bCannotConnectToLobbyPending = false;
+	void QueueCannotConnectToLobby()
+	{
+		m_bCannotConnectToLobbyPending = true;
+	}
+
+	// Upstream GeneralsOnline d60a850c9: who was already in the lobby when we
+	// joined. Of a pair that cannot connect, only the later joiner gives up;
+	// unknown join order caps both sides.
+	bool JoinedAfter(int64_t userID) const
+	{
+		return m_bJoinOrderKnown && m_setMembersBeforeUs.contains(userID);
+	}
+
+	bool IsJoinOrderKnown() const
+	{
+		return m_bJoinOrderKnown;
+	}
+
+	bool IsLobbyMember(int64_t userID) const
+	{
+		for (const LobbyMemberEntry& member : m_CurrentLobby.members)
+		{
+			if (member.user_id == userID)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+private:
+	std::set<int64_t> m_setMembersBeforeUs;
+	bool m_bJoinOrderKnown = false;
+	void ResetJoinOrder();
+	void RecordJoinOrder(const std::vector<LobbyMemberEntry>& members);
+
+public:
 
 	std::function<void(UnicodeString strMessage, Color color)> m_OnChatCallback = nullptr;
 	void RegisterForChatCallback(std::function<void(UnicodeString strMessage, Color color)> cb)
