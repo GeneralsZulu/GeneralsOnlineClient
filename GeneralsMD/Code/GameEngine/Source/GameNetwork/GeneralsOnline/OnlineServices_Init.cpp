@@ -1,5 +1,6 @@
 #include "GameNetwork/GeneralsOnline/NGMP_interfaces.h"
 #include "GameNetwork/GeneralsOnline/NetworkMesh.h"
+#include "GameNetwork/GeneralsOnline/WifiLowLatency.h"
 #include "GameNetwork/GeneralsOnline/HTTP/HTTPManager.h"
 #include "Common/version.h"
 #include "Common/Debug.h"
@@ -370,6 +371,8 @@ void NGMP_OnlineServicesManager::Shutdown()
 	// First, wait for all screenshot threads to complete
 	// This prevents race conditions where threads might still be using resources
 	WaitForScreenshotThreads();
+
+	WifiLowLatency::End();
 
 	NetworkMeshLibrary::Shutdown();
 

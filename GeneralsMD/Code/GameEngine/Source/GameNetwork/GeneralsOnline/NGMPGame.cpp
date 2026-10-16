@@ -8,6 +8,7 @@
 #include "GameNetwork/GameSpyOverlay.h"
 #include "Common/RandomValue.h"
 #include "GameNetwork/GeneralsOnline/NGMP_interfaces.h"
+#include "GameNetwork/GeneralsOnline/WifiLowLatency.h"
 #include "GameNetwork/NetworkInterface.h"
 #include "GameNetwork/ResumeFromReplay.h"
 #include "Common/GlobalData.h"
@@ -508,6 +509,12 @@ void NGMPGame::launchGame(void)
 	// Time to initialize TheNetwork for this game.
 	TheNetwork = NetworkInterface::createNetwork();
 	TheNetwork->init();
+
+	// Wi-Fi tuning for the match, released when TheNetwork is destroyed
+	if (NGMP_OnlineServicesManager::GetInstance() != nullptr && NGMP_OnlineServicesManager::GetInstance()->GetServiceConfig().wifi_low_latency)
+	{
+		WifiLowLatency::Begin();
+	}
 	
 	NetworkMesh* pMesh = NGMP_OnlineServicesManager::GetNetworkMesh();
 	if (pMesh != nullptr)
