@@ -934,21 +934,13 @@ void PopulatePlayerInfoWindows( AsciiString parentWindowName )
 			win = findWindow(parentWindow, parentWindowName, "StaticTextGamesPlayedValue");
 			if (win)
 			{
-#if defined(GENERALS_ONLINE)
-				uStr.format(L"%d (%d QM)", numGames, stats.elo_num_matches);
-#else
 				uStr.format(L"%d", numGames);
-#endif
 				GadgetStaticTextSetText(win, uStr);
 			}
 			win = findWindow(parentWindow, parentWindowName, "StaticTextWinsValue");
 			if (win)
 			{
-#if defined(GENERALS_ONLINE)
-				uStr.format(L"%d (Elo: %d)", numWins, stats.elo_rating);
-#else
 				uStr.format(L"%d", numWins);
-#endif
 				GadgetStaticTextSetText(win, uStr);
 			}
 			win = findWindow(parentWindow, parentWindowName, "StaticTextLossesValue");
@@ -957,22 +949,10 @@ void PopulatePlayerInfoWindows( AsciiString parentWindowName )
 				uStr.format(L"%d", numLosses);
 				GadgetStaticTextSetText(win, uStr);
 			}
-#if defined(GENERALS_ONLINE)
-			win = findWindow(parentWindow, parentWindowName, "StaticTextDisconnects");
-			if (win)
-			{
-				uStr.format(L"World Series Elo:");
-				GadgetStaticTextSetText(win, uStr);
-			}
-#endif
 			win = findWindow(parentWindow, parentWindowName, "StaticTextDisconnectsValue");
 			if (win)
 			{
-#if defined(GENERALS_ONLINE)
-				uStr.format(L"%d", stats.monthly_elo_rating);
-#else
 				uStr.format(L"%d", numDiscons);
-#endif
 				GadgetStaticTextSetText(win, uStr);			
 			}
 

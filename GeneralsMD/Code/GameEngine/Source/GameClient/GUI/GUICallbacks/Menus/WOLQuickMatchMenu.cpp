@@ -1152,21 +1152,6 @@ void WOLQuickMatchMenuInit( WindowLayout *layout, void *userData )
 	GadgetListBoxAddEntryText(quickmatchTextWindow, UnicodeString(L"Special thanks to map makers Tanso, ReLaX, cncHD, Specovik, Mp3, Jundiyy & Bamovich for making quickmatch possible."), GameMakeColor(255, 194, 25, 255), -1, -1);
 
 
-	// refresh out stats, needed for ELO data
-	NGMP_OnlineServices_AuthInterface* pAuthInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_AuthInterface>();
-    NGMP_OnlineServices_StatsInterface* pStatsInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_StatsInterface>();
-    if (pAuthInterface != nullptr && pStatsInterface != nullptr)
-    {
-		pStatsInterface->findPlayerStatsByID(pAuthInterface->GetUserID(), [=](bool bSuccess, PSPlayerStats stats)
-			{
-				if (bSuccess)
-				{
-					UnicodeString eloStr;
-					eloStr.format(L"Your current Elo rating is %d (World Series: %d) after %d match(es)", stats.elo_rating, stats.monthly_elo_rating, stats.elo_num_matches);
-					GadgetListBoxAddEntryText(quickmatchTextWindow, eloStr, GameMakeColor(255, 194, 25, 255), -1, -1);
-				}
-			}, EStatsRequestPolicy::BYPASS_CACHE_FORCE_REQUEST);
-    }
 
 #endif
 

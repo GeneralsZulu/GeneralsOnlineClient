@@ -2228,14 +2228,6 @@ GameSlot *lSlot = game->getSlot(game->getLocalSlotNum());
 
 		UnicodeString name = slot->getName();
 
-#if defined(GENERALS_ONLINE)
-		// if QM, show ELO
-		NGMPGame* pNGMPGame = (NGMPGame*)game;
-		if (pNGMPGame->isQMGame())
-		{
-			name.format(L"%s (Elo: %d)", slot->getName().str(), stats.elo_rating);
-		}
-#endif
 
 		GadgetStaticTextSetText(m_playerNames[netSlot], name );
 		m_playerNames[netSlot]->winSetEnabledTextColors(houseColor, m_playerNames[netSlot]->winGetEnabledTextBorderColor());
