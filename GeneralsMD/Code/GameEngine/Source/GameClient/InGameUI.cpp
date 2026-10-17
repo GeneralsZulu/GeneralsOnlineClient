@@ -6593,7 +6593,7 @@ void InGameUI::updateHuntedPlayers()
 					L"%ls is no longer hunted", player->getPlayerDisplayName().str());
 
 		RGBColor rgb;
-		rgb.setFromInt(player->getPlayerColor());
+		rgb.setFromInt(GameMakeColorReadable(player->getPlayerColor()));
 		messageNoFormat(&rgb, announcement);
 	}
 }

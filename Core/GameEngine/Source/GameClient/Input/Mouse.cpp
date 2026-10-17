@@ -1247,8 +1247,16 @@ void Mouse::drawTooltip()
 		}
 		if( yPos + height + 4 > m_maxY ) // +4 for spill
 		{
-			//yPos = m_maxY - height;
-			yPos -= /*40 +*/ height;
+			// TheSuperHackers @bugfix bill-rich 17/10/2026 Flip above the cursor
+			// only when the tooltip fits there. A tooltip taller than the room
+			// above the cursor used to go off the top of the screen (the online
+			// lobby player tooltip did, while it carried the whole connection
+			// status dump); such a tooltip is pinned to the bottom edge instead,
+			// and to the top edge if it fits nowhere.
+			if( m_currMouse.pos.y - height >= m_minY )
+				yPos -= /*40 +*/ height;
+			else
+				yPos = max( m_minY, m_maxY - height - 4 );
 		}
 
 		Int boxWidth = (m_tooltipAnimateBackground)?(min(width, m_highlightPos)):width;

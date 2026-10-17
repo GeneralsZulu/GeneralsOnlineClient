@@ -53,6 +53,7 @@
 #include "GameLogic/ScriptEngine.h"
 #include "GameLogic/VictoryConditions.h"
 #include "GameClient/DisconnectMenu.h"
+#include "GameClient/Color.h"
 #include "GameClient/InGameUI.h"
 #include "WWLib/TARGA.h"
 
@@ -906,7 +907,7 @@ void ConnectionManager::processChat(NetChatCommandMsg *msg)
 	if ( ((1<<m_localSlot) & msg->getPlayerMask() ) && canSeeChat  )
 	{
 		RGBColor rgb;
-		rgb.setFromInt(player->getPlayerColor());
+		rgb.setFromInt(GameMakeColorReadable(player->getPlayerColor()));
 #if defined(GENERALS_ONLINE)
 		TheInGameUI->messageColor(true, &rgb, UnicodeString(L"%ls"), unitext.str());
 #else
