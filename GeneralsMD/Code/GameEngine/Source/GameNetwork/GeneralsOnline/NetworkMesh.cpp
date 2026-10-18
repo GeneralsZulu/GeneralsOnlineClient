@@ -139,7 +139,11 @@ void OnSteamNetConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t
 			// Upstream GeneralsOnline d60a850c9 / 3f1ebe4a7 / 92289d416: only the later joiner of a
 			// pair gives up; unknown join order caps both sides; a departed peer is capped without
 			// leaving; and a running match keeps repairing the link until the service drops the player.
-			const int numSignallingAttempts = 2;
+			// Oct 17 2026: back to 3 (upstream uses 2). The TURN-credential restart in
+			// ApplyTurnCredentials re-signals every pending link right after the join, and the
+			// side that receives that signal counts it as an attempt it never chose to make. With
+			// a cap of 2 a single slow ICE run then ejected the guest ("cannot reach user").
+			const int numSignallingAttempts = 3;
 			NGMP_OnlineServices_LobbyInterface* pJoinOrderLobby = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
 			const bool bWeJoinedLater = pJoinOrderLobby == nullptr || !pJoinOrderLobby->IsJoinOrderKnown() || pJoinOrderLobby->JoinedAfter(plrConnection.m_userID);
 			const bool bPeerLeft = pJoinOrderLobby != nullptr && pJoinOrderLobby->IsJoinOrderKnown() && !pJoinOrderLobby->IsLobbyMember(plrConnection.m_userID);
@@ -965,6 +969,16 @@ void NetworkMesh::ApplyTurnCredentials(const std::string& strUsername, const std
 		}
 		for (int64_t remoteUserID : vecRestart)
 		{
+			// This restart is ours, not a failed attempt: give the attempt back so the
+			// re-signal (which adds one in ConnectToSingleUser) lands on the same count.
+			{
+				std::lock_guard<std::recursive_mutex> lock(m_mapConnectionsMutex);
+				auto it = m_mapConnections.find(remoteUserID);
+				if (it != m_mapConnections.end() && it->second.m_SignallingAttempts > 0)
+				{
+					--it->second.m_SignallingAttempts;
+				}
+			}
 			pWS->SendData_RequestSignalling(remoteUserID);
 			++restarted;
 		}

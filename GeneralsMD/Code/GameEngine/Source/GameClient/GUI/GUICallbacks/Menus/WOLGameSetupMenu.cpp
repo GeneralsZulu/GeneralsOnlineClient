@@ -5007,6 +5007,12 @@ WindowMsgHandledType WOLGameSetupMenuSystem( GameWindow *window, UnsignedInt msg
 					{
 						//I'm the Client... send an accept message to the host.
 						auto game = pLobbyInterface->GetCurrentGame();
+						if (game == nullptr)
+						{
+							// Oct 17 2026 crash: Accept pressed right after the mesh gave up on a
+							// peer and the lobby leave tore the game down (Tytan, 2.0.6).
+							break;
+						}
 						GameSlot *localSlot = game->getSlot(game->getLocalSlotNum());
 						if (localSlot)
 						{
