@@ -73,6 +73,9 @@ endif()
 
 include(cmake/config.cmake)
 
+# Zulu GO keeps the FetchContent build of curl, sentry and GameNetworkingSockets
+# (cmake/networking.cmake) instead of upstream's vcpkg ports: the msvc-wine lab
+# toolchain has no port builds for them. GNS is pinned to GeneralsOnline's fork.
 if(RTS_BUILD_ZEROHOUR AND NOT IS_VS6_BUILD)
     if(NOT VCPKG_TOOLCHAIN)
         message(FATAL_ERROR

@@ -220,8 +220,9 @@ public:
 		}
 	}
 
-	std::function<void(int)> m_fnCallbackMatchmakingSetupProgress = nullptr;
-	void RegisterForMatchmakingSetupProgressCallback(std::function<void(int)> cb)
+	// timeoutMs: how long to wait for the next step; countdownMs: start countdown length, 0 while setting up, -1 if not sent
+	std::function<void(int, int)> m_fnCallbackMatchmakingSetupProgress = nullptr;
+	void RegisterForMatchmakingSetupProgressCallback(std::function<void(int, int)> cb)
 	{
 		m_fnCallbackMatchmakingSetupProgress = cb;
 	}
@@ -231,11 +232,11 @@ public:
 		m_fnCallbackMatchmakingSetupProgress = nullptr;
 	}
 
-	void InvokeMatchmakingSetupProgressCallback(int timeoutMs)
+	void InvokeMatchmakingSetupProgressCallback(int timeoutMs, int countdownMs)
 	{
 		if (m_fnCallbackMatchmakingSetupProgress != nullptr)
 		{
-			m_fnCallbackMatchmakingSetupProgress(timeoutMs);
+			m_fnCallbackMatchmakingSetupProgress(timeoutMs, countdownMs);
 		}
 	}
 	
@@ -243,7 +244,7 @@ public:
 	// updates
 	// TheSuperHackers @feature bill-rich 11/10/2026 The three settings a resume has to align carry an optional
 	// completion callback, so the arm can run them one after another and only then send the arm.
-	void UpdateCurrentLobby_Map(AsciiString strMap, AsciiString strMapPath, bool bIsOfficial, int newMaxPlayers, uint32_t mapCRC = 0, std::function<void(bool bSuccess)> onDone = nullptr);
+	void UpdateCurrentLobby_Map(UnicodeString strMap, AsciiString strMapPath, bool bIsOfficial, int newMaxPlayers, uint32_t mapCRC = 0, std::function<void(bool bSuccess)> onDone = nullptr);
 	void UpdateCurrentLobby_LimitSuperweapons(bool bLimitSuperweapons, std::function<void(bool bSuccess)> onDone = nullptr);
 	void UpdateCurrentLobby_EnforceRandom(bool bEnforceRandom);
 	void UpdateCurrentLobby_StartingCash(UnsignedInt startingCashValue, std::function<void(bool bSuccess)> onDone = nullptr);
@@ -424,6 +425,14 @@ public:
 
 	bool IsHost();
 
+private:
+	std::set<int64_t> m_setMembersBeforeUs;
+	bool m_bJoinOrderKnown = false;
+	void ResetJoinOrder();
+	void RecordJoinOrder(const std::vector<LobbyMemberEntry>& members);
+
+public:
+
 	void UpdateRoomDataCache(std::function<void(bool)> fnCallback = nullptr);
 
 	std::function<void(LobbyMemberEntry)> m_cbPlayerDoesntHaveMap = nullptr;
@@ -482,14 +491,6 @@ public:
 		}
 		return false;
 	}
-
-private:
-	std::set<int64_t> m_setMembersBeforeUs;
-	bool m_bJoinOrderKnown = false;
-	void ResetJoinOrder();
-	void RecordJoinOrder(const std::vector<LobbyMemberEntry>& members);
-
-public:
 
 	std::function<void(UnicodeString strMessage, Color color)> m_OnChatCallback = nullptr;
 	void RegisterForChatCallback(std::function<void(UnicodeString strMessage, Color color)> cb)

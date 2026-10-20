@@ -44,8 +44,10 @@ set(Protobuf_USE_STATIC_LIBS OFF CACHE BOOL "Use shared protobuf when available"
 
 FetchContent_Declare(
     gamenetworkingsockets
-    GIT_REPOSITORY https://github.com/ValveSoftware/GameNetworkingSockets.git
-    GIT_TAG        v1.6.0
+    # GeneralsOnline's fork: v1.6.1 plus their ICE fixes (STUN/TURN failover,
+    # async DNS, no shutdown hangs). Same pin as the vcpkg registry upstream uses.
+    GIT_REPOSITORY https://github.com/tintinhamans/GNS.git
+    GIT_TAG        d2837fac6aa4329f96887b71929e6799e9bcc1ac
     GIT_SUBMODULES_RECURSE TRUE
 )
 FetchContent_Populate(gamenetworkingsockets)

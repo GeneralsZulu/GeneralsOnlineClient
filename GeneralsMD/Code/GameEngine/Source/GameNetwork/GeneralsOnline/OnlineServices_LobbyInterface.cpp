@@ -38,7 +38,7 @@ UnicodeString NGMP_OnlineServices_LobbyInterface::GetCurrentLobbyMapDisplayName(
 
 	if (IsInLobby())
 	{
-		strDisplayName.format(L"%hs", m_CurrentLobby.map_name.c_str());
+		strDisplayName = UnicodeString(from_utf8(m_CurrentLobby.map_name).c_str());
 	}
 
 	return strDisplayName;
@@ -125,7 +125,7 @@ namespace
 	}
 }
 
-void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_Map(AsciiString strMap, AsciiString strMapPath, bool bIsOfficial, int newMaxPlayers, uint32_t mapCRC, std::function<void(bool bSuccess)> onDone)
+void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_Map(UnicodeString strMap, AsciiString strMapPath, bool bIsOfficial, int newMaxPlayers, uint32_t mapCRC, std::function<void(bool bSuccess)> onDone)
 {
 	// reset autostart if host changes anything (because ready flag will reset too)
 #if !defined(GENERALS_ONLINE_DISABLE_AUTO_ACCEPT)
@@ -149,8 +149,8 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_Map(AsciiString strM
 
 	nlohmann::json j;
 	j["field"] = ELobbyUpdateField::LOBBY_MAP;
-	j["map"] = strMap.str();
-	j["map_path"] = sanitizedMapPath.str();
+	j["map"] = to_utf8(strMap.str());
+	j["map_path"] = local_to_utf8(sanitizedMapPath.str());
 	j["map_official"] = bIsOfficial;
 	j["max_players"] = newMaxPlayers;
 	// TheSuperHackers @feature bill-rich 02/10/2026 So a member without this map can
@@ -996,6 +996,7 @@ void NGMP_OnlineServices_LobbyInterface::SearchForLobbies(std::function<void()> 
 				lobbyEntryIter["Name"].get_to(lobbyEntry.name);
 				lobbyEntryIter["MapName"].get_to(lobbyEntry.map_name);
 				lobbyEntryIter["MapPath"].get_to(lobbyEntry.map_path);
+				lobbyEntry.map_path = utf8_to_local(lobbyEntry.map_path); // local file path from here on
 				lobbyEntryIter["IsMapOfficial"].get_to(lobbyEntry.map_official);
 				if (lobbyEntryIter.contains("MapCRC"))
 					lobbyEntryIter["MapCRC"].get_to(lobbyEntry.map_crc);
@@ -1204,6 +1205,7 @@ void NGMP_OnlineServices_LobbyInterface::Tick()
 		}
 	}
 
+	// TODO_NGMP: Do we still need this safety measure?
 	if (IsInLobby())
 	{
 		// do we have a pending start?
@@ -1302,6 +1304,13 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 								fnCallback(false);
 							}
 
+							// the match runs on this lobby's mesh
+							if (TheNGMPGame != nullptr && TheNGMPGame->isGameInProgress())
+							{
+								NetworkLog(ELogVerbosity::LOG_RELEASE, "[NGMP] Lobby lookup returned 404 during a match, keeping the match running");
+								return;
+							}
+
 							LeaveCurrentLobby();
 							// After the leave: LeaveCurrentLobby resets this flag, and the
 							// setup screen needs it to show the "host left" dialog.
@@ -1312,7 +1321,7 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 						nlohmann::json jsonObjectRoot = nlohmann::json::parse(strBody);
 
 						NetworkLog(ELogVerbosity::LOG_DEBUG, "LOBBY JSON");
-						NetworkLog(ELogVerbosity::LOG_DEBUG, strBody.c_str());
+						NetworkLog(ELogVerbosity::LOG_DEBUG, "%s", strBody.c_str());
 
 						auto lobbyEntryIter = jsonObjectRoot["lobby"];
 
@@ -1322,6 +1331,7 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 						lobbyEntryIter["Name"].get_to(lobbyEntry.name);
 						lobbyEntryIter["MapName"].get_to(lobbyEntry.map_name);
 						lobbyEntryIter["MapPath"].get_to(lobbyEntry.map_path);
+						lobbyEntry.map_path = utf8_to_local(lobbyEntry.map_path); // local file path from here on
 						lobbyEntryIter["IsMapOfficial"].get_to(lobbyEntry.map_official);
 						if (lobbyEntryIter.contains("MapCRC"))
 							lobbyEntryIter["MapCRC"].get_to(lobbyEntry.map_crc);
@@ -1592,7 +1602,7 @@ void NGMP_OnlineServices_LobbyInterface::JoinLobby(LobbyEntry lobbyInfo, std::st
 
 			if (!strPassword.empty())
 			{
-				j["password"] = strPassword.c_str();
+				j["password"] = local_to_utf8(strPassword);
 			}
 
 			std::string strPostData = j.dump();
@@ -1600,8 +1610,24 @@ void NGMP_OnlineServices_LobbyInterface::JoinLobby(LobbyEntry lobbyInfo, std::st
 			// create our mesh
 			if (m_pLobbyMesh == nullptr)
 			{
-				m_pLobbyMesh = new NetworkMesh();
+				NetworkMesh* pNewMesh = new NetworkMesh();
+				if (!pNewMesh->IsInitialized())
+				{
+					NetworkLog(ELogVerbosity::LOG_RELEASE, "[NGMP] Failed to initialize network mesh, aborting lobby join");
+					delete pNewMesh;
+					ResetLobbyTryingToJoin();
+					m_bAttemptingToJoinLobby = false;
+					if (m_callbackJoinedLobby != nullptr)
+					{
+						m_callbackJoinedLobby(EJoinLobbyResult::JoinLobbyResult_JoinFailed);
+					}
+					return;
+				}
+				m_pLobbyMesh = pNewMesh;
 			}
+
+			// TURN credentials arrive with the join response
+			m_pLobbyMesh->AwaitTurnCredentials();
 
 			// convert
 			NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendPUTRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, strPostData.c_str(), [=](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
@@ -1609,6 +1635,12 @@ void NGMP_OnlineServices_LobbyInterface::JoinLobby(LobbyEntry lobbyInfo, std::st
 					NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
 					if (pLobbyInterface == nullptr || pLobbyInterface != this || pLobbyInterface->m_LobbyJoinGeneration.load() != lobbyJoinGeneration)
 					{
+						// stale join response landed after we already left/moved on; leave again if it succeeded
+						if (pLobbyInterface == this && statusCode == 200 && bSuccess && m_CurrentLobby.lobbyID != lobbyInfo.lobbyID)
+						{
+							std::map<std::string, std::string> mapLeaveHeaders;
+							NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendDELETERequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapLeaveHeaders, "", nullptr);
+						}
 						return;
 					}
 
@@ -1653,15 +1685,15 @@ void NGMP_OnlineServices_LobbyInterface::JoinLobby(LobbyEntry lobbyInfo, std::st
 							m_strTURNUsername = resp.turn_username;
 							m_strTURNToken = resp.turn_token;
 							NetworkLog(ELogVerbosity::LOG_DEBUG, "Got TURN credentials: %s", (m_strTURNUsername.empty() || m_strTURNToken.empty()) ? "NONE" : "present");
-							// The lobby push that created the mesh has usually beaten this response.
-							if (NetworkMesh* pMesh = NGMP_OnlineServicesManager::GetNetworkMesh())
-							{
-								pMesh->ApplyTurnCredentials(m_strTURNUsername, m_strTURNToken);
-							}
 						}
 						catch (...)
 						{
 
+						}
+
+						if (m_pLobbyMesh != nullptr)
+						{
+							m_pLobbyMesh->SetTurnCredentials(m_strTURNUsername, m_strTURNToken);
 						}
 
 						// for safety
@@ -1755,6 +1787,20 @@ void NGMP_OnlineServices_LobbyInterface::LeaveCurrentLobby()
 	ReleaseLog("GO lobby: leaving lobby %lld", (long long)m_CurrentLobby.lobbyID);
 	m_bCannotConnectToLobbyPending = false;
 	ResetJoinOrder();
+
+	// invalidate any join/create still in flight
+	++m_LobbyJoinGeneration;
+	m_bAttemptingToJoinLobby = false;
+	ResetLobbyTryingToJoin();
+
+	// a mesh connectivity check started for this lobby is meaningless once we've left it; drop it so a
+	// late reply never fires into whatever lobby/menu we end up in next
+	std::shared_ptr<WebSocket> pWS = NGMP_OnlineServicesManager::GetWebSocket();
+	if (pWS != nullptr)
+	{
+		pWS->ClearConnectivityCheckCallback();
+	}
+
 	// reset host migration flags
 	ResetHostMigrationFlags();
 
@@ -1862,6 +1908,9 @@ void NGMP_OnlineServices_LobbyInterface::CreateLobby(UnicodeString strLobbyName,
 	AnticheatPlugInterface::EndSession();
 	ResetHostMigrationFlags();
 
+	// shares the join generation counter with JoinLobby
+	const uint64_t lobbyCreateGeneration = ++m_LobbyJoinGeneration;
+
 	NGMP_OnlineServicesManager::GetInstance()->GetAndParseServiceConfig([=]()
 		{
 			m_CurrentLobby = LobbyEntry();
@@ -1885,7 +1934,7 @@ void NGMP_OnlineServices_LobbyInterface::CreateLobby(UnicodeString strLobbyName,
 			nlohmann::json j;
 			j["name"] = to_utf8(strLobbyName.str());
 			j["map_name"] = strMapName;
-			j["map_path"] = sanitizedMapPath.str();
+			j["map_path"] = local_to_utf8(sanitizedMapPath.str());
 			j["map_official"] = bIsOfficial;
 			j["max_players"] = initialMaxSize;
 			// See UpdateCurrentLobby_Map: lets a joiner fetch this map by CRC.
@@ -1898,7 +1947,7 @@ void NGMP_OnlineServices_LobbyInterface::CreateLobby(UnicodeString strLobbyName,
 			j["track_stats"] = bTrackStats;
 			j["starting_cash"] = startingCash;
 			j["passworded"] = bPassworded;
-			j["password"] = strPassword;
+			j["password"] = local_to_utf8(strPassword);
 			j["allow_observers"] = bAllowObservers;
 			j["exe_crc"] = TheGlobalData->m_exeCRC;
 			j["ini_crc"] = TheGlobalData->m_iniCRC;
@@ -1923,14 +1972,28 @@ void NGMP_OnlineServices_LobbyInterface::CreateLobby(UnicodeString strLobbyName,
 						nlohmann::json jsonObject = nlohmann::json::parse(strBody);
 						CreateLobbyResponse resp = jsonObject.get<CreateLobbyResponse>();
 
+						if (pLobbyInterface != this || pLobbyInterface->m_LobbyJoinGeneration.load() != lobbyCreateGeneration)
+						{
+							// stale response; delete the orphaned lobby if the server created one
+							NetworkLog(ELogVerbosity::LOG_RELEASE, "[NGMP] Ignoring stale CreateLobby response (generation changed)");
+							if (resp.result == ECreateLobbyResponseResult::SUCCEEDED)
+							{
+								std::string strLeaveURI = std::format("{}/{}", NGMP_OnlineServicesManager::GetAPIEndpoint("Lobby"), resp.lobby_id);
+								std::map<std::string, std::string> mapLeaveHeaders;
+								NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendDELETERequest(strLeaveURI.c_str(), EIPProtocolVersion::DONT_CARE, mapLeaveHeaders, "", nullptr);
+							}
+							return;
+						}
+
 						m_strTURNUsername = resp.turn_username;
 						m_strTURNToken = resp.turn_token;
 						ReleaseLog("GO lobby: create lobby result=%d id=%lld turnCreds=%s", (int)resp.result, (long long)resp.lobby_id,
 							(m_strTURNUsername.empty() || m_strTURNToken.empty()) ? "NONE" : "present");
 
-						if (NetworkMesh* pMesh = NGMP_OnlineServicesManager::GetNetworkMesh())
+						// a mesh kept from a failed join has stale credentials
+						if (m_pLobbyMesh != nullptr)
 						{
-							pMesh->ApplyTurnCredentials(m_strTURNUsername, m_strTURNToken);
+							m_pLobbyMesh->SetTurnCredentials(m_strTURNUsername, m_strTURNToken);
 						}
 
 						if (resp.result == ECreateLobbyResponseResult::SUCCEEDED)
@@ -1991,11 +2054,17 @@ void NGMP_OnlineServices_LobbyInterface::CreateLobby(UnicodeString strLobbyName,
 							// we always need to get the enc key etc
 							pLobbyInterface->OnJoinedOrCreatedLobby(false, [=](bool bSuccess)
 								{
-									// TODO_NGMP: Impl
-									pLobbyInterface->InvokeCreateLobbyCallback(resp.result == ECreateLobbyResponseResult::SUCCEEDED);
+									if (pLobbyInterface->m_LobbyJoinGeneration.load() != lobbyCreateGeneration)
+									{
+										return;
+									}
 
-									// Set our properties
-									pLobbyInterface->ApplyLocalUserPropertiesToCurrentNetworkRoom();
+									pLobbyInterface->InvokeCreateLobbyCallback(bSuccess);
+
+									if (bSuccess)
+									{
+										pLobbyInterface->ApplyLocalUserPropertiesToCurrentNetworkRoom();
+									}
 								});
 						}
 						else
@@ -2030,9 +2099,22 @@ void NGMP_OnlineServices_LobbyInterface::OnJoinedOrCreatedLobby(bool bAlreadyUpd
 	// join the network mesh too
 	if (m_pLobbyMesh == nullptr)
 	{
-		NetworkLog(ELogVerbosity::LOG_RELEASE, "[Lobby] Creating network mesh");
-		m_pLobbyMesh = new NetworkMesh();
-		NetworkLog(ELogVerbosity::LOG_RELEASE, "[Lobby] Network mesh created");
+		NetworkMesh* pNewMesh = new NetworkMesh();
+		if (!pNewMesh->IsInitialized())
+		{
+			NetworkLog(ELogVerbosity::LOG_RELEASE, "[NGMP] Failed to initialize network mesh for lobby");
+			delete pNewMesh;
+			m_bAttemptingToJoinLobby = false;
+
+			QueueCannotConnectToLobby();
+
+			if (fnCallback != nullptr)
+			{
+				fnCallback(false);
+			}
+			return;
+		}
+		m_pLobbyMesh = pNewMesh;
 	}
 
 	m_bMarkedGameAsFinished = false;

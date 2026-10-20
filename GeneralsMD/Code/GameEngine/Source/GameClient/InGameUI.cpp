@@ -2171,11 +2171,15 @@ void InGameUI::update()
 		layout->runUpdate();
 	}
 
-	if (m_cameraRotatingLeft || m_cameraRotatingRight || m_cameraZoomingIn || m_cameraZoomingOut)
+	if (m_cameraRotatingLeft || m_cameraRotatingRight || m_cameraZoomingIn || m_cameraZoomingOut
+		|| m_cameraPitchingUp || m_cameraPitchingDown)
 	{
 		// TheSuperHackers @tweak The camera rotation and zoom are now decoupled from the render update.
 		const Real fpsRatio = TheFramePacer->getBaseOverUpdateFpsRatio();
-		const Real rotateAngle = TheGlobalData->m_keyboardCameraRotateSpeed * fpsRatio;
+		// Pitch at half speed feels alike: shorter range, larger view change per degree.
+		const Real turnAngle = TheGlobalData->m_keyboardCameraRotateSpeed * 0.6f * fpsRatio;
+		const Real rotateAngle = turnAngle * TheGlobalData->m_cameraRotateSpeedMultiplier;
+		const Real pitchAngle = turnAngle * 0.5f * TheGlobalData->m_cameraPitchSpeedMultiplier;
 		const Real zoomHeight = (Real)View::ZoomHeightPerSecond * fpsRatio;
 
 		if (m_cameraRotatingLeft && !m_cameraRotatingRight)
@@ -2194,6 +2198,15 @@ void InGameUI::update()
 		else if (m_cameraZoomingOut && !m_cameraZoomingIn)
 		{
 			TheTacticalView->userZoom(+zoomHeight);
+		}
+
+		if (m_cameraPitchingUp && !m_cameraPitchingDown)
+		{
+			TheTacticalView->userSetPitch(TheTacticalView->getPitch() + pitchAngle);
+		}
+		else if (m_cameraPitchingDown && !m_cameraPitchingUp)
+		{
+			TheTacticalView->userSetPitch(TheTacticalView->getPitch() - pitchAngle);
 		}
 	}
 
@@ -2317,6 +2330,8 @@ void InGameUI::reset()
 	setCameraRotateRight(false);
 	setCameraZoomIn(false);
 	setCameraZoomOut(false);
+	setCameraPitchUp(false);
+	setCameraPitchDown(false);
 	setCameraTrackingDrawable(false);
 
 	m_windowLayouts.clear();
@@ -3845,6 +3860,8 @@ void InGameUI::setInputEnabled(Bool enable)
 		setCameraRotateRight(false);		// KP6
 		setCameraZoomIn(false);					// KP8
 		setCameraZoomOut(false);				// KP2
+		setCameraPitchUp(false);				// KP9
+		setCameraPitchDown(false);			// KP3
 	}
 }
 

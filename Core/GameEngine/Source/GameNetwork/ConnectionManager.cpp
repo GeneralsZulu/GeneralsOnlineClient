@@ -925,7 +925,9 @@ void ConnectionManager::processFile(NetFileCommandMsg *msg)
 {
 #ifdef DEBUG_LOGGING
 	UnicodeString log;
-	log.format(L"Saw file transfer: '%hs' of %d bytes from %d", msg->getPortableFilename().str(), msg->getFileLength(), msg->getPlayerID());
+	UnicodeString uFilename;
+	uFilename.translate(msg->getPortableFilename());
+	log.format(L"Saw file transfer: '%s' of %d bytes from %d", uFilename.str(), msg->getFileLength(), msg->getPlayerID());
 	DEBUG_LOG(("%ls", log.str()));
 #endif
 
@@ -2749,7 +2751,9 @@ UnsignedShort ConnectionManager::sendFileAnnounce(AsciiString path, UnsignedByte
 	if (!theFile || !theFile->size())
 	{
 		UnicodeString log;
-		log.format(L"Not sending file '%hs' to %X", path.str(), playerMask);
+		UnicodeString uPath;
+		uPath.translate(path);
+		log.format(L"Not sending file '%s' to %X", uPath.str(), playerMask);
 		DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("%ls", log.str()));
 		if (TheLAN)
 			TheLAN->OnChat(L"sendFile", 0, log, LANAPI::LANCHAT_SYSTEM);
@@ -2787,7 +2791,9 @@ void ConnectionManager::sendFile(AsciiString path, UnsignedByte playerMask, Unsi
 	if (!theFile || !theFile->size())
 	{
 		UnicodeString log;
-		log.format(L"Not sending file '%hs' to %X", path.str(), playerMask);
+		UnicodeString uPath;
+		uPath.translate(path);
+		log.format(L"Not sending file '%s' to %X", uPath.str(), playerMask);
 		DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("%ls", log.str()));
 		if (TheLAN)
 			TheLAN->OnChat(L"sendFile", 0, log, LANAPI::LANCHAT_SYSTEM);
@@ -2796,6 +2802,11 @@ void ConnectionManager::sendFile(AsciiString path, UnsignedByte playerMask, Unsi
 
 	Int len = theFile->size();
 	char *buf = theFile->readEntireAndClose();
+	if (buf == nullptr)
+	{
+		DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("Not sending file '%s' to %X, it could not be read", path.str(), playerMask));
+		return;
+	}
 	NetCommandDataChunk rawDataChunk(buf, len);
 
 	// compress Targas

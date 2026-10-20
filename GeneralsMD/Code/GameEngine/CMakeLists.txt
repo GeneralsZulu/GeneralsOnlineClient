@@ -1168,29 +1168,6 @@ set(GAMEENGINE_SRC
     Include/GameNetwork/GeneralsOnline/HTTP/HTTPRequest.h
     Include/GameNetwork/GeneralsOnline/NextGenTransport.h
     Include/GameNetwork/GeneralsOnline/PluginInterfaces.h
-    Include/GameNetwork/GeneralsOnline/Vendor/ValveNetworkingSockets/steam/isteamnetworkingmessages.h
-    Include/GameNetwork/GeneralsOnline/Vendor/ValveNetworkingSockets/steam/isteamnetworkingsockets.h
-    Include/GameNetwork/GeneralsOnline/Vendor/ValveNetworkingSockets/steam/isteamnetworkingutils.h
-    Include/GameNetwork/GeneralsOnline/Vendor/ValveNetworkingSockets/steam/steam_api_common.h
-    Include/GameNetwork/GeneralsOnline/Vendor/ValveNetworkingSockets/steam/steamclientpublic.h
-    Include/GameNetwork/GeneralsOnline/Vendor/ValveNetworkingSockets/steam/steamnetworkingcustomsignaling.h
-    Include/GameNetwork/GeneralsOnline/Vendor/ValveNetworkingSockets/steam/steamnetworkingsockets.h
-    Include/GameNetwork/GeneralsOnline/Vendor/ValveNetworkingSockets/steam/steamnetworkingsockets_flat.h
-    Include/GameNetwork/GeneralsOnline/Vendor/ValveNetworkingSockets/steam/steamnetworkingtypes.h
-    Include/GameNetwork/GeneralsOnline/Vendor/ValveNetworkingSockets/steam/steamtypes.h
-    Include/GameNetwork/GeneralsOnline/Vendor/ValveNetworkingSockets/steam/steamuniverse.h
-    Include/GameNetwork/GeneralsOnline/Vendor/libcurl/curl.h
-    Include/GameNetwork/GeneralsOnline/Vendor/libcurl/curlver.h
-    Include/GameNetwork/GeneralsOnline/Vendor/libcurl/easy.h
-    Include/GameNetwork/GeneralsOnline/Vendor/libcurl/header.h
-    Include/GameNetwork/GeneralsOnline/Vendor/libcurl/mprintf.h
-    Include/GameNetwork/GeneralsOnline/Vendor/libcurl/multi.h
-    Include/GameNetwork/GeneralsOnline/Vendor/libcurl/options.h
-    Include/GameNetwork/GeneralsOnline/Vendor/libcurl/stdcheaders.h
-    Include/GameNetwork/GeneralsOnline/Vendor/libcurl/system.h
-    Include/GameNetwork/GeneralsOnline/Vendor/libcurl/typecheck-gcc.h
-    Include/GameNetwork/GeneralsOnline/Vendor/libcurl/urlapi.h
-    Include/GameNetwork/GeneralsOnline/Vendor/libcurl/websockets.h
     Source/GameNetwork/GeneralsOnline/DiscordRichPresence.cpp
     Source/GameNetwork/GeneralsOnline/NGMP_Helpers.cpp
     Source/GameNetwork/GeneralsOnline/NGMPGame.cpp
@@ -1232,6 +1209,8 @@ add_library(z_gameengine STATIC)
 
 target_sources(z_gameengine PRIVATE ${GAMEENGINE_SRC})
 
+# gamespy builds as a DLL here (BUILD_SHARED_LIBS from cmake/networking.cmake), so the
+# gcd_* key arrays it owns must be imported; upstream links it statically.
 target_compile_definitions(z_gameengine PRIVATE GAMESPY_IMPORT_DATA)
 
 target_include_directories(z_gameengine PUBLIC
@@ -1254,14 +1233,14 @@ target_link_libraries(z_gameengine PUBLIC
     z_wwvegas
 )
 
+# Generals Online networking dependencies, provided by vcpkg (see vcpkg.json).
 if(NOT IS_VS6_BUILD)
+    # targets from cmake/networking.cmake (FetchContent), see the root CMakeLists
     target_link_libraries(z_gameengine PUBLIC
         CURL::libcurl
         GameNetworkingSockets::shared
         sentry::sentry
     )
-else()
-    target_compile_definitions(z_gameengine PRIVATE RTS_USE_LEGACY_NETWORK_VENDOR)
 endif()
 
 target_precompile_headers(z_gameengine PRIVATE

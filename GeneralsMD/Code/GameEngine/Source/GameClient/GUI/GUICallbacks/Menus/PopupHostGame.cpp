@@ -393,6 +393,8 @@ void PopupHostGameInit( WindowLayout *layout, void *userData )
   // limit armies is disallowed in "use stats" games
 	checkBoxLimitArmies->winEnable(! usingStats );
   GadgetCheckBoxSetChecked( checkBoxLimitArmies, usingStats? FALSE : customPref.getFactionsLimited() );
+#else
+  GadgetCheckBoxSetChecked( checkBoxLimitArmies, customPref.getFactionsLimited() );
 #endif
 
 	TheWindowManager->winSetFocus(textEntryGameName);
@@ -409,7 +411,6 @@ void PopupHostGameInit( WindowLayout *layout, void *userData )
 
 	checkBoxAllowObservers->winSetPosition(xStats, yObs);
 	checkBoxAllowObservers->winHide(false);
-	GadgetCheckBoxSetChecked(checkBoxAllowObservers, true);
 
 	// TheSuperHackers @feature bill-rich 02/10/2026 Record Stats is not a choice in
 	// this client: every match is reported to radarvan regardless, so the box
@@ -676,6 +677,14 @@ void createGame()
 	// reports every match, so the lobby is created with stats tracking either way.
 	const Bool useStats = TRUE;
 	Bool bAllowObservers = GadgetCheckBoxIsChecked(checkBoxAllowObservers);
+
+	{
+		CustomMatchPreferences pref;
+		pref.setAllowsObserver(bAllowObservers);
+		pref.setFactionsLimited(limitArmies);
+		pref.setUseStats(useStats);
+		pref.write();
+	}
 
 	UnicodeString gameName = GadgetTextEntryGetText(textEntryGameName);
 

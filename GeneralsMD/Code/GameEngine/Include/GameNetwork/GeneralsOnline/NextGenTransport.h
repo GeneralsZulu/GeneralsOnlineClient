@@ -1,7 +1,5 @@
 #pragma once
 
-#define STEAMNETWORKINGSOCKETS_STATIC_LINK 1
-
 #include "GameNetwork/udp.h"
 #include "GameNetwork/NetworkDefs.h"
 #include "GameNetwork/Transport.h"
@@ -11,15 +9,6 @@
 #include <deque>
 #include <vector>
 
-#ifdef RTS_USE_LEGACY_NETWORK_VENDOR
-#pragma comment(lib, "ValveNetworkingSockets/GameNetworkingSockets.lib")
-#pragma comment(lib, "ValveNetworkingSockets/abseil_dll.lib")
-#pragma comment(lib, "ValveNetworkingSockets/libcrypto.lib")
-#pragma comment(lib, "ValveNetworkingSockets/libprotobuf.lib")
-#pragma comment(lib, "ValveNetworkingSockets/libssl.lib")
-#pragma comment(lib, "ValveNetworkingSockets/steamwebrtc.lib")
-#pragma comment(lib, "ValveNetworkingSockets/webrtc-lite.lib")
-#endif
 #pragma comment(lib, "Secur32.lib")
 
 // it to be a MemoryPoolObject (srj)
