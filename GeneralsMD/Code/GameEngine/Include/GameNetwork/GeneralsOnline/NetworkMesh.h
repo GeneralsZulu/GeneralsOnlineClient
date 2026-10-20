@@ -102,6 +102,12 @@ public:
 	// Route telemetry (NetworkMesh::Tick): the last relayed/direct state this
 	// link was logged with, -1 before the first probe.
 	int m_lastLoggedRelayed = -1;
+
+	// Log throttles: send failures are reported once a second with a count,
+	// and the invalid-connection receive once per episode.
+	int64_t m_lastSendFailLogMs = 0;
+	int m_sendFailCount = 0;
+	bool m_bRecvInvalidLogged = false;
 	
 	int GetLatency();
 	int GetJitter();

@@ -11,6 +11,8 @@
 #include "GameNetwork/NetworkInterface.h"
 #include "GameNetwork/ResumeFromReplay.h"
 #include "Common/GlobalData.h"
+#include "Common/MultiplayerSettings.h"
+#include "Common/PlayerTemplate.h"
 #include "GameClient/View.h"
 #include "../NextGenMP_defines.h"
 
@@ -202,9 +204,23 @@ void NGMPGame::UpdateSlotsFromCurrentLobby()
 			// NOTE: Internally generals uses 'local ip' to detect which user is local... we dont have an IP, so just use player index for ip
 			slot->setState((SlotState)pLobbyMember.m_SlotState, UnicodeString(from_utf8(pLobbyMember.display_name).c_str()), pLobbyMember.m_SlotIndex);
 
-			slot->setColor(pLobbyMember.color);
-			slot->setTeamNumber(pLobbyMember.team);
-			slot->setStartPos(pLobbyMember.startpos);
+			// The service stores these as raw ints with no range check, and the
+			// game start dereferences the color lookup. Same bounds as
+			// ParseAsciiStringToGameInfo; anything outside them becomes "random".
+			int color = pLobbyMember.color;
+			if (color < -1 || color >= TheMultiplayerSettings->getNumColors())
+				color = -1;
+			int team = pLobbyMember.team;
+			if (team < -1 || team >= MAX_SLOTS / 2)
+				team = -1;
+			int startPos = pLobbyMember.startpos;
+			if (startPos < -1 || startPos >= MAX_SLOTS)
+				startPos = -1;
+			if (playerTemplate < PLAYERTEMPLATE_MIN || playerTemplate >= ThePlayerTemplateStore->getPlayerTemplateCount())
+				playerTemplate = PLAYERTEMPLATE_RANDOM;
+			slot->setColor(color);
+			slot->setTeamNumber(team);
+			slot->setStartPos(startPos);
 			slot->setPlayerTemplate(playerTemplate);
 
 			if (!bIsAI)

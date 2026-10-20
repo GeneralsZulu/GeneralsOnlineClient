@@ -585,12 +585,9 @@ void NetDiag_CheckForCrashOnLaunch()
 				// with the uploader: only a fresh record is worth shipping.
 				if (seen != -1 || (time(nullptr) - s_crashTime) < CRASH_RECORD_MAX_AGE_S)
 					s_crashed = TRUE;
-				f = fopen(markerPath.str(), "w");
-				if (f != nullptr)
-				{
-					fprintf(f, "%lld\n", (long long)s_crashTime);
-					fclose(f);
-				}
+				// The marker is written when the upload is actually started
+				// (below), not here: a player who quits within the login wait
+				// or launches offline would otherwise lose the record for good.
 			}
 		}
 
@@ -645,4 +642,13 @@ void NetDiag_CheckForCrashOnLaunch()
 			seedLabel.c_str(), playerId.c_str());
 	s_diagUploads.fetch_add(1);
 	diagUpload(TheGlobalData->m_logsUrl.str(), seedLabel, playerId, TRUE, s_crashed);
+	if (s_crashed)
+	{
+		FILE *f = fopen(markerPath.str(), "w");
+		if (f != nullptr)
+		{
+			fprintf(f, "%lld\n", (long long)s_crashTime);
+			fclose(f);
+		}
+	}
 }

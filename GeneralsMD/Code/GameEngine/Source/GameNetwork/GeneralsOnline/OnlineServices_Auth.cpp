@@ -546,7 +546,8 @@ void NGMP_OnlineServices_AuthInterface::Tick()
 						nlohmann::json jsonObject = nlohmann::json::parse(strBody);
 						AuthResponse authResp = jsonObject.get<AuthResponse>();
 
-						NetworkLog(ELogVerbosity::LOG_RELEASE, "PageBody: %s", strBody.c_str());
+						// Never log the body here: on success it carries the session and
+						// refresh tokens, and this log is uploaded with every match.
 						if (authResp.result == EAuthResponseResult::CODE_INVALID)
 						{
 							NetworkLog(ELogVerbosity::LOG_RELEASE, "LOGIN: Code didnt exist, trying again soon");

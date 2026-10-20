@@ -20,6 +20,9 @@
 #include "WW3D2/dx8wrapper.h"
 #include <mutex>
 #include <utility>
+#include <csignal>
+#include <cstdlib>
+#include <exception>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
@@ -1179,6 +1182,98 @@ static sentry_value_t ZuluSentryOnCrash(const sentry_ucontext_t* uctx, sentry_va
 	return event;
 }
 
+// TheSuperHackers @bugfix bill-rich 18/10/2026 The crash reporter only sees SEH
+// exceptions. On this CRT, abort(), std::terminate (an uncaught C++ exception,
+// a noexcept violation), a CRT invalid-parameter report and a pure virtual call
+// all end in __fastfail, which kills the process without ever running the
+// unhandled-exception filter: no minidump, no ReleaseCrashInfo.txt, no envelope,
+// the log just stops. That is the signature of the Oct 14 and Oct 17 clients
+// that died a second into an 8-player match. Hook each of those paths, leave a
+// FATAL line in the release log saying which one fired and why, tag the report,
+// and turn it into a real non-continuable SEH exception so the normal crash
+// path runs.
+static const DWORD ZULU_FATAL_EXCEPTION_CODE = 0xE0005A55;
+
+static void ZuluFatalRaise(const char* kind, const char* detail)
+{
+	// No sentry calls here: a fatal on sentry's own thread would block on its
+	// scope lock. The FATAL line and the exception code carry the detail.
+	ReleaseLog("FATAL %s: %s", kind, detail != nullptr ? detail : "");
+	ULONG_PTR args[1] = { (ULONG_PTR)kind };
+	RaiseException(ZULU_FATAL_EXCEPTION_CODE, EXCEPTION_NONCONTINUABLE, 1, args);
+	// Only reached if something handled the exception; never fall back to the
+	// silent fastfail this exists to avoid.
+	TerminateProcess(GetCurrentProcess(), 3);
+}
+
+// The exception being handled on this thread, if any. std::set_terminate is
+// per thread on this CRT, so a worker thread's uncaught exception reaches the
+// default terminate, which calls abort(); the SIGABRT hook is process wide and
+// the exception is still current there, so both hooks describe it.
+static void ZuluDescribeCurrentException(char* detail, size_t size, const char* none)
+{
+	snprintf(detail, size, "%s", none);
+	std::exception_ptr ep = std::current_exception();
+	if (ep)
+	{
+		try
+		{
+			std::rethrow_exception(ep);
+		}
+		catch (const std::exception& e)
+		{
+			snprintf(detail, size, "uncaught std::exception: %s", e.what());
+		}
+		catch (...)
+		{
+			snprintf(detail, size, "%s", "uncaught exception of a non-std type");
+		}
+	}
+}
+
+static void ZuluTerminateHandler()
+{
+	char detail[512];
+	ZuluDescribeCurrentException(detail, sizeof(detail), "std::terminate with no active exception");
+	ZuluFatalRaise("terminate", detail);
+}
+
+static void ZuluAbortHandler(int)
+{
+	char detail[512];
+	ZuluDescribeCurrentException(detail, sizeof(detail), "abort() called");
+	ZuluFatalRaise("abort", detail);
+}
+
+static void ZuluPurecallHandler()
+{
+	ZuluFatalRaise("purecall", "pure virtual function call");
+}
+
+static void __cdecl ZuluInvalidParameterHandler(const wchar_t* expression, const wchar_t* function, const wchar_t* file, unsigned int line, uintptr_t)
+{
+	// All four are null in a release CRT; the stack in the crash report is
+	// what names the caller.
+	char detail[512];
+	snprintf(detail, sizeof(detail), "CRT invalid parameter: %ls in %ls (%ls:%u)",
+		expression != nullptr ? expression : L"?",
+		function != nullptr ? function : L"?",
+		file != nullptr ? file : L"?", line);
+	ZuluFatalRaise("invalid_parameter", detail);
+}
+
+static void InstallFatalHooks()
+{
+	std::set_terminate(ZuluTerminateHandler);
+	signal(SIGABRT, ZuluAbortHandler);
+	_set_purecall_handler(ZuluPurecallHandler);
+	_set_invalid_parameter_handler(ZuluInvalidParameterHandler);
+	// No retail "abort() has been called" box and no CRT-driven Watson report;
+	// the SIGABRT handler above owns that path.
+	_set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+	ReleaseLog("CRASHREPORT fatal hooks installed (terminate, abort, purecall, invalid parameter)");
+}
+
 void NGMP_OnlineServicesManager::InitSentry()
 {
 	// Initialize libcurl global state here, before any plugins (e.g. EasyAntiCheat) are loaded.
@@ -1192,6 +1287,10 @@ void NGMP_OnlineServicesManager::InitSentry()
 	{
 		std::filesystem::create_directory(strDumpPath);
 	}
+
+	// Before the DSN check: the hooks are worth having even when the report
+	// cannot leave the machine, because ReleaseCrashInfo.txt still gets written.
+	InstallFatalHooks();
 
 	std::string strDsn = ZuluCrashDsn();
 	if (strDsn.empty())

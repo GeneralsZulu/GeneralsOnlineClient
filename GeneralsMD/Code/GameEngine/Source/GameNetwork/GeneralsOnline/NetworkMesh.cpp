@@ -3,6 +3,7 @@
 #include "GameNetwork/GeneralsOnline/NGMP_interfaces.h"
 
 #include <ws2ipdef.h>
+#include <chrono>
 #include "GameNetwork/NetworkDefs.h"
 #include "GameNetwork/NetworkInterface.h"
 #include "GameLogic/GameLogic.h"
@@ -283,7 +284,10 @@ void OnSteamNetConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t
 					NetworkLog(ELogVerbosity::LOG_RELEASE, "[STEAM NETWORKING][%s] Rejecting - Lobby interface is null\n", pInfo->m_info.m_szConnectionDescription);
 
 					NetworkLog(ELogVerbosity::LOG_RELEASE, "[DC] Closing connection 2 %lld", plrConnection.m_userID);
-					SteamNetworkingSockets()->CloseConnection(pInfo->m_hConn, 1000, "Lobby interface is null (Rejected)", false);
+					// 1000 (App_Generic) is what the library substitutes for a graceful
+					// close, and the disconnect handler reads it as clean: a rejection
+					// must not look like that or the peer never retries.
+					SteamNetworkingSockets()->CloseConnection(pInfo->m_hConn, 1001, "Lobby interface is null (Rejected)", false);
 
 					if (TheNetwork != nullptr)
 					{
@@ -315,7 +319,7 @@ void OnSteamNetConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t
 					NetworkLog(ELogVerbosity::LOG_RELEASE, "[STEAM NETWORKING][%s] Rejecting - Player is not in lobby\n", pInfo->m_info.m_szConnectionDescription);
 
 					NetworkLog(ELogVerbosity::LOG_RELEASE, "[DC] Closing connection not in lobby %lld", plrConnection.m_userID);
-					SteamNetworkingSockets()->CloseConnection(pInfo->m_hConn, 1000, "Player is not in lobby (Rejected)", false);
+					SteamNetworkingSockets()->CloseConnection(pInfo->m_hConn, 1001, "Player is not in lobby (Rejected)", false);
 
 					if (TheNetwork != nullptr)
 					{
@@ -682,7 +686,6 @@ NetworkMesh::NetworkMesh()
 	// last log line is the one before this function, which says nothing about
 	// which of the two calls blocked.
 	// try a shutdown
-	g_bNetworkMeshDestroying.store(true);
 	NetworkLog(ELogVerbosity::LOG_RELEASE, "[Mesh] Shutting the socket library down");
 	GameNetworkingSockets_Kill();
 	NetworkLog(ELogVerbosity::LOG_RELEASE, "[Mesh] Socket library shut down");
@@ -731,6 +734,19 @@ NetworkMesh::NetworkMesh()
 		return;
 	}
 	NetworkLog(ELogVerbosity::LOG_RELEASE, "[Mesh] Socket library started");
+
+	// TheSuperHackers @bugfix bill-rich 18/10/2026 Per-connection send budget. The
+	// library defaults are SendRateMin = SendRateMax = 256 KB/s with a 512 KB send
+	// buffer; the Oct 17 8-player game hit both on every guest's link to the
+	// packet router and SendMessageToConnection failed 6.5k times with
+	// k_EResultLimitExceeded, each one a dropped game packet. The lockstep retry
+	// storm that filled them is fixed in Connection::retryIntervalFor; this is
+	// headroom so a legitimate burst (the router serving a frame range after a
+	// stall, eight players' commands fanned out at 60 fps) queues instead of
+	// being thrown away.
+	SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendRateMin, 1024 * 1024);
+	SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendRateMax, 1024 * 1024);
+	SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendBufferSize, 2 * 1024 * 1024);
 
 	// TODO_STEAM: Dont hardcode, get everything from service
 #if defined(ZULU_GO_SELFHOST_BASE)
@@ -793,7 +809,6 @@ NetworkMesh::NetworkMesh()
 	}
 
 	SteamNetworkingUtils()->SetGlobalCallback_SteamNetConnectionStatusChanged(OnSteamNetConnectionStatusChanged);
-	g_bNetworkMeshDestroying.store(false);
 
 	// Library is fully re-initialized and the callback is registered;
 	// it is now safe to allow OnSteamNetConnectionStatusChanged to run.
@@ -1414,26 +1429,27 @@ int PlayerConnection::SendGamePacket(void* pBuffer, uint32_t totalDataSize)
     if (totalDataSize == 0)
     {
         NetworkLog(ELogVerbosity::LOG_RELEASE, "[GAME PACKET] Cannot send empty game packet to user %lld", m_userID);
-        return (int)k_EResultFail;
+        return -(int)k_EResultFail;
     }
 
     if (pBuffer == nullptr)
     {
         NetworkLog(ELogVerbosity::LOG_RELEASE, "[GAME PACKET] Cannot send game packet with null buffer to user %lld", m_userID);
-        return (int)k_EResultFail;
+        return -(int)k_EResultFail;
     }
 
 	if (AnticheatPlugInterface::DoesACPluginProvideSecureGameTransport())
 	{
 		// TODO_EOS: Determine best reliability
 		AnticheatPlugInterface::SendPacket(m_strMiddlewareID.c_str(), m_userID, pBuffer, totalDataSize, ENetworkChannels::Game, EPacketReliability::PACKET_RELIABILITY_RELIABLE_ORDERED);
+		return (int)k_EResultOK;
 	}
 	else
 	{
         if (m_hSteamConnection == k_HSteamNetConnection_Invalid)
         {
             NetworkLog(ELogVerbosity::LOG_RELEASE, "[GAME PACKET] Cannot send game packet - connection is invalid for user %lld", m_userID);
-            return (int)k_EResultFail;
+            return -(int)k_EResultFail;
         }
 
 
@@ -1455,45 +1471,68 @@ int PlayerConnection::SendGamePacket(void* pBuffer, uint32_t totalDataSize)
 	EResult r = SteamNetworkingSockets()->SendMessageToConnection(
 		m_hSteamConnection, vecData.data(), vecData.size(), sendFlags, nullptr);
 
-	if (r != k_EResultOK)
+	// TheSuperHackers @bugfix bill-rich 18/10/2026 The return contract was broken
+	// both ways: a successful send fell through to k_EResultFail, and a failed one
+	// returned the positive EResult, which NextGenTransport::doSend reads as
+	// success (>= 0) and so dropped the packet instead of holding it for a retry.
+	// The configured fallback send also went out WITHOUT the channel byte the
+	// receiver strips. Success is now k_EResultOK, failure the negated EResult,
+	// and the fallback sends the same framed buffer.
+	if (r == k_EResultOK)
 	{
-        if (netSendFlags != -1)
-        {
-            if (netSendFlags == 0)
-            {
-                sendFlags = k_nSteamNetworkingSend_Unreliable;
-            }
-            else if (netSendFlags == 1)
-            {
-                sendFlags = k_nSteamNetworkingSend_UnreliableNoNagle;
-            }
-            else if (netSendFlags == 2)
-            {
-                sendFlags = k_nSteamNetworkingSend_UnreliableNoDelay;
-            }
-            else if (netSendFlags == 3)
-            {
-                sendFlags = k_nSteamNetworkingSend_Reliable;
-            }
-            else if (netSendFlags == 4)
-            {
-                sendFlags = k_nSteamNetworkingSend_ReliableNoNagle;
-            }
-        }
-
-        NetworkLog(ELogVerbosity::LOG_DEBUG, "[GAME PACKET] Sending msg of size %ld to user %lld\n", totalDataSize, m_userID);
-        EResult r = SteamNetworkingSockets()->SendMessageToConnection(
-            m_hSteamConnection, pBuffer, (int)totalDataSize, sendFlags, nullptr);
-
-        if (r != k_EResultOK)
-        {
-            NetworkLog(ELogVerbosity::LOG_RELEASE, "[GAME PACKET] Failed to send, err code was %d", r);
-        }
-
-        return (int)r;
+		return (int)k_EResultOK;
 	}
 
-	return (int)k_EResultFail;
+	if (netSendFlags != -1)
+	{
+		if (netSendFlags == 0)
+		{
+			sendFlags = k_nSteamNetworkingSend_Unreliable;
+		}
+		else if (netSendFlags == 1)
+		{
+			sendFlags = k_nSteamNetworkingSend_UnreliableNoNagle;
+		}
+		else if (netSendFlags == 2)
+		{
+			sendFlags = k_nSteamNetworkingSend_UnreliableNoDelay;
+		}
+		else if (netSendFlags == 3)
+		{
+			sendFlags = k_nSteamNetworkingSend_Reliable;
+		}
+		else if (netSendFlags == 4)
+		{
+			sendFlags = k_nSteamNetworkingSend_ReliableNoNagle;
+		}
+
+		r = SteamNetworkingSockets()->SendMessageToConnection(
+			m_hSteamConnection, vecData.data(), vecData.size(), sendFlags, nullptr);
+		if (r == k_EResultOK)
+		{
+			return (int)k_EResultOK;
+		}
+	}
+
+	// One line per second per link, with the count. The Oct 17 game wrote the
+	// old unconditional line 6.5k times across the lobby while the send buffer
+	// was full.
+	const int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+	if (nowMs - m_lastSendFailLogMs >= 1000)
+	{
+		// The count is the failures in the second before this one, so a stale
+		// tail from an earlier episode is dropped rather than reported here.
+		if (nowMs - m_lastSendFailLogMs >= 2000)
+			m_sendFailCount = 0;
+		NetworkLog(ELogVerbosity::LOG_RELEASE, "[GAME PACKET] Failed to send to user %lld, err code was %d (%d failures in the last second)", m_userID, (int)r, m_sendFailCount + 1);
+		m_lastSendFailLogMs = nowMs;
+		m_sendFailCount = 0;
+	}
+	else
+	{
+		++m_sendFailCount;
+	}
+	return -(int)r;
 }
 
 
@@ -1627,10 +1666,15 @@ int PlayerConnection::Recv(SteamNetworkingMessage_t** pMsg)
 	{
 		r = SteamNetworkingSockets()->ReceiveMessagesOnConnection(m_hSteamConnection, pMsg, 255);
 		NetworkLog(ELogVerbosity::LOG_DEBUG, "[DISC] Recv Result %d from user %lld", r, m_userID);
+		m_bRecvInvalidLogged = false;
 	}
-	else
+	else if (!m_bRecvInvalidLogged)
 	{
-		NetworkLog(ELogVerbosity::LOG_RELEASE, "[DISC] Recv Failed 1 from user %lld", m_userID);
+		// TheSuperHackers @bugfix bill-rich 18/10/2026 Once per dead link, not once
+		// per tick: a lobby connection that has gone away is polled every frame
+		// and this line ran to 115k copies per player on Oct 17.
+		NetworkLog(ELogVerbosity::LOG_RELEASE, "[DISC] Recv Failed 1 from user %lld (connection invalid; repeats suppressed until it is valid again)", m_userID);
+		m_bRecvInvalidLogged = true;
 	}
 
 	return r;

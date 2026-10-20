@@ -56,10 +56,8 @@ void NextGenTransport::reset(void)
     std::memset(m_unknownPackets, 0, sizeof(m_unknownPackets));
     std::memset(m_unknownBytes, 0, sizeof(m_unknownBytes));
     
-    // Clear retry state for all outgoing packets
     for (int i = 0; i < MAX_MESSAGES; ++i)
     {
-        m_outPacketState[i].retryCount = 0;
         m_inBufferOccupied[i] = false;  // Mark all incoming slots as empty
     }
 }
@@ -273,14 +271,6 @@ Bool NextGenTransport::doRecv(void)
             if (numPackets <= 0)
                 continue;
 
-            if (numPackets > static_cast<int>(std::size(pMsg)))
-            {
-                NetworkLog(ELogVerbosity::LOG_RELEASE,
-                    "Game Packet Recv: numPackets (%d) > pMsg capacity (%zu), clamping",
-                    numPackets, std::size(pMsg));
-                numPackets = static_cast<int>(std::size(pMsg));
-            }
-
             for (int iPacket = 0; iPacket < numPackets; ++iPacket)
             {
                 SteamNetworkingMessage_t* msg = pMsg[iPacket];
@@ -433,7 +423,7 @@ Bool NextGenTransport::doRecv(void)
                         }
                     }
                 }
-                else if (vecDataWithHeader.size() != -1)
+                else
                 {
                     // Malformed packet - too small for header
                     NetworkLog(ELogVerbosity::LOG_RELEASE, "[NET PACKET] Dropping malformed packet - size %u is less than header size 1 from user %lld", vecDataWithHeader.size(), static_cast<long long>(kvPair.second.m_userID));
@@ -578,7 +568,6 @@ Bool NextGenTransport::doSend(void)
     {
         if (m_outBuffer[i].length == 0)
         {
-            m_outPacketState[i].retryCount = 0;  // Reset retry counter when packet slot is cleared
             continue;
         }
 
@@ -622,7 +611,6 @@ Bool NextGenTransport::doSend(void)
                     totalLen,
                     sizeof(TransportMessageHeader) + static_cast<size_t>(MAX_PACKET_SIZE));
                 m_outBuffer[i].length = 0; // drop this entry
-                m_outPacketState[i].retryCount = 0;
                 retval = FALSE;
                 continue;
             }
@@ -667,33 +655,16 @@ Bool NextGenTransport::doSend(void)
                 m_outgoingBytes[m_statisticsSlot] +=
                     m_outBuffer[i].length + sizeof(TransportMessageHeader);
                 m_outBuffer[i].length = 0; // Remove from queue
-                m_outPacketState[i].retryCount = 0;
                 retval = TRUE;
             }
             else
             {
-                // Send failed - implement retry logic for transient errors
-                m_outPacketState[i].retryCount++;
-                
-                if (m_outPacketState[i].retryCount < OutgoingPacketState::MAX_RETRIES)
-                {
-                    NetworkLog(ELogVerbosity::LOG_RELEASE,
-                        "Game Packet Send: SendGamePacket failed (err=%d), retry %d/%d for packet to user %lld",
-                        sendResult, m_outPacketState[i].retryCount, 
-                        OutgoingPacketState::MAX_RETRIES, pSlot->m_userID);
-                    // Keep packet in queue for retry
-                    retval = FALSE;
-                }
-                else
-                {
-                    // Max retries exceeded - drop packet
-                    NetworkLog(ELogVerbosity::LOG_RELEASE,
-                        "Game Packet Send: Dropping packet after %d failed retries to user %lld",
-                        m_outPacketState[i].retryCount, pSlot->m_userID);
-                    m_outBuffer[i].length = 0;
-                    m_outPacketState[i].retryCount = 0;
-                    retval = FALSE;
-                }
+                // Dropped: the lockstep layer above already holds the commands
+                // and resends them on its own timer, and retrying here a tick
+                // later never helped (a full send buffer takes seconds to
+                // drain). SendGamePacket logs the failure, rate limited.
+                m_outBuffer[i].length = 0;
+                retval = FALSE;
             }
         }
         else
@@ -701,7 +672,6 @@ Bool NextGenTransport::doSend(void)
             NetworkLog(ELogVerbosity::LOG_RELEASE,
                 "Game Packet Send: No slot for addr %u, dropping packet", m_outBuffer[i].addr);
             m_outBuffer[i].length = 0;
-            m_outPacketState[i].retryCount = 0;
             retval = FALSE;
         }
     }
@@ -761,14 +731,6 @@ Bool NextGenTransport::queueSend(UnsignedInt addr,
         const size_t crcLen =
             static_cast<size_t>(m_outBuffer[i].length) +
             sizeof(TransportMessageHeader) - sizeof(UnsignedInt);
-
-        if (crcLen > sizeof(m_outBuffer[i]) - offsetof(TransportMessage, header.magic))
-        {
-            NetworkLog(ELogVerbosity::LOG_RELEASE,
-                "Game Packet QueueSend: CRC length overflow, crcLen=%zu", crcLen);
-            m_outBuffer[i].length = 0;
-            return FALSE;
-        }
 
         crc.computeCRC(
             reinterpret_cast<unsigned char*>(&(m_outBuffer[i].header.magic)),

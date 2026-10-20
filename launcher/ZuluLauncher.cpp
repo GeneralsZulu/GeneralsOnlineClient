@@ -955,6 +955,10 @@ int APIENTRY WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     // claim a new build was available.
     char latestExeSha[80]; latestExeSha[0] = 0;
     bool haveLatestExeSha = false;
+    // "sha256" is checked against the downloaded installer before it is run
+    // elevated; see below.
+    char latestInstallerSha[80]; latestInstallerSha[0] = 0;
+    bool haveLatestInstallerSha = false;
 
     char *json = httpGet(manifestUrl, NULL);
     if (json) {
@@ -963,6 +967,7 @@ int APIENTRY WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
             haveLatest = parseSemVer(latestVersion, latest);
         }
         haveLatestExeSha = jsonGetString(json, "exe_sha256", latestExeSha, sizeof(latestExeSha));
+        haveLatestInstallerSha = jsonGetString(json, "sha256", latestInstallerSha, sizeof(latestInstallerSha));
         free(json);
     }
 
@@ -1072,6 +1077,23 @@ int APIENTRY WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
             HCURSOR oldCursor = SetCursor(LoadCursorA(NULL, IDC_WAIT));
             bool ok = httpDownloadToFile(latestUrl, installerPath);
+            // Never run a file we cannot vouch for with admin rights: the
+            // manifest carries the installer's hash, so a swapped file in
+            // the temp folder or a bad bucket object stops here. A manifest
+            // without the field (older publish) keeps the old behaviour.
+            if (ok && haveLatestInstallerSha) {
+                char gotSha[80]; gotSha[0] = 0;
+                if (!computeFileSha256Hex(installerPath, gotSha, sizeof(gotSha)) ||
+                    _stricmp(gotSha, latestInstallerSha) != 0) {
+                    DeleteFileA(installerPath);
+                    SetCursor(oldCursor);
+                    MessageBoxA(NULL,
+                        "The downloaded installer does not match the published release and was not run.\n\n"
+                        "Please try again later.",
+                        kAppName, MB_OK | MB_ICONERROR);
+                    ok = false;
+                }
+            }
             if (ok && forcedUpdate) {
                 // The game that sent us here is still on its way out and the
                 // installer is about to overwrite its exe. Give it a moment.

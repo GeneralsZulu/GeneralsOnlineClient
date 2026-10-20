@@ -283,6 +283,7 @@ private:
 	UnsignedInt m_lastResendRequestMs;		///< When it went out, so we do not ask every tick.
 	UnsignedInt m_lastRouterWaitSendMs;		///< broadcastRouterWait rate limit.
 	UnsignedInt m_lastResendServeMs[MAX_SLOTS];	///< processFrameResendRequest: last serve per requesting slot.
+	UnsignedInt m_lastFrameTicked;			///< processFrameTick: highest frame whose command count has gone out. See sendSingleFrameToPlayer.
 	UnsignedInt m_routerWaitMask;			///< Last ROUTERWAIT received: the router's own not-ready mask...
 	UnsignedInt m_routerWaitFrame;			///< ...for this frame...
 	UnsignedInt m_routerWaitMs;				///< ...received at this time (0 = never).

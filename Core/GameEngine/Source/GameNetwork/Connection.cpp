@@ -441,6 +441,20 @@ time_t Connection::retryIntervalFor(const NetCommandRef *msg) const {
 	if (NET_LEGACY_TIMING) {
 		return m_retryTime;
 	}
+	// TheSuperHackers @bugfix bill-rich 18/10/2026 On the GeneralsOnline mesh the
+	// transport is already reliable and ordered, so a command handed to it WILL
+	// arrive; an unacked command there means the peer is slow, not that a packet
+	// was lost. Running the adaptive timer (~150-250 ms) against that turned the
+	// Oct 17 8-player game into a storm: every guest's backlog to the stalled
+	// packet router (~1000 commands) went out again every interval, 65k resends
+	// per 10 s per guest, which filled the mesh's per-link send budget, failed
+	// sends with k_EResultLimitExceeded, dropped packets, and stalled the lobby to
+	// death. Use the retail fixed interval there (what the stock client runs) and
+	// skip the frame-info repeats; the adaptive timer and the repeats stay for the
+	// datagram transport, where loss is real.
+	if (m_transport != nullptr && m_transport->isReliable()) {
+		return NET_RETRY_RELIABLE_MS;
+	}
 	const NetCommandMsg *cmd = msg->getCommand();
 	if ((cmd->getNetCommandType() == NETCOMMANDTYPE_FRAMEINFO)
 			&& ((cmd->getExecutionFrame() + 1) >= TheGameLogic->getFrame())) {

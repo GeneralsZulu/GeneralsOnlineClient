@@ -73,6 +73,12 @@ static constexpr const Int NET_RETRY_MIN_MS = 60;
 static constexpr const Int NET_RETRY_MAX_MS = 2000;
 static constexpr const Int NET_RETRY_DEFAULT_MS = 300;		///< Used until the first ack sample arrives.
 
+// Retry interval on a transport that is already reliable and ordered (the
+// GeneralsOnline mesh). The retail fixed value: a resend there is only a safety
+// net for a connection that was torn down and restarted, never loss recovery.
+// See Connection::retryIntervalFor for the 8-player storm this prevents.
+static constexpr const Int NET_RETRY_RELIABLE_MS = 2000;
+
 // Ceiling on the packet send interval derived from run-ahead. See
 // Network::processRunAheadCommand.
 static constexpr const Int NET_SEND_INTERVAL_MAX_MS = 100;

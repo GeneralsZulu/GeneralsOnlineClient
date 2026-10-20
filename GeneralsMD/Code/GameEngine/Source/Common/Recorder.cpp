@@ -1138,8 +1138,13 @@ void RecorderClass::stopRecording() {
 	// covered even when the periodic line is up to 10 s stale.
 	if (TheNetwork != nullptr && TheNetwork->GetConnectionManager() != nullptr)
 		TheNetwork->GetConnectionManager()->flushNetStats("match end");
+	// m_wasDesync is only ever set in RTS_DEBUG builds with -saveStats (and it
+	// also deletes the replay), so a shipping client logged desync=0 for every
+	// match it ever played, including the ones that ended on "Mismatch
+	// Occurred". Read the flag the CRC check actually sets.
 	ReleaseLog("=== Match end: frame=%d desync=%d ===",
-		TheGameLogic ? TheGameLogic->getFrame() : -1, (int)m_wasDesync);
+		TheGameLogic ? TheGameLogic->getFrame() : -1,
+		(int)(m_wasDesync || (TheNetwork != nullptr && TheNetwork->sawCRCMismatch())));
 	if (TheNetwork)
 	{
 		//if (TheLAN)

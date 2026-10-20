@@ -2000,7 +2000,7 @@ void WOLQuickMatchMenuUpdate( WindowLayout * layout, void *userData)
 							}
 
 							DEBUG_LOG(("Starting a QM game: options=[%s]", GameInfoToAsciiString(TheGameSpyGame).str()));
-							SendStatsToOtherPlayers(TheGameSpyGame);
+							// SendStatsToOtherPlayers went with the GameSpy stats path (never created in GO).
 							TheGameSpyGame->startGame(0);
 							GameWindow *buttonBuddies = TheWindowManager->winGetWindowFromId(nullptr, buttonBuddiesID);
 							if (buttonBuddies)

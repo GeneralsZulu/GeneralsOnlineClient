@@ -22,13 +22,6 @@
 #endif
 #pragma comment(lib, "Secur32.lib")
 
-// Struct to track retry state for outgoing packets
-struct OutgoingPacketState
-{
-	Int retryCount = 0;
-	static constexpr Int MAX_RETRIES = 3;
-};
-
 // it to be a MemoryPoolObject (srj)
 class NextGenTransport : public Transport //: public MemoryPoolObject
 {
@@ -51,6 +44,10 @@ public:
 
 	inline Bool allowBroadcasts(Bool val) override { return false; }
 
+	// GameNetworkingSockets with k_nSteamNetworkingSend_Reliable: delivery and
+	// order are the library's job, see PlayerConnection::SendGamePacket.
+	Bool isReliable( void ) const override { return TRUE; }
+
 	// Helper to clear a packet from the receive buffer (accounts for zero-length packets)
 	void clearInBufferSlot(int slotIndex)
 	{
@@ -62,7 +59,6 @@ public:
 	}
 
 private:
-	OutgoingPacketState m_outPacketState[MAX_MESSAGES];
 	// Track which incoming buffer slots are occupied (handles zero-length packets)
 	bool m_inBufferOccupied[MAX_MESSAGES];
 

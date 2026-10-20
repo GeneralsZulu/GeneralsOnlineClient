@@ -29,6 +29,7 @@
 #include <string.h>
 #include <time.h>
 #include <mutex>
+#include <string>
 
 // Log file name. Lives in the per-user data dir (same root as Replays\), not
 // the working directory: unelevated installs can have a read-only game dir,
@@ -40,7 +41,9 @@ static char s_releaseLogPrevPath[512] = "";
 
 // Background workers (the network self-test, the telemetry uploader) write
 // here too, so the lazy open and every write are serialized.
-static std::mutex s_releaseLogMutex;
+// Recursive: the fatal hooks (OnlineServices_Init.cpp) log from inside a CRT
+// invalid-parameter report, which vfprintf can raise while this lock is held.
+static std::recursive_mutex s_releaseLogMutex;
 
 // Full path, resolved lazily because TheGlobalData doesn't exist during very
 // early startup. Returns NULL while the user data dir is still unknown.
@@ -69,7 +72,7 @@ static Bool  s_releaseLogOpenFailed = FALSE;
 
 void ReleaseLog(const char *fmt, ...)
 {
-	std::lock_guard<std::mutex> lock(s_releaseLogMutex);
+	std::lock_guard<std::recursive_mutex> lock(s_releaseLogMutex);
 	if (s_releaseLogFile == NULL)
 	{
 		if (s_releaseLogOpenFailed)
@@ -135,12 +138,6 @@ static ReleaseFrameCRC s_crcRing[RELEASE_CRC_RING_SIZE];
 static Int s_crcRingNext  = 0;	// index of next slot to write
 static Int s_crcRingCount = 0;	// total records written (may exceed ring size)
 
-void ReleaseLogResetCRCHistory()
-{
-	s_crcRingNext  = 0;
-	s_crcRingCount = 0;
-}
-
 void ReleaseLogRecordFrameCRC(UnsignedInt frame, UnsignedInt crc)
 {
 	s_crcRing[s_crcRingNext].frame = frame;
@@ -175,6 +172,14 @@ static ReleaseSubCRC s_subRing[RELEASE_SUB_RING_SIZE];
 static Int s_subRingNext  = 0;
 static Int s_subRingCount = 0;
 
+void ReleaseLogResetCRCHistory()
+{
+	s_crcRingNext  = 0;
+	s_crcRingCount = 0;
+	s_subRingNext  = 0;
+	s_subRingCount = 0;
+}
+
 void ReleaseLogRecordSubsystemCRC(UnsignedInt frame, const char *tag, UnsignedInt crc)
 {
 	if (!TheReleaseLogSubsystemCRCs)
@@ -188,29 +193,38 @@ void ReleaseLogRecordSubsystemCRC(UnsignedInt frame, const char *tag, UnsignedIn
 	++s_subRingCount;
 }
 
+// One write per section rather than one per record: up to 9216 locked
+// fprintf+fflush calls in a single frame was a visible hitch.
 void ReleaseLogDumpCRCHistory()
 {
 	// Overall CRC history, oldest first.
 	Int have  = (s_crcRingCount < RELEASE_CRC_RING_SIZE) ? s_crcRingCount : RELEASE_CRC_RING_SIZE;
 	Int start = (s_crcRingCount < RELEASE_CRC_RING_SIZE) ? 0 : s_crcRingNext;
-	ReleaseLog("--- CRC history (last %d recorded CRCs) ---", have);
+	std::string text;
+	text.reserve(32 * (size_t)have);
+	char line[96];
 	Int k;
 	for (k = 0; k < have; ++k)
 	{
 		const ReleaseFrameCRC &e = s_crcRing[(start + k) % RELEASE_CRC_RING_SIZE];
-		ReleaseLog("  frame %d CRC=%8.8X", e.frame, e.crc);
+		snprintf(line, sizeof(line), "\n  frame %u CRC=%8.8X", e.frame, e.crc);
+		text += line;
 	}
+	ReleaseLog("--- CRC history (last %d recorded CRCs) ---%s", have, text.c_str());
 
 	// Per-subsystem history, only if the Tier-3 capture was enabled.
 	if (TheReleaseLogSubsystemCRCs && s_subRingCount > 0)
 	{
 		Int subHave  = (s_subRingCount < RELEASE_SUB_RING_SIZE) ? s_subRingCount : RELEASE_SUB_RING_SIZE;
 		Int subStart = (s_subRingCount < RELEASE_SUB_RING_SIZE) ? 0 : s_subRingNext;
-		ReleaseLog("--- per-subsystem CRC history (last %d records) ---", subHave);
+		text.clear();
+		text.reserve(40 * (size_t)subHave);
 		for (k = 0; k < subHave; ++k)
 		{
 			const ReleaseSubCRC &e = s_subRing[(subStart + k) % RELEASE_SUB_RING_SIZE];
-			ReleaseLog("  frame %d %s CRC=%8.8X", e.frame, e.tag ? e.tag : "(null)", e.crc);
+			snprintf(line, sizeof(line), "\n  frame %u %s CRC=%8.8X", e.frame, e.tag ? e.tag : "(null)", e.crc);
+			text += line;
 		}
+		ReleaseLog("--- per-subsystem CRC history (last %d records) ---%s", subHave, text.c_str());
 	}
 }

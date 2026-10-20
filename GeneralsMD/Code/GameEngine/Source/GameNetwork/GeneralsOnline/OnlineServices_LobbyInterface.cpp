@@ -561,8 +561,13 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_KickUser(int64_t use
 	// convert
 	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendPOSTRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, strPostData.c_str(), [=](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
 		{
+			if (!bSuccess || statusCode < 200 || statusCode >= 300)
+			{
+				NetworkLog(ELogVerbosity::LOG_RELEASE, "[NGMP] kick user %lld failed: status %d", (long long)userID, statusCode);
+				return;
+			}
 			UnicodeString msg;
-			msg.format(L"Lobby: '%s' was removed by the host.", name.str());;
+			msg.format(L"Lobby: '%s' was removed by the host.", name.str());
 			SendAnnouncementMessageToCurrentLobby(msg, true);
 		});
 }
@@ -579,6 +584,11 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_ForceReady()
 	// convert
 	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendPOSTRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, strPostData.c_str(), [=](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
 		{
+			if (!bSuccess || statusCode < 200 || statusCode >= 300)
+			{
+				NetworkLog(ELogVerbosity::LOG_RELEASE, "[NGMP] force ready failed: status %d", statusCode);
+				return;
+			}
 			UnicodeString msg = UnicodeString(L"Ready check: All players are now marked ready.");
 			SendAnnouncementMessageToCurrentLobby(msg, true);
 		});
@@ -1194,18 +1204,11 @@ void NGMP_OnlineServices_LobbyInterface::Tick()
 		}
 	}
 
-	// TODO_NGMP: Do we still need this safety measure?
 	if (IsInLobby())
 	{
-		int64_t currTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::utc_clock::now().time_since_epoch()).count();
-		if ((currTime - m_lastForceRefresh) > 5000)
-		{
-			//UpdateRoomDataCache();
-			m_lastForceRefresh = currTime;
-		}
-
 		// do we have a pending start?
 #if !defined(GENERALS_ONLINE_DISABLE_AUTO_ACCEPT)
+		int64_t currTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::utc_clock::now().time_since_epoch()).count();
 		if (IsHost())
 		{
 			if (m_timeStartAutoReadyCountdown > 0)
@@ -1293,9 +1296,6 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 					{
 						if (statusCode == 404) // lobby destroyed, just leave
 						{
-							m_bPendingHostHasLeft = true;
-							// error msg
-
 							// TODO_NGMP: We still want to do this, but we need to send back that it failed and back out, proceeding to lobby crashes because mesh wasn't created
 							if (fnCallback != nullptr)
 							{
@@ -1303,6 +1303,9 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 							}
 
 							LeaveCurrentLobby();
+							// After the leave: LeaveCurrentLobby resets this flag, and the
+							// setup screen needs it to show the "host left" dialog.
+							m_bPendingHostHasLeft = true;
 							return;
 						}
 
@@ -1552,6 +1555,10 @@ void NGMP_OnlineServices_LobbyInterface::JoinLobby(LobbyEntry lobbyInfo, std::st
 		return;
 	}
 
+	// A 404 outside the setup screen leaves m_bPendingHostHasLeft set; the
+	// new lobby must not inherit it.
+	ResetHostMigrationFlags();
+
 	const uint64_t lobbyJoinGeneration = ++m_LobbyJoinGeneration;
 
     AnticheatPlugInterface::EndSession();
@@ -1571,7 +1578,7 @@ void NGMP_OnlineServices_LobbyInterface::JoinLobby(LobbyEntry lobbyInfo, std::st
 			std::string strURI = std::format("{}/{}", NGMP_OnlineServicesManager::GetAPIEndpoint("Lobby"), lobbyInfo.lobbyID);
 			std::map<std::string, std::string> mapHeaders;
 
-			NetworkLog(ELogVerbosity::LOG_RELEASE, "[NGMP] Joining lobby with id %d", lobbyInfo.lobbyID);
+			NetworkLog(ELogVerbosity::LOG_RELEASE, "[NGMP] Joining lobby with id %lld", (long long)lobbyInfo.lobbyID);
 
 			bool bHasMap = TheMapCache->findMap(AsciiString(lobbyInfo.map_path.c_str()));
 
@@ -1645,7 +1652,7 @@ void NGMP_OnlineServices_LobbyInterface::JoinLobby(LobbyEntry lobbyInfo, std::st
 
 							m_strTURNUsername = resp.turn_username;
 							m_strTURNToken = resp.turn_token;
-							NetworkLog(ELogVerbosity::LOG_DEBUG, "Got TURN username: %s, token: %s", m_strTURNUsername.c_str(), m_strTURNToken.c_str());
+							NetworkLog(ELogVerbosity::LOG_DEBUG, "Got TURN credentials: %s", (m_strTURNUsername.empty() || m_strTURNToken.empty()) ? "NONE" : "present");
 							// The lobby push that created the mesh has usually beaten this response.
 							if (NetworkMesh* pMesh = NGMP_OnlineServicesManager::GetNetworkMesh())
 							{
@@ -1708,12 +1715,6 @@ void NGMP_OnlineServices_LobbyInterface::JoinLobby(LobbyEntry lobbyInfo, std::st
 								{
 									pLobbyInterface->m_callbackJoinedLobby(bSuccess ? EJoinLobbyResult::JoinLobbyResult_Success : EJoinLobbyResult::JoinLobbyResult_JoinFailed);
 								}
-							});
-
-						// get latest lobby info immediately
-						UpdateRoomDataCache([=](bool bSuccess)
-							{
-
 							});
 					}
 					else if (statusCode == 401)
@@ -1859,6 +1860,7 @@ struct CreateLobbyResponse
 void NGMP_OnlineServices_LobbyInterface::CreateLobby(UnicodeString strLobbyName, UnicodeString strInitialMapName, AsciiString strInitialMapPath, bool bIsOfficial, int initialMaxSize, bool bVanillaTeamsOnly, bool bTrackStats, uint32_t startingCash, bool bPassworded, std::string strPassword, bool bAllowObservers, uint32_t mapCRC)
 {
 	AnticheatPlugInterface::EndSession();
+	ResetHostMigrationFlags();
 
 	NGMP_OnlineServicesManager::GetInstance()->GetAndParseServiceConfig([=]()
 		{
@@ -1923,7 +1925,6 @@ void NGMP_OnlineServices_LobbyInterface::CreateLobby(UnicodeString strLobbyName,
 
 						m_strTURNUsername = resp.turn_username;
 						m_strTURNToken = resp.turn_token;
-						NetworkLog(ELogVerbosity::LOG_DEBUG, "Got TURN username: %s, token: %s", m_strTURNUsername.c_str(), m_strTURNToken.c_str());
 						ReleaseLog("GO lobby: create lobby result=%d id=%lld turnCreds=%s", (int)resp.result, (long long)resp.lobby_id,
 							(m_strTURNUsername.empty() || m_strTURNToken.empty()) ? "NONE" : "present");
 

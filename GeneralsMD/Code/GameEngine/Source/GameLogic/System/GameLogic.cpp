@@ -2924,6 +2924,19 @@ void GameLogic::processCommandList(CommandList* list)
 
 		if (sawCRCMismatch)
 		{
+			// Release diagnostics: which CRCs we saw and the recent history, so an
+			// uploaded log pinpoints the divergence. Until now a Zulu GO mismatch
+			// left no line in the release log at all.
+			// crcFrame is the frame the compared CRCs were computed on (the history
+			// dump below is keyed by it); m_frame is only where we noticed.
+			ReleaseLog("CRC MISMATCH on frame %d crcFrame=%d - saw %d CRCs from %d players (runAhead %d)",
+				m_frame, TheNetwork ? (Int)m_frame - TheNetwork->getRunAhead() - 1 : -1,
+				(int)m_cachedCRCs.size(), numPlayers, TheNetwork ? TheNetwork->getRunAhead() : -1);
+			for (CachedCRCMap::const_iterator relIt = m_cachedCRCs.begin(); relIt != m_cachedCRCs.end(); ++relIt)
+			{
+				ReleaseLog("  player %d CRC=%8.8X", relIt->first, relIt->second);
+			}
+			ReleaseLogDumpCRCHistory();
 #ifdef DEBUG_LOGGING
 			DEBUG_LOG(("CRC Mismatch - saw %d CRCs from %d players", m_cachedCRCs.size(), numPlayers));
 			for (CachedCRCMap::const_iterator crcIt = m_cachedCRCs.begin(); crcIt != m_cachedCRCs.end(); ++crcIt)
@@ -4143,6 +4156,11 @@ void GameLogic::update()
 		messageList->appendMessage(msg);
 
 		DEBUG_LOG(("Appended %sCRC on frame %d: %8.8X", isPlayback ? "Playback " : "", m_frame, m_CRC));
+
+		// Release diagnostics: keep an in-memory ring of recent overall CRCs so a
+		// shipping build can dump the run-up to a desync. Nothing hits disk
+		// unless a mismatch triggers ReleaseLogDumpCRCHistory.
+		ReleaseLogRecordFrameCRC(m_frame, m_CRC);
 	}
 
 	// collect stats
@@ -4561,6 +4579,8 @@ UnsignedInt GameLogic::getCRC(Int mode, AsciiString deepCRCFileName)
 	if (isInGameLogicUpdate())
 	{
 		CRCGEN_LOG(("CRC at start of frame %d is 0x%8.8X", m_frame, xferCRC->getCRC()));
+		if (TheReleaseLogSubsystemCRCs)
+			ReleaseLogRecordSubsystemCRC(m_frame, "start", xferCRC->getCRC());
 	}
 
 	marker = "MARKER:Objects";
@@ -4573,6 +4593,8 @@ UnsignedInt GameLogic::getCRC(Int mode, AsciiString deepCRCFileName)
 	if (isInGameLogicUpdate())
 	{
 		CRCGEN_LOG(("CRC after objects for frame %d is 0x%8.8X", m_frame, xferCRC->getCRC()));
+		if (TheReleaseLogSubsystemCRCs)
+			ReleaseLogRecordSubsystemCRC(m_frame, "objects", xferCRC->getCRC());
 	}
 
 	if (isInGameLogicUpdate())
@@ -4589,6 +4611,8 @@ UnsignedInt GameLogic::getCRC(Int mode, AsciiString deepCRCFileName)
 	if (isInGameLogicUpdate())
 	{
 		CRCGEN_LOG(("CRC after partition manager for frame %d is 0x%8.8X", m_frame, xferCRC->getCRC()));
+		if (TheReleaseLogSubsystemCRCs)
+			ReleaseLogRecordSubsystemCRC(m_frame, "partition", xferCRC->getCRC());
 	}
 
 #ifdef DEBUG_CRC
@@ -4611,6 +4635,8 @@ UnsignedInt GameLogic::getCRC(Int mode, AsciiString deepCRCFileName)
 	if (isInGameLogicUpdate())
 	{
 		CRCGEN_LOG(("CRC after PlayerList for frame %d is 0x%8.8X", m_frame, xferCRC->getCRC()));
+		if (TheReleaseLogSubsystemCRCs)
+			ReleaseLogRecordSubsystemCRC(m_frame, "playerlist", xferCRC->getCRC());
 	}
 
 	marker = "MARKER:TheAI";
@@ -4619,6 +4645,8 @@ UnsignedInt GameLogic::getCRC(Int mode, AsciiString deepCRCFileName)
 	if (isInGameLogicUpdate())
 	{
 		CRCGEN_LOG(("CRC after AI for frame %d is 0x%8.8X", m_frame, xferCRC->getCRC()));
+		if (TheReleaseLogSubsystemCRCs)
+			ReleaseLogRecordSubsystemCRC(m_frame, "ai", xferCRC->getCRC());
 	}
 
 	if (xferCRC->getXferMode() == XFER_SAVE)
@@ -4638,6 +4666,8 @@ UnsignedInt GameLogic::getCRC(Int mode, AsciiString deepCRCFileName)
 	if (isInGameLogicUpdate())
 	{
 		CRCGEN_LOG(("CRC for frame %d is 0x%8.8X", m_frame, theCRC));
+		if (TheReleaseLogSubsystemCRCs)
+			ReleaseLogRecordSubsystemCRC(m_frame, "final", theCRC);
 	}
 	return theCRC;
 }

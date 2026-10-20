@@ -784,12 +784,14 @@ static CriticalSection critSec1, critSec2, critSec3, critSec4, critSec5;
 //=============================================================================
 static LONG WINAPI UnHandledExceptionFilter(struct _EXCEPTION_POINTERS* e_info)
 {
-	DumpExceptionInfo(e_info->ExceptionRecord->ExceptionCode, e_info);
+	// Without a crash DSN this filter is the only crash path (the sentry
+	// on-crash callback otherwise writes the record), and the next launch's
+	// crash upload keys off ReleaseCrashInfo.txt.
+	// It also walks the stack and writes the minimal minidump.
+	ReleaseCrashRecordUnhandled(e_info);
 #ifdef RTS_ENABLE_CRASHDUMP
 	if (TheMiniDumper && TheMiniDumper->IsInitialized())
 	{
-		// Create both minimal and full memory dumps
-		TheMiniDumper->TriggerMiniDumpForException(e_info, DumpType_Minimal);
 		TheMiniDumper->TriggerMiniDumpForException(e_info, DumpType_Full);
 	}
 

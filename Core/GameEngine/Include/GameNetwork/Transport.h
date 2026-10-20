@@ -52,6 +52,12 @@ public:
 
 	virtual Bool allowBroadcasts(Bool val) = 0;
 
+	// TheSuperHackers @feature bill-rich 18/10/2026 Whether this transport already
+	// guarantees delivery and order (the GeneralsOnline mesh does, UDP does not).
+	// The lockstep layer tunes its own retries off this; see
+	// Connection::retryIntervalFor.
+	virtual Bool isReliable( void ) const { return FALSE; }
+
 	// Latency insertion and packet loss
 	void setLatency( Bool val ) { m_useLatency = val; }
 	void setPacketLoss( Bool val ) { m_usePacketLoss = val; }

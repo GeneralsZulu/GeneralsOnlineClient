@@ -367,7 +367,6 @@ public:
 	}
 
 	// periodically force refresh the lobby for data accuracy
-	int64_t m_lastForceRefresh = 0;
 
 	void Tick();
 

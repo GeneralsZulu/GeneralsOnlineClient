@@ -345,6 +345,7 @@ void ConnectionManager::init()
 	m_lastResendRequestMs = 0;
 	m_lastRouterWaitSendMs = 0;
 	memset(m_lastResendServeMs, 0, sizeof(m_lastResendServeMs));
+	m_lastFrameTicked = 0;
 	m_routerWaitMask = 0;
 	m_routerWaitFrame = 0;
 	m_routerWaitMs = 0;
@@ -771,8 +772,8 @@ void ConnectionManager::processFrameResendRequest(NetFrameResendRequestCommandMs
 	}
 	m_lastResendServeMs[playerID] = now ? now : 1;
 
-	ReleaseLog("NETRESEND serving slot=%u from frame %u (we are on %u)",
-		playerID, msg->getFrameToResend(), TheGameLogic->getFrame());
+	ReleaseLog("NETRESEND serving slot=%u from frame %u (we are on %u, ticked to %u)",
+		playerID, msg->getFrameToResend(), TheGameLogic->getFrame(), m_lastFrameTicked);
 
 	sendFrameDataToPlayer(playerID, msg->getFrameToResend());
 }
@@ -1917,6 +1918,14 @@ void ConnectionManager::processFrameTick(UnsignedInt frame) {
 	}
 	msg->setPlayerID(m_localSlot);
 
+	// This count is final: Network::processCommand only ticks a frame once
+	// the execution frame has moved past it, and new local commands always
+	// land on the execution frame. Everything above this is still being
+	// filled and must never be served as a count (sendSingleFrameToPlayer).
+	if (frame > m_lastFrameTicked) {
+		m_lastFrameTicked = frame;
+	}
+
 	m_frameMetrics.doPerFrameMetrics(frame);
 
 	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("ConnectionManager::processFrameTick - sending frame info for frame %d, ID %d, command count %d", frame, msg->getID(), commandCount));
@@ -2091,21 +2100,24 @@ Bool ConnectionManager::allCommandsReady(UnsignedInt frame, Bool justTesting /* 
 			}
 */
 
+			const UnsignedInt heldBefore = m_frameData[i]->getCommandCount(frame);
+			const UnsignedInt announcedBefore = m_frameData[i]->getFrameCommandCount(frame);
 			frameRetVal = m_frameData[i]->allCommandsReady(frame, (frame != commandsReadyDebugSpewage) && (justTesting == FALSE));
 			if (frameRetVal == FRAMEDATA_NOTREADY) {
 				retval = FALSE;
 			} else if (frameRetVal == FRAMEDATA_RESEND) {
+				// TheSuperHackers @bugfix bill-rich 18/10/2026 Wipe only the slot whose
+				// data disagreed with its announced count (FrameData::allCommandsReady
+				// already cleared its own list) and ask that player for it again. The
+				// retail loop below this cleared the frame for EVERY remote slot, which
+				// threw away consistent data from players who had nothing to do with it
+				// and widened the window in which a re-delivered frame info could make
+				// the frame execute short of its commands.
+				ReleaseLog("NETRESEND frame=%u slot=%d inconsistent: held %u commands, announced %u",
+					frame, i, heldBefore, announcedBefore);
+				m_frameData[i]->resetFrame(frame, FALSE);
 				requestFrameDataResend(i, frame, "frame data inconsistent");
 				retval = FALSE;
-			}
-		}
-	}
-
-	if (frameRetVal == FRAMEDATA_RESEND) {
-		// this frame's data is really screwed up, we need to clean it out so it can be resent to us.
-		for (i = 0; i < MAX_SLOTS; ++i) {
-			if ((m_frameData[i] != nullptr) && (i != m_localSlot)) {
-				m_frameData[i]->resetFrame(frame, FALSE);
 			}
 		}
 	}
@@ -3048,6 +3060,25 @@ void ConnectionManager::sendSingleFrameToPlayer(UnsignedInt playerID, UnsignedIn
 			if (m_frameData[i]->getFrameCommandCount(frame) == (UnsignedInt)-1) {
 				continue;
 			}
+			// TheSuperHackers @bugfix bill-rich 18/10/2026 Never serve our OWN frames
+			// above the last one processFrameTick announced. The -1 guard above only
+			// covers remote slots: the local FrameDataManager keeps its frame command
+			// count equal to the commands it holds at all times, so a run-ahead frame
+			// we are still filling reads as a real, final-looking count. During a
+			// stall the logic frame does not advance, so every order the player gives
+			// keeps landing on the same execution frame AFTER that count went out
+			// with a serve. On the requester the late order then makes the frame
+			// "inconsistent" (more commands than announced), the frame is wiped, the
+			// stale served count lands again and the frame executes WITHOUT the
+			// order: the two simulations diverge and the next CRC exchange reports a
+			// mismatch. This is the 2026-10-18 1v1 (seed 1560270675, Pancake's
+			// AttackObject at frame 56374 missing from Neo's replay), the 2026-10-14
+			// six-player game 1802985150 (SetSelection at 3869) and the 2026-10-10
+			// games that sat on "frame data inconsistent" until the vote. Frames at or
+			// below m_lastFrameTicked are final; the live stream delivers the rest.
+			if ((i == (Int)m_localSlot) && (frame > m_lastFrameTicked)) {
+				continue;
+			}
 			NetCommandList *list = m_frameData[i]->getFrameCommandList(frame);
 			if (list != nullptr) {
 				NetCommandRef *ref = list->getFirstMessage();
@@ -3243,9 +3274,11 @@ void ConnectionManager::emitNetStats(UnsignedInt frame, Int runAhead, Int frameR
 	m_lastStatsRunAhead = runAhead;
 	m_lastStatsFrameRate = frameRate;
 	// links=[slot:retries+repeats/srttms ...] one entry per live connection.
-	// Retries fired the adaptive timer (probable loss); repeats are the deliberate
-	// per-packet frame-info redundancy and are normal whenever the round trip
-	// exceeds the send interval.
+	// Retries fired the retry timer: on the datagram transport the adaptive one
+	// (probable loss), on the GeneralsOnline mesh the fixed NET_RETRY_RELIABLE_MS
+	// (the peer is slow, nothing was lost). Repeats are the deliberate per-packet
+	// frame-info redundancy on the datagram transport only, and are normal
+	// whenever the round trip exceeds the send interval.
 	char links[160];
 	Int len = 0;
 	links[0] = 0;

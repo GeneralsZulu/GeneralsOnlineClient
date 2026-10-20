@@ -632,6 +632,20 @@ zulugo-exe:
 	$(call go_build,$(GO_BUILD_SUBDIR),$(GO_DEPS_CACHE),,$(GO_GAME_TARGET))
 	@echo "Zulu GO client: $(GO_SOURCE_EXE)"
 
+# Lockstep regression gate. Runs the two-client lab recipe that reproduces the
+# 2.0.0-2.0.7 mismatch (one-directional delay bursts plus move orders) on the
+# built client and fails when the two replays diverge. Needs the lab and the
+# DEV services up (go-lab/mismatch-lab/gate.sh).
+GO_LAB ?= $(HOME)/gastown/go-lab
+GATE_SECONDS ?= 180
+# The release exe talks to the public service, so the gate needs the lab build:
+#   EXTRA_CMAKE_DEFS=-DZULU_GO_SELFHOST_BASE=https://localhost:9000 FORCE_CMAKE=true $(GO_LAB)/build-go.sh $(CURDIR)
+GATE_EXE ?= $(CURDIR)/build/msvc-wine/GeneralsMD/GeneralsOnlineZH.exe
+.PHONY: mismatch-gate
+mismatch-gate:
+	@test -f "$(GATE_EXE)" || { echo "ERROR: $(GATE_EXE) missing; build it with $(GO_LAB)/build-go.sh against localhost:9000 (or set GATE_EXE)"; exit 1; }
+	$(GO_LAB)/mismatch-lab/gate.sh "$(GATE_EXE)" $(GATE_SECONDS)
+
 # The logging variant, and the only difference between the two channels'
 # clients: a Release build (no debug CRT, same DLL dependencies) with
 # DEBUG_LOGGING and DEBUG_CRASHING compiled in, so a dev tester's crash
