@@ -61,7 +61,7 @@
 ; that survive into the Sections are guarded with IfSilent.
 
 !ifndef APPVERSION
-    !define APPVERSION "2.0.7"
+    !define APPVERSION "2.1.0"
 !endif
 
 !define APPNAME       "Zulu GO"
@@ -740,6 +740,12 @@ Section "${APPNAME}" SecMain
         "$INSTDIR\${SUBDIR}\${LAUNCHERNAME}" \
         "" \
         "$INSTDIR\${SUBDIR}\${EXENAME}" 0
+    ; Same launcher with -netlegacy: retail lockstep timing, for A/B nights.
+    ; The launcher forwards a shortcut's arguments to the game verbatim.
+    CreateShortcut "$SMPROGRAMS\${APPNAME}\${APPNAME} (legacy timing).lnk" \
+        "$INSTDIR\${SUBDIR}\${LAUNCHERNAME}" \
+        "-netlegacy" \
+        "$INSTDIR\${SUBDIR}\${EXENAME}" 0
     CreateShortcut "$SMPROGRAMS\${APPNAME}\README.lnk" \
         "$INSTDIR\${SUBDIR}\README.txt"
     CreateShortcut "$SMPROGRAMS\${APPNAME}\Uninstall ${APPNAME}.lnk" \
@@ -839,6 +845,11 @@ Section "Desktop shortcut" SecDesktop
         "$INSTDIR\${SUBDIR}\${LAUNCHERNAME}" \
         "" \
         "$INSTDIR\${SUBDIR}\${EXENAME}" 0
+    ; -netlegacy twin, see the Start Menu entry.
+    CreateShortcut "$DESKTOP\${APPNAME} (legacy timing).lnk" \
+        "$INSTDIR\${SUBDIR}\${LAUNCHERNAME}" \
+        "-netlegacy" \
+        "$INSTDIR\${SUBDIR}\${EXENAME}" 0
     SetShellVarContext current
 SectionEnd
 
@@ -874,9 +885,11 @@ Delete $INSTDIR by hand if you are sure it is the ${APPNAME} folder."
     ; an install run without elevation put them there.
     SetShellVarContext all
     Delete "$DESKTOP\${APPNAME}.lnk"
+    Delete "$DESKTOP\${APPNAME} (legacy timing).lnk"
     RMDir /r "$SMPROGRAMS\${APPNAME}"
     SetShellVarContext current
     Delete "$DESKTOP\${APPNAME}.lnk"
+    Delete "$DESKTOP\${APPNAME} (legacy timing).lnk"
     RMDir /r "$SMPROGRAMS\${APPNAME}"
 
     DeleteRegKey HKLM "${UNINSTREGKEY}"
