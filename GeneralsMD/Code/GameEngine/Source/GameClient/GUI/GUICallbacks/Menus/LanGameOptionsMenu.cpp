@@ -1476,9 +1476,8 @@ WindowMsgHandledType LanGameOptionsMenuInput( GameWindow *window, UnsignedInt ms
 // locally, and propagates via RequestGameOptions. All error states
 // surface as local SYSTEM chat lines so the host sees what went wrong
 // without aborting the lobby. The body sends humans-only names; the
-// URL path segment carries the total occupied-slot count (humans + AI
-// + observers) so the server picks from a pool sized to the actual
-// match.
+// URL path segment counts playing humans and AI, excluding observers,
+// so the server picks from a pool sized to the actual match.
 //
 // Forward-compat: when the server starts returning map_filename /
 // map_crc / map_contents_mask alongside chosen_map, the marked block
@@ -1495,14 +1494,16 @@ static void handleMapVoteClick()
 		return;
 
 	std::vector<AsciiString> humanNames;
-	unsigned int occupied = 0;
+	unsigned int playerCount = 0;
 	Int i;
 	for (i = 0; i < MAX_SLOTS; ++i)
 	{
 		const GameSlot *slot = game->getConstSlot(i);
 		if (!slot || !slot->isOccupied())
 			continue;
-		++occupied;
+		if (slot->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
+			continue;
+		++playerCount;
 		if (slot->isHuman())
 		{
 			AsciiString name;
@@ -1521,7 +1522,7 @@ static void handleMapVoteClick()
 	}
 
 	ChooseMapResult res = ChooseMapFromServer(
-		TheGlobalData->m_mapVoteUrl, humanNames, occupied);
+		TheGlobalData->m_mapVoteUrl, humanNames, playerCount);
 	if (!res.success)
 	{
 		UnicodeString errU;

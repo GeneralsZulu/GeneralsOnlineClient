@@ -1763,8 +1763,8 @@ static void wolUpdateMapDownload()
 // rules as the LAN lobby's (see LanGameOptionsMenu + GUIUtil
 // FindMapByDisplayName); only the apply differs, because here the lobby service
 // owns the map and has to be told about it. The body sends humans-only names;
-// the URL path segment carries the total occupied-slot count (humans + AI +
-// observers) so the server picks from a pool sized to the actual match.
+// the URL path segment counts playing humans and AI, excluding observers,
+// so the server picks from a pool sized to the actual match.
 // -----------------------------------------------------------------------------
 static void handleOnlineMapVoteClick()
 {
@@ -1777,14 +1777,16 @@ static void handleOnlineMapVoteClick()
 		return;
 
 	std::vector<AsciiString> humanNames;
-	unsigned int occupied = 0;
+	unsigned int playerCount = 0;
 	Int i;
 	for (i = 0; i < MAX_SLOTS; ++i)
 	{
 		const GameSlot *slot = game->getConstSlot(i);
 		if (slot == NULL || !slot->isOccupied())
 			continue;
-		++occupied;
+		if (slot->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
+			continue;
+		++playerCount;
 		if (slot->isHuman())
 		{
 			AsciiString name;
@@ -1803,7 +1805,7 @@ static void handleOnlineMapVoteClick()
 	}
 
 	ChooseMapResult res = ChooseMapFromServer(
-		TheGlobalData->m_mapVoteUrl, humanNames, occupied);
+		TheGlobalData->m_mapVoteUrl, humanNames, playerCount);
 	if (!res.success)
 	{
 		UnicodeString errU;
