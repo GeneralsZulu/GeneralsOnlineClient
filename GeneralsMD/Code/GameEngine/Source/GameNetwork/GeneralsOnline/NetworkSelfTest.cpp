@@ -44,6 +44,7 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <algorithm>
 
 // -----------------------------------------------------------------------------
 // Shared helpers
@@ -88,7 +89,7 @@ static std::atomic<int> s_diagUploads(0);
 // The files every diagnostic upload carries. `prev` adds the previous
 // session's logs (crash reports) on top of the current ones.
 static void diagUpload(const std::string &logsUrl, const std::string &seedLabel,
-	const std::string &playerId, Bool prev, Bool crashInfo)
+	const std::string &playerId, Bool prev, Bool crashInfo, const AsciiString &extraPath = AsciiString::TheEmptyString)
 {
 	std::vector<AsciiString> paths;
 	paths.push_back(AsciiString(ReleaseGetLogFileName()));
@@ -107,6 +108,8 @@ static void diagUpload(const std::string &logsUrl, const std::string &seedLabel,
 		p.concat("ReleaseCrashInfo.txt");
 		paths.push_back(p);
 	}
+	if (!extraPath.isEmpty())
+		paths.push_back(extraPath);
 	StartDiagnosticLogUpload(AsciiString(logsUrl.c_str()), AsciiString(seedLabel.c_str()),
 		AsciiString(playerId.c_str()), paths);
 }
@@ -538,6 +541,93 @@ void NetDiag_NoteCleanShutdown()
 	}
 }
 
+// Windows' own record of how the previous session died. A fail-fast exit
+// (heap corruption 0xC0000374, /GS 0xC0000409) skips every in-process handler,
+// so no minidump, ReleaseCrashInfo.txt or envelope exists, but WER still logs
+// Application Error 1000 with the exception code, faulting module and offset.
+// Writes the matching events, or a line saying there were none (then the
+// process was killed or exited rather than crashed), and returns the path.
+static AsciiString writePrevSessionWerEvents(time_t since)
+{
+	AsciiString outPath = TheGlobalData->getPath_UserData();
+	outPath.concat("PrevSessionWER.txt");
+	FILE *out = fopen(outPath.str(), "w");
+	if (out == nullptr)
+		return AsciiString::TheEmptyString;
+
+	char exePath[MAX_PATH] = {0};
+	GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+	const char *exeName = strrchr(exePath, '\\');
+	exeName = exeName ? exeName + 1 : exePath;
+	std::string exeLower = exeName;
+	std::transform(exeLower.begin(), exeLower.end(), exeLower.begin(), ::tolower);
+	fprintf(out, "WER events for %s since %lld\n", exeName, (long long)since);
+
+	int found = 0;
+	HANDLE hLog = OpenEventLogA(nullptr, "Application");
+	if (hLog == nullptr)
+	{
+		fprintf(out, "OpenEventLog failed (%lu)\n", GetLastError());
+	}
+	else
+	{
+		std::vector<BYTE> buf(64 * 1024);
+		Bool done = FALSE;
+		while (!done && found < 20)
+		{
+			DWORD bytesRead = 0, needed = 0;
+			if (!ReadEventLogA(hLog, EVENTLOG_SEQUENTIAL_READ | EVENTLOG_BACKWARDS_READ, 0,
+				buf.data(), (DWORD)buf.size(), &bytesRead, &needed))
+			{
+				if (GetLastError() == ERROR_INSUFFICIENT_BUFFER && needed > buf.size())
+				{
+					buf.resize(needed);
+					continue;
+				}
+				break;	// ERROR_HANDLE_EOF: read the whole log
+			}
+			for (DWORD off = 0; off < bytesRead && found < 20; )
+			{
+				const EVENTLOGRECORD *rec = (const EVENTLOGRECORD *)(buf.data() + off);
+				off += rec->Length;
+				if ((time_t)rec->TimeGenerated < since)
+				{
+					done = TRUE;	// newest first, so everything after is older
+					break;
+				}
+				const char *source = (const char *)(rec + 1);
+				if (strcmp(source, "Application Error") != 0 && strcmp(source, "Windows Error Reporting") != 0
+					&& strcmp(source, "Application Hang") != 0)
+					continue;
+
+				std::string joined;
+				const char *s = (const char *)rec + rec->StringOffset;
+				for (WORD n = 0; n < rec->NumStrings; ++n)
+				{
+					if (n > 0)
+						joined += " | ";
+					joined += s;
+					s += strlen(s) + 1;
+				}
+				// Every one of these names the exe it is about.
+				std::string lower = joined;
+				std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+				if (lower.find(exeLower) == std::string::npos)
+					continue;
+				fprintf(out, "%lld %s %u: %s\n", (long long)rec->TimeGenerated, source,
+					(unsigned)(rec->EventID & 0xFFFF), joined.c_str());
+				++found;
+			}
+		}
+		CloseEventLog(hLog);
+	}
+	if (found == 0)
+		fprintf(out, "none: no WER record, so the process was killed or exited rather than crashed\n");
+	fclose(out);
+	ReleaseLog("NETDIAG previous session: %d WER event(s) for %s", found, exeName);
+	return outPath;
+}
+
 // A crash record older than this at the first launch that sees it is history,
 // not news: the first launch of 2.0.4 shipped eight ReleaseCrashInfo.txt files
 // dating back to August.
@@ -550,6 +640,7 @@ void NetDiag_CheckForCrashOnLaunch()
 	static Bool s_crashed = FALSE;
 	static Bool s_unclean = FALSE;
 	static time_t s_crashTime = 0;
+	static time_t s_prevLogTime = 0;
 	if (s_done || TheGlobalData == nullptr)
 		return;
 
@@ -594,8 +685,7 @@ void NetDiag_CheckForCrashOnLaunch()
 		// 2. No orderly shutdown last time, and there is a previous log to show
 		//    for it. The marker is consumed here so this session starts out
 		//    "unclean" until it exits properly.
-		time_t prevLogTime = 0;
-		const Bool havePrevLog = fileMTime(ReleaseGetPrevLogFileName(), prevLogTime);
+		const Bool havePrevLog = fileMTime(ReleaseGetPrevLogFileName(), s_prevLogTime);
 		const AsciiString cleanPath = cleanExitMarkerPath();
 		time_t cleanTime = 0;
 		const Bool haveClean = fileMTime(cleanPath.str(), cleanTime);
@@ -641,7 +731,9 @@ void NetDiag_CheckForCrashOnLaunch()
 		ReleaseLog("NETDIAG previous session did not shut down cleanly; uploading its logs as %s/%s",
 			seedLabel.c_str(), playerId.c_str());
 	s_diagUploads.fetch_add(1);
-	diagUpload(TheGlobalData->m_logsUrl.str(), seedLabel, playerId, TRUE, s_crashed);
+	// The crash comes after the previous log's last write; with no log, look back a day.
+	const time_t werSince = s_prevLogTime != 0 ? s_prevLogTime - 60 : time(nullptr) - CRASH_RECORD_MAX_AGE_S;
+	diagUpload(TheGlobalData->m_logsUrl.str(), seedLabel, playerId, TRUE, s_crashed, writePrevSessionWerEvents(werSince));
 	if (s_crashed)
 	{
 		FILE *f = fopen(markerPath.str(), "w");
