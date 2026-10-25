@@ -436,8 +436,8 @@ struct ChooseMapResult
 /// @param baseUrl Base URL of the map_vote endpoint, e.g.
 ///        "https://www.radarvan.com/api/map_vote/". The handler appends
 ///        "<playerCount>/choose" before sending.
-/// @param playerNames Lobby player names to send in the JSON body.
-/// @param playerCount Total occupied slots in the lobby (URL path segment).
+/// @param playerNames Playing human names, excluding observers, to send in the JSON body.
+/// @param playerCount Playing human and AI slots, excluding observers (URL path segment).
 ChooseMapResult ChooseMapFromServer(const AsciiString& baseUrl,
                                     const std::vector<AsciiString>& playerNames,
                                     unsigned int playerCount);

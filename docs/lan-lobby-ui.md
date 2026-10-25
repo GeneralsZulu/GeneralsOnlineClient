@@ -66,6 +66,13 @@ Code touchpoints: `LanGameOptionsMenu.cpp` (Randomize handler),
 `GlobalData.{cpp,h}` (`m_balanceTeamsUrl`, `m_mapSummaryUrl`),
 `StatsUploader.cpp` (the actual HTTPS calls).
 
+## Radarvan Pick player count
+
+In both LAN and online lobbies, Radarvan Pick requests a map for the number
+of playing humans and AI. Observers and empty slots are excluded. For example,
+six players plus one observer requests `map_vote/6/choose`. The JSON `players`
+list includes only playing humans, excluding observer names.
+
 ## Concerns (across all of the above)
 
 - **Backwards compatibility.** None of these touch sim or replay
