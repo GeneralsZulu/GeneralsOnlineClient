@@ -622,7 +622,7 @@ static AsciiString writePrevSessionWerEvents(time_t since)
 		CloseEventLog(hLog);
 	}
 	if (found == 0)
-		fprintf(out, "none: no WER record, so the process was killed or exited rather than crashed\n");
+		fprintf(out, "none: Windows logged no crash for this exe (our own handler caught it, or the process was killed or exited)\n");
 	fclose(out);
 	ReleaseLog("NETDIAG previous session: %d WER event(s) for %s", found, exeName);
 	return outPath;
