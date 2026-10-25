@@ -64,6 +64,25 @@ string(REPLACE
     "${_gns_steamwebrtc_contents}")
 file(WRITE "${_gns_steamwebrtc_cmake}" "${_gns_steamwebrtc_contents}")
 
+# The fork's native ICE client never refreshes TURN permissions, so every relayed
+# link dies 300 s after it connects. Skip if a previous configure already applied it;
+# --ignore-whitespace because the build checks GNS out with CRLF endings.
+set(_gns_turn_patch "${CMAKE_CURRENT_LIST_DIR}/patches/gns-turn-permission-refresh.patch")
+execute_process(
+    COMMAND git apply --ignore-whitespace --reverse --check "${_gns_turn_patch}"
+    WORKING_DIRECTORY "${gamenetworkingsockets_SOURCE_DIR}"
+    RESULT_VARIABLE _gns_turn_patch_applied
+    OUTPUT_QUIET ERROR_QUIET)
+if(NOT _gns_turn_patch_applied EQUAL 0)
+    execute_process(
+        COMMAND git apply --ignore-whitespace "${_gns_turn_patch}"
+        WORKING_DIRECTORY "${gamenetworkingsockets_SOURCE_DIR}"
+        RESULT_VARIABLE _gns_turn_patch_result)
+    if(NOT _gns_turn_patch_result EQUAL 0)
+        message(FATAL_ERROR "Could not apply ${_gns_turn_patch}")
+    endif()
+endif()
+
 add_subdirectory(
     "${gamenetworkingsockets_SOURCE_DIR}"
     "${gamenetworkingsockets_BINARY_DIR}"
