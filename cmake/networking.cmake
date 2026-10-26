@@ -40,7 +40,13 @@ set(BUILD_TOOLS OFF CACHE BOOL "Do not build GameNetworkingSockets tools" FORCE)
 set(ENABLE_ICE ON CACHE BOOL "Enable GameNetworkingSockets NAT traversal" FORCE)
 set(USE_STEAMWEBRTC ON CACHE BOOL "Enable GameNetworkingSockets WebRTC ICE support" FORCE)
 set(USE_CRYPTO OpenSSL CACHE STRING "Use OpenSSL for GameNetworkingSockets crypto" FORCE)
-set(Protobuf_USE_STATIC_LIBS OFF CACHE BOOL "Use shared protobuf when available" FORCE)
+# Must match the protobuf linkage vcpkg built, or GNS compiles with PROTOBUF_USE_DLLS
+# against a static protobuf and fails to link.
+if(VCPKG_TARGET_TRIPLET MATCHES "static")
+    set(Protobuf_USE_STATIC_LIBS ON CACHE BOOL "Link protobuf statically" FORCE)
+else()
+    set(Protobuf_USE_STATIC_LIBS OFF CACHE BOOL "Use shared protobuf when available" FORCE)
+endif()
 
 FetchContent_Declare(
     gamenetworkingsockets
