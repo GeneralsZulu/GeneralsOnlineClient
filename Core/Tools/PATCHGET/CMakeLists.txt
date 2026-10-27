@@ -29,6 +29,7 @@ target_link_libraries(corei_patchgrabber INTERFACE
     imm32
     vfw32
     winmm
+    wsock32
 )
 
 target_compile_definitions(corei_patchgrabber INTERFACE

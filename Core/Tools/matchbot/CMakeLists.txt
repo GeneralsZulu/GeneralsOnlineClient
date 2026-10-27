@@ -74,6 +74,7 @@ target_link_libraries(core_matchbot PRIVATE
     corei_always
     gamespy::gamespy
     stlport
+    wsock32
 )
 
 if(WIN32 OR "${CMAKE_SYSTEM}" MATCHES "Windows")
