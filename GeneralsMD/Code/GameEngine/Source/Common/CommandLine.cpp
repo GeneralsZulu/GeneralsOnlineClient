@@ -36,6 +36,7 @@
 #include "GameClient/TerrainVisual.h" // for TERRAIN_LOD_MIN definition
 #include "GameClient/GameText.h"
 #include "GameNetwork/NetworkDefs.h"
+#include "GameNetwork/RandomAssign.h"
 #include "WWLib/trim.h"
 
 
@@ -406,6 +407,13 @@ Int parseMapName(char *args[], int num)
 		TheWritableGlobalData->m_mapName.set( args[ 1 ] );
 		ConvertShortMapPathToLongMapPath(TheWritableGlobalData->m_mapName);
 	}
+	return 1;
+}
+
+// Run the lobby Randomize placement self-test after engine init and exit (see RandomAssign.h).
+Int parseRandomAssignTest(char *args[], int num)
+{
+	requestRandomAssignSelfTest();
 	return 1;
 }
 
@@ -1424,6 +1432,7 @@ static CommandLineParam paramsForStartup[] =
 	// TheSuperHackers @feature helmutbuhler 11/04/2025
 	// This runs the game without a window, graphics, input and audio. You can combine this with -replay
 	{ "-headless", parseHeadless },
+	{ "-randomassigntest", parseRandomAssignTest },
 
 	// TheSuperHackers @feature helmutbuhler 13/04/2025
 	// Play back a replay. Pass the filename including .rep afterwards.

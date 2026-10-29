@@ -72,3 +72,13 @@ typedef Int (*StartSpotRandomFunc)(Int lo, Int hi);
 // Which teammate gets which of the team's spots is then shuffled (the
 // enumeration itself hands them out in slot order).
 void assignStartPositionsGlobal(GameInfo *game, StartSpotRandomFunc randFunc);
+
+// -randomassigntest: ask GameEngine::init to run the self-test below instead of
+// starting the shell, then exit the process with its failure count as the code.
+void requestRandomAssignSelfTest();
+Bool isRandomAssignSelfTestRequested();
+
+// Exercise performRandomAssign (the lobby Randomize path) on synthetic maps
+// against the live map cache and player templates. Prints one
+// "[RANDOMASSIGN TEST] ..." line per check on stdout; returns the failure count.
+Int runRandomAssignSelfTest();
