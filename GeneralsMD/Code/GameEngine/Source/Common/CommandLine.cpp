@@ -611,6 +611,16 @@ Int parseSynergyUrl(char *args[], int num)
 	return 1;
 }
 
+Int parseRadarvanApiUrl(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_radarvanApiUrl = args[1];
+		return 2;
+	}
+	return 1;
+}
+
 Int parseMapMatchCountsUrl(char *args[], int num)
 {
 	if (num > 1)
@@ -1489,6 +1499,10 @@ static CommandLineParam paramsForStartup[] =
 	{ "-predictUrl", parsePredictUrl },
 	{ "-teamStatsUrl", parseTeamStatsUrl },
 	{ "-synergyUrl", parseSynergyUrl },
+
+	// Radarvan API base for the end-screen match report (story, win curve,
+	// pre-game prediction). Pass an empty string ("") to disable it.
+	{ "-radarvanApiUrl", parseRadarvanApiUrl },
 
 	// URL the map-select dialogs GET to fetch a JSON array of
 	// {map, matchCount} entries, used to annotate each row with how

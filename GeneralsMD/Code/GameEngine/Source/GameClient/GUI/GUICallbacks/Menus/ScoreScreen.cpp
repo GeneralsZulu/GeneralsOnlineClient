@@ -70,6 +70,7 @@
 #include "Common/ReplaySimulation.h"
 #include "Common/ScoreKeeper.h"
 #include "Common/SkirmishBattleHonors.h"
+#include "Common/StatsUploader.h"
 #include "Common/ThingFactory.h"
 #include "GameLogic/FPUControl.h"
 #include "GameLogic/GameLogic.h"
@@ -77,6 +78,8 @@
 #include "GameLogic/VictoryConditions.h"
 #include "GameClient/Color.h"
 #include "GameClient/Display.h"
+#include "GameClient/DisplayString.h"
+#include "GameClient/DisplayStringManager.h"
 #include "GameClient/GameFont.h"
 #include "GameClient/GUICallbacks.h"
 #include "GameClient/WindowLayout.h"
@@ -87,6 +90,7 @@
 #include "GameClient/MapUtil.h"
 #include "GameClient/Shell.h"
 #include "GameClient/KeyDefs.h"
+#include "GameClient/GadgetListBox.h"
 #include "GameClient/GadgetStaticText.h"
 #include "GameClient/GadgetTextEntry.h"
 #include "GameClient/GadgetPushButton.h"
@@ -178,6 +182,611 @@ enum {
 	SCORESCREEN_REPLAY
 	};
 static Int screenType;
+
+// ---------------------------------------------------------------------------
+// Radarvan match report (see RadarvanReportStart in StatsUploader.h).
+//
+// The win-probability chart draws in the stats rows a small game leaves
+// empty; when the table is too full for it, a MATCH REPORT button swaps the
+// table for the chart. The story - how the result compares with radarvan's
+// pre-game prediction, then radarvan's headline and beats - goes into the
+// text box under the table. Best-effort throughout: a match radarvan never
+// gets just shows no report.
+// ---------------------------------------------------------------------------
+enum
+{
+	RV_CHART_MIN_ROWS  = 3,   ///< free stats rows the inline chart needs
+	RV_MAX_MARKERS     = 9,   ///< beats numbered on the chart
+	RV_LIVE_WAIT_SEC   = 150, ///< a match just played: its upload is in flight
+	RV_REPLAY_WAIT_SEC = 15,  ///< an old replay: radarvan has it or it doesn't
+	RV_COMEBACK_PCT    = 30   ///< winner's low point that counts as a comeback
+};
+
+enum
+{
+	RV_LBL_TITLE = 0,
+	RV_LBL_RESULT,
+	RV_LBL_STATUS,
+	RV_LBL_Y100,
+	RV_LBL_Y50,
+	RV_LBL_Y0,
+	RV_LBL_X0,
+	RV_LBL_XEND,
+	RV_LBL_PREGAME,
+	RV_LBL_MARK0,
+	RV_LBL_COUNT = RV_LBL_MARK0 + RV_MAX_MARKERS
+};
+
+struct RvView
+{
+	Bool active;          ///< a report was requested for this screen
+	Bool ready;           ///< the report arrived and is laid out
+	Bool showing;         ///< toggle mode: the chart is shown instead of the table
+	Bool localView;       ///< the local player played and the result is known
+	Bool localWon;
+	Bool localIsA;        ///< the local player is on radarvan's team A
+	Bool havePreGame;     ///< preGame is valid
+	Real preGame;         ///< pre-game P(win) for the charted side
+	Int  rowCount;        ///< stats rows in use
+	Int  slotCount;       ///< players snapshotted for tinting story lines
+	WideChar slotName[MAX_SLOTS][64];
+	Color slotColor[MAX_SLOTS];
+	GameWindow *canvas;
+	GameWindow *toggle;
+	GameWindow *storyList;
+	Int  markerCount;
+	Real markerMinute[RV_MAX_MARKERS];
+	Int  curveCount;      ///< curve points, including the t=0 start
+	Real curveMinute[RADARVAN_REPORT_MAX_POINTS + 1];
+	Real curveProb[RADARVAN_REPORT_MAX_POINTS + 1]; ///< P(charted side wins)
+	Color aheadColor;
+	Color behindColor;
+	DisplayString *labels[RV_LBL_COUNT];
+	RadarvanReport report;
+};
+static RvView s_rv;
+static Int s_scoreRowCount = 0; ///< rows grabMultiPlayerInfo filled
+
+static UnicodeString rvFromUtf8(const char *s)
+{
+	UnicodeString out;
+	WideChar buf[RADARVAN_REPORT_TEXT_LEN + 1];
+	if (MultiByteToWideChar(CP_UTF8, 0, s, -1, buf, RADARVAN_REPORT_TEXT_LEN + 1) > 0)
+		out = buf;
+	return out;
+}
+
+static UnicodeString rvMinuteText(Real minute)
+{
+	Int secs = (Int)(minute * 60.0f + 0.5f);
+	UnicodeString out;
+	out.format(L"%d:%02d", secs / 60, secs % 60);
+	return out;
+}
+
+static UnicodeString rvJoinNames(const char names[][RADARVAN_REPORT_NAME_LEN], Int count)
+{
+	UnicodeString out;
+	Int i;
+	for (i = 0; i < count; ++i)
+	{
+		if (i > 0)
+			out.concat(L", ");
+		out.concat(rvFromUtf8(names[i]));
+	}
+	return out;
+}
+
+static void rvSetLabel(Int idx, const UnicodeString &text, Bool big)
+{
+	if (s_rv.labels[idx] == nullptr)
+	{
+		s_rv.labels[idx] = TheDisplayStringManager->newDisplayString();
+		if (s_rv.labels[idx] == nullptr)
+			return;
+		s_rv.labels[idx]->setFont(TheFontLibrary->getFont(AsciiString("Arial"), big ? 12 : 10, big));
+	}
+	s_rv.labels[idx]->setText(text);
+}
+
+static void rvLabelSize(Int idx, Int *w, Int *h)
+{
+	*w = 0;
+	*h = 0;
+	if (s_rv.labels[idx] != nullptr)
+		s_rv.labels[idx]->getSize(w, h);
+}
+
+static void rvDrawLabel(Int idx, Int x, Int y, Color color)
+{
+	if (s_rv.labels[idx] != nullptr)
+		s_rv.labels[idx]->draw(x, y, color, GameMakeColor(0, 0, 0, 255));
+}
+
+// P(charted side wins) at `minute`, interpolated along the curve.
+static Real rvProbAt(Real minute)
+{
+	Int i;
+	for (i = 1; i < s_rv.curveCount; ++i)
+	{
+		if (minute <= s_rv.curveMinute[i])
+		{
+			Real t0 = s_rv.curveMinute[i - 1];
+			Real span = s_rv.curveMinute[i] - t0;
+			Real f = (span > 0.0f) ? (minute - t0) / span : 1.0f;
+			return s_rv.curveProb[i - 1] + (s_rv.curveProb[i] - s_rv.curveProb[i - 1]) * f;
+		}
+	}
+	return s_rv.curveProb[s_rv.curveCount - 1];
+}
+
+static void rvDrawChart(GameWindow *win, WinInstanceData *)
+{
+	if (win == nullptr || TheDisplay == nullptr)
+		return;
+
+	Int x, y, w, h;
+	win->winGetScreenPosition(&x, &y);
+	win->winGetSize(&w, &h);
+	TheDisplay->drawFillRect(x, y, w, h, GameMakeColor(6, 8, 12, 200));
+	TheDisplay->drawOpenRect(x, y, w, h, 1.0f, GameMakeColor(120, 140, 160, 200));
+
+	Int tw, th;
+	if (!s_rv.ready || s_rv.curveCount < 2)
+	{
+		rvLabelSize(RV_LBL_STATUS, &tw, &th);
+		rvDrawLabel(RV_LBL_STATUS, x + (w - tw) / 2, y + (h - th) / 2, GameMakeColor(200, 210, 220, 255));
+		return;
+	}
+
+	const Int pad = 6;
+	Int titleH, resultW, resultH, gutterW, xLabelH;
+	rvLabelSize(RV_LBL_TITLE, &tw, &titleH);
+	rvLabelSize(RV_LBL_RESULT, &resultW, &resultH);
+	rvLabelSize(RV_LBL_Y100, &gutterW, &th);
+	rvLabelSize(RV_LBL_X0, &tw, &xLabelH);
+
+	rvDrawLabel(RV_LBL_TITLE, x + pad, y + pad, GameMakeColor(230, 230, 230, 255));
+	rvDrawLabel(RV_LBL_RESULT, x + w - pad - resultW, y + pad,
+		s_rv.localView ? (s_rv.localWon ? s_rv.aheadColor : s_rv.behindColor) : GameMakeColor(255, 200, 60, 255));
+
+	const Int px = x + pad + gutterW + 4;
+	const Int py = y + pad + titleH + 4;
+	const Int pw = x + w - pad - px;
+	const Int ph = y + h - pad - xLabelH - 2 - py;
+	if (pw < 40 || ph < 20)
+		return;
+
+	const Real tMax = s_rv.curveMinute[s_rv.curveCount - 1];
+	const Int midY = py + ph / 2;
+	const Color grid = GameMakeColor(150, 160, 170, 90);
+
+	// 0% / 100% rails and the dashed 50% line.
+	TheDisplay->drawLine(px, py, px + pw, py, 1.0f, grid);
+	TheDisplay->drawLine(px, py + ph, px + pw, py + ph, 1.0f, grid);
+	Int dx;
+	for (dx = 0; dx < pw; dx += 8)
+		TheDisplay->drawLine(px + dx, midY, px + ((dx + 4 < pw) ? dx + 4 : pw), midY, 1.0f, GameMakeColor(200, 200, 200, 140));
+
+	// Shade between the curve and 50%: ahead colour above, behind colour below.
+	Color aheadFill = (s_rv.aheadColor & 0x00FFFFFF) | (90 << 24);
+	Color behindFill = (s_rv.behindColor & 0x00FFFFFF) | (90 << 24);
+	for (dx = 0; dx <= pw; ++dx)
+	{
+		Real q = rvProbAt(tMax * (Real)dx / (Real)pw);
+		Int cy = py + (Int)((1.0f - q) * ph);
+		if (cy < midY)
+			TheDisplay->drawFillRect(px + dx, cy, 1, midY - cy, aheadFill);
+		else if (cy > midY)
+			TheDisplay->drawFillRect(px + dx, midY, 1, cy - midY, behindFill);
+	}
+
+	// Beat markers: a faint vertical rule with its number along the top.
+	Int k;
+	for (k = 0; k < s_rv.markerCount; ++k)
+	{
+		Int mx = px + (Int)(pw * s_rv.markerMinute[k] / tMax);
+		Int my = py + (Int)((1.0f - rvProbAt(s_rv.markerMinute[k])) * ph);
+		TheDisplay->drawLine(mx, py, mx, py + ph, 1.0f, GameMakeColor(255, 200, 60, 70));
+		TheDisplay->drawFillRect(mx - 2, my - 2, 5, 5, GameMakeColor(255, 200, 60, 255));
+		rvLabelSize(RV_LBL_MARK0 + k, &tw, &th);
+		rvDrawLabel(RV_LBL_MARK0 + k, mx - tw / 2, py + 1, GameMakeColor(255, 200, 60, 255));
+	}
+
+	// The curve itself.
+	Int i;
+	for (i = 1; i < s_rv.curveCount; ++i)
+	{
+		Int x0 = px + (Int)(pw * s_rv.curveMinute[i - 1] / tMax);
+		Int x1 = px + (Int)(pw * s_rv.curveMinute[i] / tMax);
+		Int y0 = py + (Int)((1.0f - s_rv.curveProb[i - 1]) * ph);
+		Int y1 = py + (Int)((1.0f - s_rv.curveProb[i]) * ph);
+		TheDisplay->drawLine(x0, y0, x1, y1, 2.0f, GameMakeColor(235, 235, 235, 255));
+	}
+
+	// Radarvan's pre-game prediction is where the curve starts.
+	if (s_rv.havePreGame)
+	{
+		Int dy = py + (Int)((1.0f - s_rv.preGame) * ph);
+		TheDisplay->drawFillRect(px - 3, dy - 3, 7, 7, GameMakeColor(255, 200, 60, 255));
+		TheDisplay->drawOpenRect(px - 3, dy - 3, 7, 7, 1.0f, GameMakeColor(0, 0, 0, 255));
+		rvLabelSize(RV_LBL_PREGAME, &tw, &th);
+		Int ly = (s_rv.preGame >= 0.5f) ? dy + 5 : dy - 5 - th;
+		rvDrawLabel(RV_LBL_PREGAME, px + 6, ly, GameMakeColor(255, 200, 60, 255));
+	}
+
+	// Axes.
+	const Color axis = GameMakeColor(170, 180, 190, 255);
+	rvLabelSize(RV_LBL_Y100, &tw, &th);
+	rvDrawLabel(RV_LBL_Y100, px - 4 - tw, py - th / 2, axis);
+	rvLabelSize(RV_LBL_Y50, &tw, &th);
+	rvDrawLabel(RV_LBL_Y50, px - 4 - tw, midY - th / 2, axis);
+	rvLabelSize(RV_LBL_Y0, &tw, &th);
+	rvDrawLabel(RV_LBL_Y0, px - 4 - tw, py + ph - th / 2, axis);
+	rvDrawLabel(RV_LBL_X0, px, py + ph + 2, axis);
+	rvLabelSize(RV_LBL_XEND, &tw, &th);
+	rvDrawLabel(RV_LBL_XEND, px + pw - tw, py + ph + 2, axis);
+}
+
+static void rvShowReport(Bool show)
+{
+	s_rv.showing = show;
+	if (s_rv.canvas)
+		s_rv.canvas->winHide(!show);
+	if (gadgetParent)
+		gadgetParent->winHide(show);
+	if (s_rv.toggle)
+		GadgetButtonSetText(s_rv.toggle, show ? UnicodeString(L"SCORES") : UnicodeString(L"MATCH REPORT"));
+}
+
+static Int rvAddStoryLine(const UnicodeString &text, Color color)
+{
+	return GadgetListBoxAddEntryText(s_rv.storyList, text, color, -1);
+}
+
+// Colour of the player whose display name matches radarvan's canonical name;
+// the default text colour when nobody does (radarvan may know a player by
+// another name).
+static Color rvPlayerColor(const char *canonical)
+{
+	if (canonical[0] == '\0')
+		return GameSpyColor[GSCOLOR_DEFAULT];
+	UnicodeString name = rvFromUtf8(canonical);
+	Int i;
+	for (i = 0; i < s_rv.slotCount; ++i)
+	{
+		if (name.compareNoCase(s_rv.slotName[i]) == 0)
+			return s_rv.slotColor[i];
+	}
+	return GameSpyColor[GSCOLOR_DEFAULT];
+}
+
+static void rvWriteStory(void)
+{
+	const RadarvanReport &r = s_rv.report;
+	if (s_rv.storyList == nullptr || !r.hasStory)
+		return;
+	if (s_rv.storyList->winIsHidden())
+	{
+		// Replays show neither text box; give the story the academy one.
+		s_rv.storyList->winHide(FALSE);
+		if (chatBoxBorder)
+			chatBoxBorder->winHide(FALSE);
+	}
+
+	const Color gold = GameMakeColor(255, 200, 60, 255);
+	const Color plain = GameSpyColor[GSCOLOR_DEFAULT];
+	UnicodeString line;
+	Int first = rvAddStoryLine(UnicodeString(L"RADARVAN MATCH REPORT"), gold);
+
+	// How the result compares with the pre-game prediction.
+	if (s_rv.havePreGame)
+	{
+		Int pct = (Int)(s_rv.preGame * 100.0f + 0.5f);
+		if (s_rv.localView)
+		{
+			Bool favored = s_rv.preGame > 0.5f;
+			if (pct >= 45 && pct <= 55)
+				line.format(L"Radarvan gave you %d%% before the game: a coin flip.", pct);
+			else if (favored == s_rv.localWon)
+				line.format(L"Radarvan gave you %d%% before the game. As predicted.", pct);
+			else if (s_rv.localWon)
+				line.format(L"Radarvan gave you %d%% before the game. UPSET WIN!", pct);
+			else
+				line.format(L"Radarvan gave you %d%% before the game. Upset loss.", pct);
+			rvAddStoryLine(line, (s_rv.localWon && !favored && pct < 45) ? gold : plain);
+		}
+		else if (r.hasCurve)
+		{
+			Bool aFavored = s_rv.preGame >= 0.5f;
+			Int favPct = aFavored ? pct : 100 - pct;
+			UnicodeString fav = aFavored ? rvJoinNames(r.teamA, r.teamACount) : rvJoinNames(r.teamB, r.teamBCount);
+			line.format(L"Radarvan's pre-game pick: %s at %d%%. %s", fav.str(), favPct,
+				(aFavored == r.teamAWon) ? L"Called it." : L"UPSET!");
+			rvAddStoryLine(line, (aFavored == r.teamAWon) ? plain : gold);
+		}
+	}
+
+	// The winners' lowest point, when it was low enough to call a comeback.
+	if (r.hasCurve)
+	{
+		Real low = 1.0f, lowMinute = 0.0f;
+		Int i;
+		for (i = 0; i < r.pointCount; ++i)
+		{
+			Real q = r.teamAWon ? r.pointProbA[i] : 1.0f - r.pointProbA[i];
+			if (q < low)
+			{
+				low = q;
+				lowMinute = r.pointMinute[i];
+			}
+		}
+		Int lowPct = (Int)(low * 100.0f + 0.5f);
+		if (lowPct < RV_COMEBACK_PCT)
+		{
+			UnicodeString at = rvMinuteText(lowMinute);
+			if (s_rv.localView && s_rv.localWon)
+				line.format(L"Comeback! You were down to %d%% at %s.", lowPct, at.str());
+			else if (s_rv.localView)
+				line.format(L"So close: they were down to %d%% at %s.", lowPct, at.str());
+			else
+				line.format(L"Comeback: the winners were down to %d%% at %s.", lowPct, at.str());
+			rvAddStoryLine(line, gold);
+		}
+	}
+
+	rvAddStoryLine(rvFromUtf8(r.headline), GameMakeColor(235, 235, 235, 255));
+
+	Int b, marker = 0;
+	for (b = 0; b < r.beatCount; ++b)
+	{
+		const RadarvanReportBeat &beat = r.beats[b];
+		line.clear();
+		if (beat.atMinute >= 0.0f)
+		{
+			line = rvMinuteText(beat.atMinute);
+			line.concat(L"  ");
+			if (marker < s_rv.markerCount)
+			{
+				UnicodeString num;
+				num.format(L"[%d] ", ++marker);
+				line.concat(num);
+			}
+		}
+		line.concat(rvFromUtf8(beat.text));
+		rvAddStoryLine(line, rvPlayerColor(beat.playerName));
+	}
+
+	if (first >= 0)
+		GadgetListBoxSetTopVisibleEntry(s_rv.storyList, first);
+}
+
+// Turn the report into the curve, markers and labels the chart draws.
+static void rvLayout(void)
+{
+	const RadarvanReport &r = s_rv.report;
+
+	// Whose side the chart is drawn from. The local player won exactly when
+	// their team is the team that won, which pins them to A or B without
+	// matching names (radarvan's canonical names can differ from in-game ones).
+	Bool sideKnown = FALSE;
+	if (s_rv.localView && r.hasCurve)
+	{
+		s_rv.localIsA = (r.teamAWon == s_rv.localWon);
+		sideKnown = TRUE;
+	}
+
+	// LAN games keep the exact number the loading screen showed; otherwise
+	// ask radarvan's prediction, which only makes sense once we know the side.
+	if (!s_rv.havePreGame && r.hasPrediction && (sideKnown || !s_rv.localView))
+	{
+		s_rv.preGame = (s_rv.localView && !s_rv.localIsA) ? 1.0f - r.predProbA : r.predProbA;
+		s_rv.havePreGame = TRUE;
+	}
+
+	if (r.hasCurve)
+	{
+		Bool flip = s_rv.localView && !s_rv.localIsA;
+		Int i;
+		s_rv.curveMinute[0] = 0.0f;
+		s_rv.curveProb[0] = s_rv.havePreGame ? s_rv.preGame : (flip ? 1.0f - r.pointProbA[0] : r.pointProbA[0]);
+		s_rv.curveCount = 1;
+		for (i = 0; i < r.pointCount; ++i)
+		{
+			s_rv.curveMinute[s_rv.curveCount] = r.pointMinute[i];
+			s_rv.curveProb[s_rv.curveCount] = flip ? 1.0f - r.pointProbA[i] : r.pointProbA[i];
+			++s_rv.curveCount;
+		}
+
+		Real tMax = s_rv.curveMinute[s_rv.curveCount - 1];
+		Int b;
+		s_rv.markerCount = 0;
+		for (b = 0; b < r.beatCount && s_rv.markerCount < RV_MAX_MARKERS; ++b)
+		{
+			if (r.beats[b].atMinute < 0.0f)
+				continue;
+			Real m = r.beats[b].atMinute;
+			s_rv.markerMinute[s_rv.markerCount] = (m < tMax) ? m : tMax;
+			UnicodeString num;
+			num.format(L"%d", s_rv.markerCount + 1);
+			rvSetLabel(RV_LBL_MARK0 + s_rv.markerCount, num, TRUE);
+			++s_rv.markerCount;
+		}
+
+		UnicodeString text;
+		if (s_rv.localView)
+		{
+			s_rv.aheadColor = GameMakeColor(60, 180, 70, 255);
+			s_rv.behindColor = GameMakeColor(200, 60, 60, 255);
+			rvSetLabel(RV_LBL_TITLE, UnicodeString(L"YOUR WIN CHANCE"), TRUE);
+			rvSetLabel(RV_LBL_RESULT, s_rv.localWon ? UnicodeString(L"VICTORY") : UnicodeString(L"DEFEAT"), TRUE);
+		}
+		else
+		{
+			s_rv.aheadColor = GameMakeColor(60, 120, 220, 255);
+			s_rv.behindColor = GameMakeColor(200, 60, 60, 255);
+			text.format(L"WIN CHANCE: %s", rvJoinNames(r.teamA, r.teamACount).str());
+			rvSetLabel(RV_LBL_TITLE, text, TRUE);
+			text.format(L"%s WON", r.teamAWon ? rvJoinNames(r.teamA, r.teamACount).str() : rvJoinNames(r.teamB, r.teamBCount).str());
+			rvSetLabel(RV_LBL_RESULT, text, TRUE);
+		}
+		rvSetLabel(RV_LBL_Y100, UnicodeString(L"100%"), FALSE);
+		rvSetLabel(RV_LBL_Y50, UnicodeString(L"50%"), FALSE);
+		rvSetLabel(RV_LBL_Y0, UnicodeString(L"0%"), FALSE);
+		rvSetLabel(RV_LBL_X0, UnicodeString(L"0:00"), FALSE);
+		rvSetLabel(RV_LBL_XEND, rvMinuteText(tMax), FALSE);
+		if (s_rv.havePreGame)
+		{
+			text.format(L"pre-game %d%%", (Int)(s_rv.preGame * 100.0f + 0.5f));
+			rvSetLabel(RV_LBL_PREGAME, text, FALSE);
+		}
+	}
+	s_rv.ready = TRUE;
+}
+
+// Screen rect of stats row `row` (only its vertical extent is used).
+static Bool rvRowRect(Int row, Int *top, Int *bottom)
+{
+	AsciiString name;
+	name.format("ScoreScreen.wnd:StaticTextPlayer%d", row);
+	GameWindow *win = TheWindowManager->winGetWindowFromId(parent, TheNameKeyGenerator->nameToKey(name));
+	if (win == nullptr)
+		return FALSE;
+	Int x, y, w, h;
+	win->winGetScreenPosition(&x, &y);
+	win->winGetSize(&w, &h);
+	*top = y;
+	*bottom = y + h;
+	return TRUE;
+}
+
+static void rvShutdown(void)
+{
+	RadarvanReportReset();
+	if (s_rv.canvas)
+		TheWindowManager->winDestroy(s_rv.canvas);
+	if (s_rv.toggle)
+		TheWindowManager->winDestroy(s_rv.toggle);
+	Int i;
+	for (i = 0; i < RV_LBL_COUNT; ++i)
+	{
+		if (s_rv.labels[i])
+			TheDisplayStringManager->freeDisplayString(s_rv.labels[i]);
+	}
+	memset(&s_rv, 0, sizeof(s_rv));
+}
+
+// Ask radarvan for the report and set up where it will show. Called once the
+// screen is laid out, while the game's logic and players still exist.
+static void rvBegin(void)
+{
+	rvShutdown();
+	if (parent == nullptr || backdrop == nullptr || TheGlobalData->m_radarvanApiUrl.isEmpty())
+		return;
+	if (screenType == SCORESCREEN_REPLAY && !TheRecorder->isMultiplayer())
+		return;
+	if (ReplaySimulation::getReplayCount() > 0)
+		return; // headless replay runs have nobody to show it to
+
+	// Radarvan only gets games with two or more humans. The players are gone
+	// by the first update (clearGameData), so keep what the story needs now.
+	Int humans = 0, i;
+	for (i = 0; i < MAX_SLOTS; ++i)
+	{
+		AsciiString key;
+		key.format("player%d", i);
+		Player *p = ThePlayerList->findPlayerWithNameKey(TheNameKeyGenerator->nameToKey(key));
+		if (p == nullptr || p->isPlayerObserver())
+			continue;
+		if (p->getPlayerType() == PLAYER_HUMAN)
+			++humans;
+		wcsncpy(s_rv.slotName[s_rv.slotCount], p->getPlayerDisplayName().str(), 63);
+		s_rv.slotName[s_rv.slotCount][63] = 0;
+		s_rv.slotColor[s_rv.slotCount] = GameMakeColorReadable(p->getPlayerColor());
+		++s_rv.slotCount;
+	}
+	if (humans < 2)
+		return;
+
+	Player *local = ThePlayerList->getLocalPlayer();
+	s_rv.localWon = TheVictoryConditions->isLocalAlliedVictory();
+	s_rv.localView = screenType != SCORESCREEN_REPLAY && local != nullptr && !local->isPlayerObserver()
+		&& (s_rv.localWon || TheVictoryConditions->isLocalAlliedDefeat());
+
+	// The loading screen's own number, so the end screen agrees with it.
+	// Only LAN games start the intel worker, and each one resets it.
+	RadarvanIntelData intel;
+	if (s_rv.localView && screenType == SCORESCREEN_LAN && RadarvanIntelReadyData(intel) && intel.localTeam != 0)
+	{
+		s_rv.preGame = (intel.favoredTeam == intel.localTeam) ? intel.favoredWinProb : 1.0f - intel.favoredWinProb;
+		s_rv.havePreGame = TRUE;
+	}
+
+	s_rv.storyList = (screenType == SCORESCREEN_LAN) ? listboxChatWindowScoreScreen : listboxAcademyWindowScoreScreen;
+
+	// Inline in the empty rows when there's room, else behind a toggle that
+	// gives the chart the whole table.
+	s_rv.rowCount = s_scoreRowCount;
+	Bool inlineChart = (MAX_SLOTS - s_rv.rowCount) >= RV_CHART_MIN_ROWS;
+	Int top, bottom, unused;
+	if (!rvRowRect(inlineChart ? s_rv.rowCount : 0, &top, &unused) || !rvRowRect(MAX_SLOTS - 1, &unused, &bottom))
+		return;
+	Int bx, by, bw, bh, ox, oy;
+	backdrop->winGetScreenPosition(&bx, &by);
+	backdrop->winGetSize(&bw, &bh);
+	parent->winGetScreenPosition(&ox, &oy);
+	Int inset = bw / 40;
+	WinInstanceData inst;
+	inst.init();
+	s_rv.canvas = TheWindowManager->winCreate(parent, WIN_STATUS_ENABLED | WIN_STATUS_NO_INPUT,
+		bx + inset - ox, top + 4 - oy, bw - 2 * inset, bottom - top - 6, nullptr, &inst);
+	if (s_rv.canvas == nullptr)
+		return;
+	s_rv.canvas->winSetDrawFunc(rvDrawChart);
+	rvSetLabel(RV_LBL_STATUS, UnicodeString(L"Radarvan is analysing the match..."), FALSE);
+
+	if (!inlineChart)
+	{
+		// Above the top-right corner of the backdrop, clear of the table header.
+		Int btnW = bw / 5, btnH = by * 4 / 5;
+		WinInstanceData btn;
+		btn.init();
+		BitSet(btn.m_style, GWS_PUSH_BUTTON | GWS_MOUSE_TRACK);
+		btn.m_textLabelString = "MATCH REPORT";
+		s_rv.toggle = TheWindowManager->gogoGadgetPushButton(parent, WIN_STATUS_ENABLED | WIN_STATUS_IMAGE,
+			bx + bw - btnW - ox, (by - btnH) / 2 - oy, btnW, btnH, &btn, nullptr, TRUE);
+		rvShowReport(FALSE);
+	}
+
+	s_rv.active = TRUE;
+	RadarvanReportStart(TheGlobalData->m_radarvanApiUrl, (Int)GetGameLogicRandomSeed(),
+		screenType == SCORESCREEN_REPLAY ? RV_REPLAY_WAIT_SEC : RV_LIVE_WAIT_SEC);
+}
+
+static void rvUpdate(void)
+{
+	if (!s_rv.active || s_rv.ready)
+		return;
+	RadarvanReportState state = RadarvanReportPoll(s_rv.report);
+	if (state == RADARVAN_REPORT_WAITING)
+		return;
+	if (state == RADARVAN_REPORT_READY)
+	{
+		rvLayout();
+		rvWriteStory();
+	}
+	if (state != RADARVAN_REPORT_READY || s_rv.curveCount < 2)
+	{
+		// Nothing to chart: give the rows back.
+		if (s_rv.showing)
+			rvShowReport(FALSE);
+		if (s_rv.canvas)
+			s_rv.canvas->winHide(TRUE);
+		if (s_rv.toggle)
+			s_rv.toggle->winHide(TRUE);
+	}
+	s_rv.active = FALSE;
+}
 
 struct ScoreGather
 {
@@ -609,6 +1218,9 @@ void ScoreScreenInit( WindowLayout *layout, void *userData )
 		}
 	}
 
+	if (screenType == SCORESCREEN_LAN || screenType == SCORESCREEN_INTERNET || screenType == SCORESCREEN_REPLAY)
+		rvBegin();
+
 	// challenge maps have no replay (design and technical issues)
 	Bool isChallengeCampaign = TheCampaignManager->getCurrentCampaign() ? TheCampaignManager->getCurrentCampaign()->isChallengeCampaign() : FALSE;
 	if (isChallengeCampaign)
@@ -688,6 +1300,7 @@ void ScoreScreenShutdown( WindowLayout *layout, void *userData )
 		pSocialInterface->RegisterForCallback_OnNumberGlobalNotificationsChanged(nullptr);
 #endif
 	buttonBuddies = nullptr;
+	rvShutdown();
 
 	// hide the layout
 	layout->hide( TRUE );
@@ -721,6 +1334,8 @@ void ScoreScreenUpdate( WindowLayout * layout, void *userData)
 			NGMP_OnlineServicesManager::GetInstance()->CaptureScreenshotForProbe(EScreenshotType::SCREENSHOT_TYPE_SCORESCREEN, std::string()); // pass no URI here, wait until we have one received from server
 		}
 	}
+
+	rvUpdate();
 
 	if (s_needToFinishSinglePlayerInit)
 	{
@@ -867,6 +1482,11 @@ WindowMsgHandledType ScoreScreenSystem( GameWindow *window, UnsignedInt msg,
 
 			GameWindow *control = (GameWindow *)mData1;
 			Int controlID = control->winGetWindowId();
+			if( s_rv.toggle != nullptr && control == s_rv.toggle )
+			{
+				rvShowReport(!s_rv.showing);
+				break;
+			}
 			if( controlID == buttonOkID )
 			{
 				GameSpyCloseOverlay(GSOVERLAY_BUDDY);
@@ -2612,6 +3232,7 @@ void grabMultiPlayerInfo( void )
 		}
 	}
 	hideWindows(playerCount);
+	s_scoreRowCount = playerCount;
 
 	// Pass 1: accumulate column totals + per-column min/max across non-observer
 	// rows so we can render per-cell deltas vs the average and outline the
