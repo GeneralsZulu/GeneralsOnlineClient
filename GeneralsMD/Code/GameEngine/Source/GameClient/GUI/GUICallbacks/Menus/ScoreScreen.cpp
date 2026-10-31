@@ -147,6 +147,9 @@ NameKeyType listboxAcademyWindowScoreScreenID = NAMEKEY_INVALID;
 GameWindow *listboxAcademyWindowScoreScreen = nullptr;
 NameKeyType staticTextAcademyTitleID = NAMEKEY_INVALID;
 GameWindow *staticTextAcademyTitle = nullptr;
+#if defined(RADARVAN_MATCH_URL_FORMAT)
+static AsciiString s_radarvanMatchURL; ///< this match's radarvan page, set when the internet score screen opens
+#endif
 
 
 std::string LastReplayFileName;
@@ -913,8 +916,8 @@ WindowMsgHandledType ScoreScreenSystem( GameWindow *window, UnsignedInt msg,
 							if (currentMatchID != 0)
 							{
 								AsciiString strMatchURL;
-#if defined(RADARVAN_MATCHES_URL)
-								strMatchURL = RADARVAN_MATCHES_URL;
+#if defined(RADARVAN_MATCH_URL_FORMAT)
+								strMatchURL = s_radarvanMatchURL;
 #elif defined(USE_TEST_ENV)
 								strMatchURL.format("https://www.playgenerals.online/viewmatch?match=%" PRIu64 "&env=test", currentMatchID);
 #else
@@ -1463,10 +1466,15 @@ void initInternetMultiPlayer(void)
 			{
 				buttonContinue->winHide(FALSE);
 
-#if defined(RADARVAN_MATCHES_URL)
+#if defined(RADARVAN_MATCH_URL_FORMAT)
 				buttonContinue->winSetText(UnicodeString(L"VIEW ON RADARVAN"));
 
-				GadgetListBoxAddEntryText(listboxAcademyWindowScoreScreen, UnicodeString(L"\nView this match, its replay and player stats on Radarvan: " RADARVAN_MATCHES_URL), GameSpyColor[GSCOLOR_DEFAULT], -1);
+				s_radarvanMatchURL.format(RADARVAN_MATCH_URL_FORMAT, TheGameInfo ? TheGameInfo->getSeed() : 0);
+				UnicodeString radarvanURL;
+				radarvanURL.translate(s_radarvanMatchURL);
+				strMatchURL = L"\nView this match, its replay and player stats on Radarvan: ";
+				strMatchURL.concat(radarvanURL);
+				GadgetListBoxAddEntryText(listboxAcademyWindowScoreScreen, strMatchURL, GameSpyColor[GSCOLOR_DEFAULT], -1);
 #else
 #if defined(USE_TEST_ENV)
 				strMatchURL.format(L"\nView match data, participants, replays, anti-cheat data: https://www.playgenerals.online/viewmatch?match=%" PRIu64 "&env=test", lobby.match_id);

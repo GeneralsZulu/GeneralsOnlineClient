@@ -113,9 +113,9 @@ static int FRAME_GROUPING_CAP = 64;
 #if defined(ZULU_GO_SELFHOST_BASE)
 #define GO_SERVICE_NAME_A "Zulu GO"
 #define GO_SERVICE_NAME_W L"Zulu GO"
-// Matches, replays and stats for this community. Radarvan keys matches by its
-// own id, which the client never learns, so this is the list, not the match.
-#define RADARVAN_MATCHES_URL "https://www.radarvan.com/matches"
+// A match's page on radarvan, which keys matches by the game seed: the SD=
+// value in the replay header, formatted the same way (signed).
+#define RADARVAN_MATCH_URL_FORMAT "https://www.radarvan.com/match/%d"
 #else
 #define GO_SERVICE_NAME_A "Generals Online"
 #define GO_SERVICE_NAME_W L"Generals Online"
