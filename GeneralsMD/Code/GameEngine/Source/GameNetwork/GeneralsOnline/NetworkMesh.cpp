@@ -4,6 +4,8 @@
 
 #include <ws2ipdef.h>
 #include <chrono>
+#include <cerrno>
+#include <cstdlib>
 #include "GameNetwork/NetworkDefs.h"
 #include "GameNetwork/NetworkInterface.h"
 #include "GameLogic/GameLogic.h"
@@ -43,8 +45,30 @@ UnsignedInt m_exeCRCOriginal = 0;
 static std::mutex g_pendingDeletionMutex;
 static std::vector<void*> g_pendingConnSignalingDeletions;
 
-// Clean up pending ConnectionSignaling objects that were deferred during Release()
+// The remote identity is whatever the peer's signal claimed. A non-generic-string
+// identity has no string (GetGenericString returns null) and a non-numeric one
+// makes std::stoll throw, so parse it without trusting either.
+static bool ParseIdentityUserID(const SteamNetworkingIdentity& identity, int64_t& outUserID)
+{
+	const char* szIdentity = identity.GetGenericString();
+	if (szIdentity == nullptr || *szIdentity == '\0')
+	{
+		return false;
+	}
 
+	char* pEnd = nullptr;
+	errno = 0;
+	const long long val = strtoll(szIdentity, &pEnd, 10);
+	if (errno != 0 || pEnd == szIdentity || *pEnd != '\0')
+	{
+		return false;
+	}
+
+	outUserID = (int64_t)val;
+	return true;
+}
+
+// Clean up pending ConnectionSignaling objects that were deferred during Release()
 static void CleanupPendingConnSignalingDeletions()
 {
 	std::vector<void*> objectsToDelete;
@@ -289,13 +313,16 @@ void OnSteamNetConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t
 
 				auto currentLobby = pLobbyInterface->GetCurrentLobby();
 				bool bPlayerIsInLobby = false;
-				for (const auto& member : currentLobby.members)
+				int64_t remoteUserID = -1;
+				if (ParseIdentityUserID(pInfo->m_info.m_identityRemote, remoteUserID))
 				{
-					// TODO_NGMP: Use bytes or SteamID instead... string compare is nasty
-					if (std::to_string(member.user_id) == pInfo->m_info.m_identityRemote.GetGenericString())
+					for (const auto& member : currentLobby.members)
 					{
-						bPlayerIsInLobby = true;
-						break;
+						if (member.user_id == remoteUserID)
+						{
+							bPlayerIsInLobby = true;
+							break;
+						}
 					}
 				}
 
@@ -527,9 +554,13 @@ public:
 		// identity does not have spaces, since our protocol doesn't permit it.
 		NetworkLog(ELogVerbosity::LOG_DEBUG, "Creating signaling session for peer '%s'\n", sIdentityPeer.c_str());
 
-		// Silence warnings
-		(void)errMsg;
-		int64_t user_id = std::stoll(identityPeer.GetGenericString());
+		int64_t user_id = -1;
+		if (!ParseIdentityUserID(identityPeer, user_id))
+		{
+			NetworkLog(ELogVerbosity::LOG_RELEASE, "Rejecting signaling session for peer '%s': identity is not a user ID\n", sIdentityPeer.c_str());
+			snprintf(errMsg, sizeof(errMsg), "Peer identity is not a user ID");
+			return nullptr;
+		}
 		return new ConnectionSignaling(this, user_id);
 	}
 
