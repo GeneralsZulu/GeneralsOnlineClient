@@ -913,7 +913,9 @@ WindowMsgHandledType ScoreScreenSystem( GameWindow *window, UnsignedInt msg,
 							if (currentMatchID != 0)
 							{
 								AsciiString strMatchURL;
-#if defined(USE_TEST_ENV)
+#if defined(RADARVAN_MATCHES_URL)
+								strMatchURL = RADARVAN_MATCHES_URL;
+#elif defined(USE_TEST_ENV)
 								strMatchURL.format("https://www.playgenerals.online/viewmatch?match=%" PRIu64 "&env=test", currentMatchID);
 #else
 								strMatchURL.format("https://strata.gamereplays.org/zh/match/%" PRIu64, currentMatchID);
@@ -1461,6 +1463,11 @@ void initInternetMultiPlayer(void)
 			{
 				buttonContinue->winHide(FALSE);
 
+#if defined(RADARVAN_MATCHES_URL)
+				buttonContinue->winSetText(UnicodeString(L"VIEW ON RADARVAN"));
+
+				GadgetListBoxAddEntryText(listboxAcademyWindowScoreScreen, UnicodeString(L"\nView this match, its replay and player stats on Radarvan: " RADARVAN_MATCHES_URL), GameSpyColor[GSCOLOR_DEFAULT], -1);
+#else
 #if defined(USE_TEST_ENV)
 				strMatchURL.format(L"\nView match data, participants, replays, anti-cheat data: https://www.playgenerals.online/viewmatch?match=%" PRIu64 "&env=test", lobby.match_id);
 #else
@@ -1471,6 +1478,7 @@ void initInternetMultiPlayer(void)
 
 				GadgetListBoxAddEntryText(listboxAcademyWindowScoreScreen, strMatchID, GameSpyColor[GSCOLOR_DEFAULT], -1);
 				GadgetListBoxAddEntryText(listboxAcademyWindowScoreScreen, strMatchURL, GameSpyColor[GSCOLOR_DEFAULT], -1);
+#endif
 			}
 
 

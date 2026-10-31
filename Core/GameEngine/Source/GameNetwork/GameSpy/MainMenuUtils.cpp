@@ -855,7 +855,7 @@ void StartPatchCheck()
 	if (bIsARMArchitecture)
 	{
         MessageBoxOk(TheGameText->fetchOrSubstitute("GUI:NoARMSupportHeader", L"Unsupported System"),
-            TheGameText->fetchOrSubstitute("GUI:NoARMSupport", L"GeneralsOnline does not support ARM processors"),
+            TheGameText->fetchOrSubstitute("GUI:NoARMSupport", GO_SERVICE_NAME_W L" does not support ARM processors"),
             CancelPatchCheckCallbackAndReopenDropdown);
 
 		return;

@@ -312,6 +312,30 @@ void Intro::doZuluGOLogo()
 		settings.push_back(setting);
 	}
 	{
+		// Author
+		DisplaySetting setting;
+		setting.font = "Consolas";
+		setting.text = L"Created by bill-rich";
+		setting.sizeY = 16;
+		setting.centerOffsetY = centerOffsetY;
+		centerOffsetY += setting.sizeY * resolutionScale * 2;
+		setting.bold = false;
+		setting.centered = true;
+		settings.push_back(setting);
+	}
+	{
+		// Website: matches, replays and stats for this community
+		DisplaySetting setting;
+		setting.font = "Consolas";
+		setting.text = L"www.radarvan.com";
+		setting.sizeY = 16;
+		setting.centerOffsetY = centerOffsetY;
+		centerOffsetY += setting.sizeY * resolutionScale * 2;
+		setting.bold = false;
+		setting.centered = true;
+		settings.push_back(setting);
+	}
+	{
 		// GeneralsZulu insignia. Drawn larger than the two marks above because
 		// it is the wordmark, not a decoration beside one.
 		DisplaySetting setting;

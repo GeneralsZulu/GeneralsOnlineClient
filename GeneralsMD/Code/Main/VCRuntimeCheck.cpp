@@ -45,7 +45,7 @@ namespace
 
 	// Latest supported v14 redistributable, covers every 14.x toolset including VS2026
 	const wchar_t kRedistUrl[] = L"https://aka.ms/vc14/vc_redist.x86.exe";
-	const wchar_t kTitle[] = L"Generals Online";
+	const wchar_t kTitle[] = L"Zero Hour";
 	const wchar_t kAttemptedEnv[] = L"GO_VCREDIST_ATTEMPTED";
 
 	struct Version
@@ -280,7 +280,7 @@ namespace
 		}
 
 		swprintf_s(g_message,
-			L"Generals Online needs the Microsoft Visual C++ Redistributable (x86) %u.%u.%u or newer.\n\n"
+			L"The game needs the Microsoft Visual C++ Redistributable (x86) %u.%u.%u or newer.\n\n"
 			L"%s\n\n"
 			L"Install it now? The official installer is downloaded from Microsoft, "
 			L"and the game restarts when it's done.",

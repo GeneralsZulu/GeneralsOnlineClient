@@ -109,6 +109,18 @@ static int FRAME_GROUPING_CAP = 64;
 #undef GENERALS_ONLINE_USE_SENTRY
 #endif
 
+// The service name players see in menus and dialogs.
+#if defined(ZULU_GO_SELFHOST_BASE)
+#define GO_SERVICE_NAME_A "Zulu GO"
+#define GO_SERVICE_NAME_W L"Zulu GO"
+// Matches, replays and stats for this community. Radarvan keys matches by its
+// own id, which the client never learns, so this is the list, not the match.
+#define RADARVAN_MATCHES_URL "https://www.radarvan.com/matches"
+#else
+#define GO_SERVICE_NAME_A "Generals Online"
+#define GO_SERVICE_NAME_W L"Generals Online"
+#endif
+
 #define GENERALS_ONLINE_WIDESCREEN 1
 
 #if defined(GENERALS_ONLINE_WIDESCREEN)
