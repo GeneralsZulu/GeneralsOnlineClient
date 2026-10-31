@@ -25,6 +25,7 @@ namespace
 		TheShell->pop();
 	}
 
+#if !defined(ZULU_GO_SELFHOST_BASE)
 	void OpenDiscord()
 	{
 		ShellExecuteA(nullptr, "open", "https://discord.playgenerals.online", nullptr, nullptr, SW_SHOWNORMAL);
@@ -35,6 +36,7 @@ namespace
 		OpenDiscord();
 		LeaveLoginScreen();
 	}
+#endif
 
 	std::wstring GetNormalizedReason(const std::string& reason)
 	{
@@ -66,15 +68,24 @@ namespace
 		EModerationDialogContext context)
 	{
 		AppendReason(message, reason);
+
+		GameWinMsgBoxFunc closeCallback = nullptr;
+		if (context == EModerationDialogContext::LOGIN)
+			closeCallback = LeaveLoginScreen;
+
+#if defined(ZULU_GO_SELFHOST_BASE)
+		// The Discord button opens the public service's server, which does not
+		// moderate this one; offer only Close.
+		GSMessageBoxOk(
+			title,
+			UnicodeString(message.c_str()),
+			closeCallback);
+#else
 		message += L"\n\nVisit Discord for more information or support.";
 
 		GameWinMsgBoxFunc discordCallback = OpenDiscord;
-		GameWinMsgBoxFunc closeCallback = nullptr;
 		if (context == EModerationDialogContext::LOGIN)
-		{
 			discordCallback = OpenDiscordFromLogin;
-			closeCallback = LeaveLoginScreen;
-		}
 
 		GSMessageBoxOkCancelWithLabels(
 			title,
@@ -83,13 +94,14 @@ namespace
 			UnicodeString(L"Close"),
 			discordCallback,
 			closeCallback);
+#endif
 	}
 
 	void ShowBanDialog(const std::string& reason, EModerationDialogContext context)
 	{
 		ShowModerationDialog(
 			UnicodeString(L"Banned"),
-			L"You have been banned from Generals Online.",
+			L"You have been banned from " GO_SERVICE_NAME_W L".",
 			reason,
 			context);
 	}
@@ -98,7 +110,7 @@ namespace
 	{
 		ShowModerationDialog(
 			UnicodeString(L"Kicked"),
-			L"You have been kicked from Generals Online.",
+			L"You have been kicked from " GO_SERVICE_NAME_W L".",
 			reason,
 			EModerationDialogContext::ACTIVE_SESSION);
 	}
