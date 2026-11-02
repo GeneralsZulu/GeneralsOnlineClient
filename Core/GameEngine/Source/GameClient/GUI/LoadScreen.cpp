@@ -1756,7 +1756,9 @@ void MultiPlayerLoadScreen::init( GameInfo *game )
 					continue;
 				if (es->getTeamNumber() == myTeam)
 					continue;
-				s_intelCard.enemyColor = TheMultiplayerSettings->getColor(es->getApparentColor())->getColor();
+				// FFA mode: keep the default chip so it can't pair a colour with a name
+				if (!game->isSlotAnonymous(si))
+					s_intelCard.enemyColor = TheMultiplayerSettings->getColor(es->getApparentColor())->getColor();
 				break;
 			}
 		}
