@@ -923,7 +923,18 @@ void StartPatchCheck()
 			}
 			else
 			{
-				if (!bNeedsUpdate)
+				if (!bNeedsUpdate && NGMP_OnlineServicesManager::GetInstance()->IsDevBuild())
+				{
+					if (onlineCancelWindow)
+					{
+						TheWindowManager->winDestroy(onlineCancelWindow);
+						onlineCancelWindow = NULL;
+					}
+					MessageBoxOk(UnicodeString(L"Dev Build"),
+						UnicodeString(L"This is a signed development build, not a release. The server may not support everything it does, and its games are tagged as dev builds in stats."),
+						startOnline);
+				}
+				else if (!bNeedsUpdate)
 				{
 					startOnline();
 				}
