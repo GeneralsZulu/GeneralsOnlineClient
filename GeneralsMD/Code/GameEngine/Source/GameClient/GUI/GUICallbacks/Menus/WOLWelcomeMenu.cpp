@@ -552,7 +552,7 @@ void WOLWelcomeMenuInit( WindowLayout *layout, void *userData )
 		NGMP_OnlineServices_AuthInterface* pAuthInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_AuthInterface>();
 		if (pAuthInterface != nullptr)
 		{
-			title.format(L"Welcome to Generals Online, %s", pAuthInterface->GetDisplayNameW().c_str());
+			title.format(L"Welcome to " GO_SERVICE_NAME_W L", %s", pAuthInterface->GetDisplayNameW().c_str());
 			GadgetStaticTextSetText(staticTextTitle, title);
 		}
 	}

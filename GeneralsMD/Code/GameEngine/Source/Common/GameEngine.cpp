@@ -138,17 +138,17 @@ void TearDownGeneralsOnline()
 		if (teardownReason == EGOTearDownReason::USER_LOGOUT)
 		{
 			title = L"Logged Out";
-			body = L"You are now logged out of GeneralsOnline.";
+			body = L"You are now logged out of " GO_SERVICE_NAME_W L".";
 		}
 		else if (teardownReason == EGOTearDownReason::LOST_CONNECTION)
 		{
 			title = TheGameText->fetch("GUI:GSErrorTitle");
-			body = L"Your connection to the Generals Online servers was lost.";
+			body = L"Your connection to the " GO_SERVICE_NAME_W L" servers was lost.";
 		}
         else if (teardownReason == EGOTearDownReason::AUTH_FAILED)
         {
             title = TheGameText->fetch("GUI:GSErrorTitle");
-            body = L"Authentication with the Generals Online servers failed.";
+            body = L"Authentication with the " GO_SERVICE_NAME_W L" servers failed.";
         }
 		else if (teardownReason == EGOTearDownReason::MIDDLEWARE_LOGIN_FAILED)
 		{

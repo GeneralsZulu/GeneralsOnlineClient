@@ -19,7 +19,7 @@ constexpr const char *DISCORD_APPLICATION_ID = "1354979004507226294";
 constexpr const char *LOBBY_DETAILS = "In Lobby / In Room";
 constexpr const char *LOBBY_STATE = "Waiting match";
 constexpr const char *DEFAULT_IMAGE_KEY = "generals_online";
-constexpr const char *DEFAULT_IMAGE_TEXT = "Generals Online";
+constexpr const char *DEFAULT_IMAGE_TEXT = GO_SERVICE_NAME_A;
 
 struct GeneralAsset {
   const char *side;

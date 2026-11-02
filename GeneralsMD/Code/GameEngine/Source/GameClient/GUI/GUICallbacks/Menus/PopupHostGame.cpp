@@ -343,7 +343,7 @@ void PopupHostGameInit( WindowLayout *layout, void *userData )
 		}
 		else
 		{
-			name.translate("Generals Online Lobby");
+			name.translate(GO_SERVICE_NAME_A " Lobby");
 		}
 	}
 #else
