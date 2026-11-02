@@ -147,6 +147,12 @@ static UnicodeString formatIncomeValue(UnsignedInt cashPerMin)
 /// The InGameUI singleton instance.
 InGameUI* TheInGameUI = nullptr;
 
+// FFA mode: another player's unit does not name its owner (GameInfo::isSlotAnonymous).
+static Bool isOwnerAnonymous(const Player *player)
+{
+	return TheGameInfo != nullptr && TheGameInfo->isSlotAnonymous(ThePlayerList->getSlotIndex(player->getPlayerIndex()));
+}
+
 GameWindow* m_replayWindow = nullptr;
 
 // ------------------------------------------------------------------------------------------------
@@ -2853,7 +2859,7 @@ void InGameUI::createMouseoverHint(const GameMessage* msg)
 			{
 				UnicodeString tooltip;
 				//if (TheRecorder->isMultiplayer() && player->getPlayerType() == PLAYER_HUMAN)
-				if (TheRecorder->isMultiplayer() && player->isPlayableSide())
+				if (TheRecorder->isMultiplayer() && player->isPlayableSide() && !isOwnerAnonymous(player))
 					tooltip.format(L"%s\n%s", str.str(), ((Player*)player)->getPlayerDisplayName().str());
 				else
 					tooltip = str;

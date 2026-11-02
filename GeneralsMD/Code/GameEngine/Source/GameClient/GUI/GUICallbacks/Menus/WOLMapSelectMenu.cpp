@@ -168,6 +168,7 @@ static const char *gadgetsToHide[] =
 	"StartingCashLabel",
 	"ComboBoxStartingCash",
 	"CheckboxEnforceRandom",
+	"CheckboxFFAMode",
 	"CheckBoxLimitArmies",
 	"ButtonRandomize",
 	// Radarvan Pick took Record Stats' place in that row, so it is covered too.

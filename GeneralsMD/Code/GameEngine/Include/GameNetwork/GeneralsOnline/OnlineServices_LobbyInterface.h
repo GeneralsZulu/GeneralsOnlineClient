@@ -73,6 +73,8 @@ struct LobbyEntry
 	// occupied slot's faction and team stay Random until the host clears it. The
 	// Randomize roll still resolves them; see UpdateCurrentLobby_EnforceRandom.
 	bool enforce_random = false;
+	// FFA mode: hide who is who from the players (GameInfo::isSlotAnonymous).
+	bool ffa_mode = false;
 	bool track_stats = false;
 	bool allow_observers = false;
 	uint16_t max_cam_height = 0;
@@ -247,6 +249,7 @@ public:
 	void UpdateCurrentLobby_Map(UnicodeString strMap, AsciiString strMapPath, bool bIsOfficial, int newMaxPlayers, uint32_t mapCRC = 0, std::function<void(bool bSuccess)> onDone = nullptr);
 	void UpdateCurrentLobby_LimitSuperweapons(bool bLimitSuperweapons, std::function<void(bool bSuccess)> onDone = nullptr);
 	void UpdateCurrentLobby_EnforceRandom(bool bEnforceRandom);
+	void UpdateCurrentLobby_FFAMode(bool bFFAMode);
 	void UpdateCurrentLobby_StartingCash(UnsignedInt startingCashValue, std::function<void(bool bSuccess)> onDone = nullptr);
 
 	void UpdateCurrentLobby_HasMap();
@@ -602,6 +605,7 @@ public:
 	}
 
 private:
+	void UpdateCurrentLobby_Flag(int field, const char* key, bool bValue);
 	void SendResumeReplayChunk(int64_t lobbyID, std::shared_ptr<std::vector<uint8_t>> data, size_t offset, int conflictRetries, std::function<void(bool bSuccess)> onComplete);
 	void FetchResumeReplayChunk(int64_t lobbyID, AsciiString path, std::shared_ptr<std::vector<uint8_t>> data, std::function<void(bool bSuccess)> onComplete);
 

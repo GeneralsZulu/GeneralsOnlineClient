@@ -508,7 +508,9 @@ void PopulateInGameDiplomacyPopup()
 					buttonUnMute[rowNum]->winHide(TRUE);
 			}
 
-			Color playerColor = TheMultiplayerSettings->getColor(slot->getApparentColor())->getColor();
+			// FFA mode: names stay, but not in the color that would say whose units are whose
+			Color playerColor = TheGameInfo->isSlotAnonymous(slotNum) ? GameMakeColor(255, 255, 255, 255)
+				: TheMultiplayerSettings->getColor(slot->getApparentColor())->getColor();
 			Color backColor = GameMakeColor(0, 0, 0, 255);
 			Color aliveColor = GameMakeColor(0, 255, 0, 255);
 			Color deadColor = GameMakeColor(255, 0, 0, 255);

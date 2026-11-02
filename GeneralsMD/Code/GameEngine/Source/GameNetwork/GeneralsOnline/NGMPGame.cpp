@@ -121,6 +121,7 @@ void NGMPGame::SyncWithLobby(LobbyEntry& lobby)
 
 	// enforce random
 	setEnforceRandom(lobby.enforce_random);
+	setFFAMode(lobby.ffa_mode);
 
 	// vanilla teams
 	setOldFactionsOnly(lobby.vanilla_teams);

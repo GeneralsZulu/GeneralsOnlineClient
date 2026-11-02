@@ -81,7 +81,8 @@ enum class ELobbyUpdateField
 	HOST_ACTION_ARM_RESUME = 20,            // TheSuperHackers @feature bill-rich 15/09/2026 resume-from-replay arming (see ResumeFromReplay)
 	LOCAL_PLAYER_HAS_RESUME_REPLAY = 21,    // TheSuperHackers @feature bill-rich 24/09/2026 this member holds a usable copy of the resume source
 	LOBBY_ENFORCE_RANDOM = 22,              // TheSuperHackers @feature bill-rich 27/09/2026 lock every slot to a random faction and team
-	HOST_ACTION_ALIGN_SLOTS = 23            // TheSuperHackers @feature bill-rich 11/10/2026 resume-from-replay: the whole slot table at once
+	HOST_ACTION_ALIGN_SLOTS = 23,           // TheSuperHackers @feature bill-rich 11/10/2026 resume-from-replay: the whole slot table at once
+	LOBBY_FFA_MODE = 24                     // TheSuperHackers @feature bill-rich 02/11/2026 hide who is who from the players (see GameInfo::isSlotAnonymous)
 };
 
 std::string Base64Encode(const std::vector<uint8_t>& data);
@@ -199,6 +200,17 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_LimitSuperweapons(bo
 
 void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_EnforceRandom(bool bEnforceRandom)
 {
+	UpdateCurrentLobby_Flag((int)ELobbyUpdateField::LOBBY_ENFORCE_RANDOM, "enforce_random", bEnforceRandom);
+}
+
+void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_FFAMode(bool bFFAMode)
+{
+	UpdateCurrentLobby_Flag((int)ELobbyUpdateField::LOBBY_FFA_MODE, "ffa_mode", bFFAMode);
+}
+
+// A host-only on/off lobby rule; the service echoes the new state back in the next lobby push.
+void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_Flag(int field, const char* key, bool bValue)
+{
 	// reset autostart if host changes anything (because ready flag will reset too)
 #if !defined(GENERALS_ONLINE_DISABLE_AUTO_ACCEPT)
 	ClearAutoReadyCountdown();
@@ -210,8 +222,8 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_EnforceRandom(bool b
 	std::map<std::string, std::string> mapHeaders;
 
 	nlohmann::json j;
-	j["field"] = ELobbyUpdateField::LOBBY_ENFORCE_RANDOM;
-	j["enforce_random"] = bEnforceRandom;
+	j["field"] = field;
+	j[key] = bValue;
 	std::string strPostData = j.dump();
 
 	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendPOSTRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, strPostData.c_str(), [=](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
@@ -1007,6 +1019,8 @@ void NGMP_OnlineServices_LobbyInterface::SearchForLobbies(std::function<void()> 
 				lobbyEntryIter["IsLimitSuperweapons"].get_to(lobbyEntry.limit_superweapons);
 						if (lobbyEntryIter.contains("IsEnforceRandom"))
 							lobbyEntryIter["IsEnforceRandom"].get_to(lobbyEntry.enforce_random);
+						if (lobbyEntryIter.contains("IsFFAMode"))
+							lobbyEntryIter["IsFFAMode"].get_to(lobbyEntry.ffa_mode);
 				lobbyEntryIter["IsTrackingStats"].get_to(lobbyEntry.track_stats);
 				lobbyEntryIter["IsPassworded"].get_to(lobbyEntry.passworded);
 				lobbyEntryIter["AllowObservers"].get_to(lobbyEntry.allow_observers);
@@ -1348,6 +1362,8 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 						lobbyEntryIter["IsLimitSuperweapons"].get_to(lobbyEntry.limit_superweapons);
 						if (lobbyEntryIter.contains("IsEnforceRandom"))
 							lobbyEntryIter["IsEnforceRandom"].get_to(lobbyEntry.enforce_random);
+						if (lobbyEntryIter.contains("IsFFAMode"))
+							lobbyEntryIter["IsFFAMode"].get_to(lobbyEntry.ffa_mode);
 						lobbyEntryIter["IsTrackingStats"].get_to(lobbyEntry.track_stats);
 						lobbyEntryIter["IsPassworded"].get_to(lobbyEntry.passworded);
 						lobbyEntryIter["AllowObservers"].get_to(lobbyEntry.allow_observers);

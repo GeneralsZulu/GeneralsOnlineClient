@@ -134,6 +134,7 @@ static NameKeyType buttonMapVoteID = NAMEKEY_INVALID;
 static NameKeyType buttonResumeFromReplayID = NAMEKEY_INVALID;
 static NameKeyType checkboxLimitSuperweaponsID = NAMEKEY_INVALID;
 static NameKeyType checkboxEnforceRandomID = NAMEKEY_INVALID;
+static NameKeyType checkboxFFAModeID = NAMEKEY_INVALID;
 static NameKeyType comboBoxStartingCashID = NAMEKEY_INVALID;
 static NameKeyType windowMapID = NAMEKEY_INVALID;
 // Window Pointers ------------------------------------------------------------------------
@@ -171,6 +172,7 @@ static GameWindow *textEntryChat = nullptr;
 static GameWindow *textEntryMapDisplay = nullptr;
 static GameWindow *checkboxLimitSuperweapons = nullptr;
 static GameWindow *checkboxEnforceRandom = nullptr;
+static GameWindow *checkboxFFAMode = nullptr;
 static GameWindow *comboBoxStartingCash = nullptr;
 static GameWindow *windowMap = nullptr;
 
@@ -759,6 +761,21 @@ static void handleEnforceRandomClick()
   }
 }
 
+static void handleFFAModeClick()
+{
+  if (s_isSyncingUI)
+    return;
+
+  LANGameInfo *myGame = TheLAN->GetMyGame();
+  if (myGame && myGame->amIHost() && !s_isIniting)
+  {
+    myGame->setFFAMode( GadgetCheckBoxIsChecked( checkboxFFAMode ) );
+    myGame->resetAccepted();
+    TheLAN->RequestGameOptions(GenerateGameOptionsString(), true);
+    lanUpdateSlotList(); // Update the accepted button UI
+  }
+}
+
 void lanUpdateSlotList()
 {
 	if(!AreSlotListUpdatesEnabled() || s_isIniting)
@@ -985,6 +1002,7 @@ void InitLanGameGadgets()
 	buttonResumeFromReplayID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:ButtonResumeFromReplay" );
   checkboxLimitSuperweaponsID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:CheckboxLimitSuperweapons" );
   checkboxEnforceRandomID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:CheckboxEnforceRandom" );
+  checkboxFFAModeID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:CheckboxFFAMode" );
   comboBoxStartingCashID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:ComboBoxStartingCash" );
 	windowMapID = TheNameKeyGenerator->nameToKey( "LanGameOptionsMenu.wnd:MapWindow" );
 
@@ -1018,6 +1036,7 @@ void InitLanGameGadgets()
   DEBUG_ASSERTCRASH(checkboxLimitSuperweapons, ("Could not find the checkboxLimitSuperweapons"));
   // Checkbox is optional: only present in builds of the .wnd that include the new entry. Guard access with nullptr checks.
   checkboxEnforceRandom = TheWindowManager->winGetWindowFromId( parentLanGameOptions, checkboxEnforceRandomID );
+  checkboxFFAMode = TheWindowManager->winGetWindowFromId( parentLanGameOptions, checkboxFFAModeID );
   comboBoxStartingCash = TheWindowManager->winGetWindowFromId( parentLanGameOptions, comboBoxStartingCashID );
   DEBUG_ASSERTCRASH(comboBoxStartingCash, ("Could not find the comboBoxStartingCash"));
 	PopulateStartingCashComboBox(comboBoxStartingCash, TheLAN->GetMyGame());
@@ -1131,6 +1150,7 @@ void DeinitLanGameGadgets()
 	textEntryMapDisplay = nullptr;
   checkboxLimitSuperweapons = nullptr;
   checkboxEnforceRandom = nullptr;
+  checkboxFFAMode = nullptr;
   comboBoxStartingCash = nullptr;
 	if (windowMap)
 	{
@@ -1226,6 +1246,8 @@ void LanGameOptionsMenuInit( WindowLayout *layout, void *userData )
     checkboxLimitSuperweapons->winEnable( FALSE ); // Can look but only host can touch
     if (checkboxEnforceRandom)
       checkboxEnforceRandom->winEnable( FALSE );   // Ditto
+    if (checkboxFFAMode)
+      checkboxFFAMode->winEnable( FALSE );         // Ditto
     comboBoxStartingCash->winEnable( FALSE );      // Ditto
 		TheLAN->GetMyGame()->setMapCRC( TheLAN->GetMyGame()->getMapCRC() );		// force a recheck
 		TheLAN->GetMyGame()->setMapSize( TheLAN->GetMyGame()->getMapSize() ); // of if we have the map
@@ -1309,6 +1331,8 @@ void updateGameOptions()
     GadgetCheckBoxSetChecked( checkboxLimitSuperweapons, theGame->getSuperweaponRestriction() != 0 );
     if (checkboxEnforceRandom)
       GadgetCheckBoxSetChecked( checkboxEnforceRandom, theGame->getEnforceRandom() );
+    if (checkboxFFAMode)
+      GadgetCheckBoxSetChecked( checkboxFFAMode, theGame->getFFAMode() );
 		Int itemCount = GadgetComboBoxGetLength(comboBoxStartingCash);
     Int index = 0;
     for ( ; index < itemCount; index++ )
@@ -1825,6 +1849,10 @@ WindowMsgHandledType LanGameOptionsMenuSystem( GameWindow *window, UnsignedInt m
         else if ( controlID == checkboxEnforceRandomID )
         {
           handleEnforceRandomClick();
+        }
+        else if ( controlID == checkboxFFAModeID )
+        {
+          handleFFAModeClick();
         }
 				else
 				{

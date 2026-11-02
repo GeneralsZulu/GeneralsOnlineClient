@@ -36,6 +36,7 @@
 #include "GameClient/MapUtil.h"
 #include "Common/MultiplayerSettings.h"
 #include "Common/PlayerTemplate.h"
+#include "Common/Recorder.h"
 #include "Common/Xfer.h"
 #include "GameNetwork/FileTransfer.h"
 #include "GameNetwork/GameInfo.h"
@@ -328,6 +329,7 @@ void GameInfo::reset()
   m_startingCash = TheGlobalData->m_defaultStartingCash;
 	m_resumeHandoffFrame = 0;
 	m_enforceRandom = FALSE;
+	m_ffaMode = FALSE;
 
 	for (Int i=0; i<MAX_SLOTS; ++i)
 	{
@@ -472,6 +474,17 @@ const GameSlot* GameInfo::getConstSlot( Int slotNum ) const
 
 	DEBUG_ASSERTCRASH( m_slot[slotNum], ("null slot pointer") );
 	return m_slot[slotNum];
+}
+
+Bool GameInfo::isSlotAnonymous( Int slotNum ) const
+{
+	if (!m_ffaMode || !m_inGame || slotNum < 0 || TheRecorder == nullptr || TheRecorder->isPlaybackMode())
+		return FALSE;
+	const Int localSlot = getLocalSlotNum();
+	if (localSlot < 0 || slotNum == localSlot)
+		return FALSE;
+	const GameSlot *local = getConstSlot(localSlot);
+	return local != nullptr && local->getPlayerTemplate() != PLAYERTEMPLATE_OBSERVER;
 }
 
 Int GameInfo::getLocalSlotNum() const
@@ -1002,6 +1015,10 @@ AsciiString GameInfoToAsciiString( const GameInfo *game )
 	{
 		optionsString.concat("ER=1;");
 	}
+	if (game->getFFAMode())
+	{
+		optionsString.concat("FF=1;");
+	}
 
 	//add player info for each slot
 	optionsString.concat(slotListID);
@@ -1098,6 +1115,7 @@ Bool ParseAsciiStringToGameInfo(GameInfo *game, AsciiString options)
   UnsignedShort restriction = 0; // Always the default
 	UnsignedInt resumeHandoffFrame = 0;
 	Bool enforceRandom = FALSE;
+	Bool ffaMode = FALSE;
 
 	Bool sawMap = FALSE;
 	Bool sawMapCRC = FALSE;
@@ -1198,6 +1216,10 @@ Bool ParseAsciiStringToGameInfo(GameInfo *game, AsciiString options)
 		else if (key.compare("ER") == 0)
 		{
 			enforceRandom = (atoi(val.str()) != 0);
+		}
+		else if (key.compare("FF") == 0)
+		{
+			ffaMode = (atoi(val.str()) != 0);
 		}
 		else if (key.compare("C") == 0)
 		{
@@ -1602,6 +1624,7 @@ Bool ParseAsciiStringToGameInfo(GameInfo *game, AsciiString options)
 		game->setOldFactionsOnly(oldFactionsOnly);
 		game->setResumeHandoffFrame(resumeHandoffFrame);
 		game->setEnforceRandom(enforceRandom);
+		game->setFFAMode(ffaMode);
 
 		return true;
 	}
