@@ -106,6 +106,7 @@
 #include "GameNetwork/LANAPI.h"
 #include "GameNetwork/GameSpy/GameResultsThread.h"
 #include "GameNetwork/MapDownloadHook.h"
+#include "GameNetwork/RandomAssign.h"
 #include "Common/StatsUploader.h"
 
 #include "Common/version.h"
@@ -811,6 +812,16 @@ void GameEngine::init()
 			// just quit, since the map cache has already updated
 			//populateMapListbox(nullptr, true, true);
 			m_quitting = TRUE;
+		}
+
+		if (isRandomAssignSelfTestRequested())
+		{
+			// Everything performRandomAssign needs is up by now (map cache, player
+			// templates, multiplayer settings). Leave without the shell; the
+			// failure count is the process exit code.
+			Int failures = runRandomAssignSelfTest();
+			fflush(stdout);
+			ExitProcess(failures);
 		}
 
 		// load the initial shell screen

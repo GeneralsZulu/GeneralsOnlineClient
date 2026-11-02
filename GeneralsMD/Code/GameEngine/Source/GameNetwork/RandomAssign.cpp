@@ -34,6 +34,7 @@
 #include "GameClient/ChallengeGenerals.h"
 
 #include <cfloat>
+#include <cstdio>
 #include <cmath>
 #include <random>
 #include <vector>
@@ -455,180 +456,21 @@ void assignStartPositionsGlobal(GameInfo *game, StartSpotRandomFunc randFunc)
 	}
 }
 
-// Phase 2: Assign start positions using distance-based placement.
-// Mirrors populateRandomStartPosition (GameLogic.cpp:787-1053).
-// Different teams are placed far apart, teammates close together.
-// Only touches slots that have startPos == -1.
+// The solver's randFunc contract ([lo, hi] inclusive) over the button's private RNG.
+static Int lobbyRandomValue(Int lo, Int hi)
+{
+	return (hi <= lo) ? lo : lo + rollBelow(hi - lo + 1);
+}
+
+// Phase 2: Assign start positions with the same global solver match start uses
+// (assignStartPositionsGlobal), so the lobby shows the placement a match would get.
+// Only touches slots that have startPos == -1; observer slots are left alone.
 static void assignRandomPositions(GameInfo *game)
 {
-	Int i;
 	const MapMetaData *md = TheMapCache ? TheMapCache->findMap(game->getMap()) : nullptr;
 	if (!md)
 		return; // unknown map: no start spots to hand out; match start will do it
-	Int numPlayers = md->m_numPlayers;
-
-	if (numPlayers <= 0)
-		return;
-	// The per-spot tables below are MAX_SLOTS wide; never index past them.
-	if (numPlayers > MAX_SLOTS)
-		numPlayers = MAX_SLOTS;
-
-	// Build distance matrix between all start positions using map waypoints
-	const WaypointMap &waypoints = md->m_waypoints;
-	Real startSpotDistance[MAX_SLOTS][MAX_SLOTS];
-	for (i = 0; i < MAX_SLOTS; ++i)
-	{
-		for (Int j = 0; j < MAX_SLOTS; ++j)
-		{
-			if (i != j && i < numPlayers && j < numPlayers)
-			{
-				AsciiString w1, w2;
-				w1.format("Player_%d_Start", i + 1);
-				w2.format("Player_%d_Start", j + 1);
-				WaypointMap::const_iterator c1 = waypoints.find(w1);
-				WaypointMap::const_iterator c2 = waypoints.find(w2);
-				if (c1 == waypoints.end() || c2 == waypoints.end())
-				{
-					startSpotDistance[i][j] = 1000000.0f;
-				}
-				else
-				{
-					Coord3D p1 = c1->second;
-					Coord3D p2 = c2->second;
-					startSpotDistance[i][j] = sqrt(sqr(p1.x - p2.x) + sqr(p1.y - p2.y));
-				}
-			}
-			else
-			{
-				startSpotDistance[i][j] = 0.0f;
-			}
-		}
-	}
-
-	// Track which positions are already taken (deliberately assigned)
-	Bool taken[MAX_SLOTS];
-	for (i = 0; i < MAX_SLOTS; ++i)
-		taken[i] = (i < numPlayers) ? FALSE : TRUE;
-
-	Bool hasStartSpotBeenPicked = FALSE;
-	for (i = 0; i < MAX_SLOTS; ++i)
-	{
-		GameSlot *slot = game->getSlot(i);
-		if (!slot || !slot->isOccupied() || slot->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
-			continue;
-
-		Int posIdx = slot->getStartPos();
-		if (posIdx >= 0 && posIdx < numPlayers)
-		{
-			hasStartSpotBeenPicked = TRUE;
-			taken[posIdx] = TRUE;
-		}
-	}
-
-	// Track first position per team for teammate clustering
-	Int teamPosIdx[MAX_SLOTS];
-	for (i = 0; i < MAX_SLOTS; ++i)
-		teamPosIdx[i] = -1;
-
-	// Seed teamPosIdx from already-assigned slots
-	for (i = 0; i < MAX_SLOTS; ++i)
-	{
-		const GameSlot *slot = game->getConstSlot(i);
-		if (!slot || !slot->isOccupied() || slot->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
-			continue;
-		Int posIdx = slot->getStartPos();
-		if (posIdx >= 0 && posIdx < numPlayers)
-		{
-			Int team = slot->getTeamNumber();
-			if (team >= 0 && teamPosIdx[team] == -1)
-				teamPosIdx[team] = posIdx;
-		}
-	}
-
-	// Assign positions for non-observer slots that don't have one yet
-	for (i = 0; i < MAX_SLOTS; ++i)
-	{
-		GameSlot *slot = game->getSlot(i);
-		if (!slot || !slot->isOccupied() || slot->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
-			continue;
-
-		Int posIdx = slot->getStartPos();
-		if (posIdx >= 0 && posIdx < numPlayers)
-			continue; // already assigned
-
-		Int team = slot->getTeamNumber();
-
-		if (!hasStartSpotBeenPicked)
-		{
-			// First player: pick randomly
-			posIdx = -1;
-			for (Int attempt = 0; attempt < numPlayers * 2 && posIdx == -1; ++attempt)
-			{
-				Int candidate = rollBelow(numPlayers);
-				if (!taken[candidate])
-					posIdx = candidate;
-			}
-			if (posIdx < 0)
-				continue;
-			hasStartSpotBeenPicked = TRUE;
-			slot->setStartPos(posIdx);
-			taken[posIdx] = TRUE;
-			if (team >= 0)
-				teamPosIdx[team] = posIdx;
-		}
-		else if (team < 0 || teamPosIdx[team] == -1)
-		{
-			// New team or no team: pick position farthest from all taken positions
-			Real farthestDistance = 0.0f;
-			Int farthestIndex = -1;
-			for (posIdx = 0; posIdx < numPlayers; ++posIdx)
-			{
-				if (taken[posIdx])
-					continue;
-
-				Real dist = 0.0f;
-				for (Int n = 0; n < numPlayers; ++n)
-				{
-					if (taken[n] && n != posIdx)
-						dist += startSpotDistance[posIdx][n];
-				}
-				if (farthestIndex < 0 || dist > farthestDistance)
-				{
-					farthestDistance = dist;
-					farthestIndex = posIdx;
-				}
-			}
-
-			if (farthestIndex >= 0)
-			{
-				slot->setStartPos(farthestIndex);
-				taken[farthestIndex] = TRUE;
-				if (team >= 0)
-					teamPosIdx[team] = farthestIndex;
-			}
-		}
-		else
-		{
-			// Teammate: pick position closest to team's existing position
-			Real closestDist = FLT_MAX;
-			Int closestIdx = -1;
-			for (Int n = 0; n < numPlayers; ++n)
-			{
-				if (!taken[n] && startSpotDistance[teamPosIdx[team]][n] < closestDist)
-				{
-					closestDist = startSpotDistance[teamPosIdx[team]][n];
-					closestIdx = n;
-				}
-			}
-			if (closestIdx >= 0)
-			{
-				slot->setStartPos(closestIdx);
-				taken[closestIdx] = TRUE;
-			}
-		}
-	}
-
-	// Observer slots are left alone: they take a player's spot at match start.
+	assignStartPositionsGlobal(game, lobbyRandomValue);
 }
 
 void performRandomAssign(GameInfo *game, std::vector<RandomSlotAssignment> *outChanges)
@@ -923,4 +765,214 @@ bool tryBalanceTeamsViaApi(GameInfo *game, AsciiString *outError)
 	}
 
 	return true;
+}
+
+//-----------------------------------------------------------------------------
+// Self-test for the lobby Randomize placement (run with -headless -randomassigntest).
+// Builds 4-spot maps straight into TheMapCache so the test does not depend on
+// any installed map, and drives performRandomAssign, the same entry point the
+// Randomize button uses.
+//-----------------------------------------------------------------------------
+
+static Bool s_selfTestRequested = FALSE;
+void requestRandomAssignSelfTest() { s_selfTestRequested = TRUE; }
+Bool isRandomAssignSelfTestRequested() { return s_selfTestRequested; }
+
+static const char *const SELFTEST_MAP = "zulu_randomassign_selftest.map";
+static const Int SELFTEST_OBSERVER = -99; // team value meaning "make this slot an observer"
+
+// Spots 0,1 sit together on the left, 2,3 together on the right (straight-line).
+// With crossPairsByPath, the cached ground-path matrix says the opposite: 0-2
+// and 1-3 are the near pairs, as if a river split the left from the right.
+static void selfTestInstallMap(Bool crossPairsByPath)
+{
+	MapMetaData md;
+	md.m_numPlayers = 4;
+	md.m_isMultiplayer = TRUE;
+	md.m_isOfficial = FALSE;
+	static const Real xs[4] = { 0.0f, 100.0f, 5000.0f, 5100.0f };
+	Int i, j;
+	for (i = 0; i < 4; ++i)
+	{
+		Coord3D p;
+		p.x = xs[i];
+		p.y = 0.0f;
+		p.z = 0.0f;
+		AsciiString name;
+		name.format("Player_%d_Start", i + 1);
+		md.m_waypoints[name] = p;
+	}
+	if (crossPairsByPath)
+	{
+		for (i = 0; i < 4; ++i)
+			for (j = 0; j < 4; ++j)
+				if (i != j)
+					md.m_startSpotPathDist[i][j] = ((i + j) % 2 == 0) ? 100.0f : 5000.0f;
+	}
+	(*TheMapCache)[AsciiString(SELFTEST_MAP)] = md;
+}
+
+// Four player slots with fixed faction/color (so only placement is random),
+// teams[i] per slot (SELFTEST_OBSERVER = observer), spots[i] = preset start spot or -1.
+static void selfTestSetupLobby(SkirmishGameInfo &game, const Int *teams, const Int *spots, const char *mapName)
+{
+	game.setMap(AsciiString(mapName));
+	Int i;
+	for (i = 0; i < MAX_SLOTS; ++i)
+	{
+		GameSlot *slot = game.getSlot(i);
+		if (i >= 4)
+		{
+			slot->setState(SLOT_OPEN);
+			continue;
+		}
+		UnicodeString name;
+		name.format(L"P%d", i);
+		slot->setState(SLOT_PLAYER, name);
+		slot->setPlayerTemplate(teams[i] == SELFTEST_OBSERVER ? PLAYERTEMPLATE_OBSERVER : 0);
+		slot->setColor(i);
+		slot->setTeamNumber(teams[i] == SELFTEST_OBSERVER ? -1 : teams[i]);
+		slot->setStartPos(spots[i]);
+	}
+}
+
+static Int s_selfTestFailures = 0;
+static void selfTestCheck(Bool ok, const char *what)
+{
+	if (!ok)
+		++s_selfTestFailures;
+	fprintf(stdout, "[RANDOMASSIGN TEST] %s %s\n", ok ? "ok  " : "FAIL", what);
+}
+
+// Every combatant got a distinct spot in [0, numSpots); observers stay at -1.
+static Bool selfTestSpotsValid(const SkirmishGameInfo &game, Int numSpots)
+{
+	Bool used[MAX_SLOTS] = { FALSE };
+	Int i;
+	for (i = 0; i < 4; ++i)
+	{
+		const GameSlot *slot = game.getConstSlot(i);
+		Int spot = slot->getStartPos();
+		if (slot->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
+		{
+			if (spot != -1)
+				return FALSE;
+			continue;
+		}
+		if (spot < 0 || spot >= numSpots || used[spot])
+			return FALSE;
+		used[spot] = TRUE;
+	}
+	return TRUE;
+}
+
+static Bool selfTestSameSide(Int a, Int b) { return (a < 2) == (b < 2); }       // {0,1} vs {2,3}
+static Bool selfTestSameParity(Int a, Int b) { return (a % 2) == (b % 2); }      // {0,2} vs {1,3}
+
+Int runRandomAssignSelfTest()
+{
+	s_selfTestFailures = 0;
+	static const Int TEAMS_2V2[4] = { 0, 0, 1, 1 };
+	static const Int TEAMS_FFA[4] = { -1, -1, -1, -1 };
+	static const Int TEAMS_OBS[4] = { 0, 0, 1, SELFTEST_OBSERVER };
+	static const Int NO_SPOTS[4] = { -1, -1, -1, -1 };
+	static const Int SLOT0_ON_2[4] = { 2, -1, -1, -1 };
+	const Int RUNS = 64;
+	Int run;
+
+	// 1. 2v2, straight-line distances: allies share a side, opponents take the other,
+	//    and the draw varies (which side, and which ally gets which of the side's spots).
+	selfTestInstallMap(FALSE);
+	Bool valid = TRUE, paired = TRUE;
+	Int team0Left = 0, team0Right = 0, slot0Lower = 0, slot0Higher = 0;
+	std::vector<RandomSlotAssignment> changes;
+	for (run = 0; run < RUNS; ++run)
+	{
+		SkirmishGameInfo game;
+		selfTestSetupLobby(game, TEAMS_2V2, NO_SPOTS, SELFTEST_MAP);
+		performRandomAssign(&game, run == 0 ? &changes : nullptr);
+		valid = valid && selfTestSpotsValid(game, 4);
+		Int s0 = game.getConstSlot(0)->getStartPos(), s1 = game.getConstSlot(1)->getStartPos();
+		Int s2 = game.getConstSlot(2)->getStartPos(), s3 = game.getConstSlot(3)->getStartPos();
+		paired = paired && selfTestSameSide(s0, s1) && selfTestSameSide(s2, s3) && !selfTestSameSide(s0, s2);
+		if (s0 < 2) ++team0Left; else ++team0Right;
+		if (s0 < s1) ++slot0Lower; else ++slot0Higher;
+	}
+	selfTestCheck(valid, "2v2: every player gets a distinct spot");
+	selfTestCheck(paired, "2v2: teammates share a side, opponents take the other");
+	selfTestCheck(team0Left > 0 && team0Right > 0, "2v2: both sides come up for team 0 over 64 draws");
+	selfTestCheck(slot0Lower > 0 && slot0Higher > 0, "2v2: teammates swap spots between draws");
+	Bool changesOk = changes.size() == 4;
+	size_t c;
+	for (c = 0; c < changes.size(); ++c)
+		changesOk = changesOk && changes[c].startPos >= 0 && changes[c].side == -1 && changes[c].color == -1 && changes[c].team == -1;
+	selfTestCheck(changesOk, "2v2: outChanges reports exactly the four start positions");
+
+	// 2. Same geometry, but the cached ground-path matrix pairs 0-2 and 1-3: the
+	//    solver must trust the path distances over the straight line.
+	selfTestInstallMap(TRUE);
+	paired = TRUE;
+	for (run = 0; run < RUNS; ++run)
+	{
+		SkirmishGameInfo game;
+		selfTestSetupLobby(game, TEAMS_2V2, NO_SPOTS, SELFTEST_MAP);
+		performRandomAssign(&game, nullptr);
+		Int s0 = game.getConstSlot(0)->getStartPos(), s1 = game.getConstSlot(1)->getStartPos();
+		Int s2 = game.getConstSlot(2)->getStartPos();
+		paired = paired && selfTestSpotsValid(game, 4) && selfTestSameParity(s0, s1) && !selfTestSameParity(s0, s2);
+	}
+	selfTestCheck(paired, "2v2: ground-path distances override straight-line pairing");
+	selfTestInstallMap(FALSE);
+
+	// 3. A deliberately chosen spot is kept and the rest are placed around it.
+	Bool fixedOk = TRUE;
+	for (run = 0; run < 16; ++run)
+	{
+		SkirmishGameInfo game;
+		selfTestSetupLobby(game, TEAMS_2V2, SLOT0_ON_2, SELFTEST_MAP);
+		performRandomAssign(&game, nullptr);
+		fixedOk = fixedOk && selfTestSpotsValid(game, 4)
+			&& game.getConstSlot(0)->getStartPos() == 2
+			&& game.getConstSlot(1)->getStartPos() == 3
+			&& game.getConstSlot(2)->getStartPos() < 2;
+	}
+	selfTestCheck(fixedOk, "fixed spot: slot 0 keeps spot 2, ally gets 3, opponents get 0/1");
+
+	// 4. Observers keep -1; the three combatants still get distinct spots.
+	Bool obsOk = TRUE;
+	for (run = 0; run < 16; ++run)
+	{
+		SkirmishGameInfo game;
+		selfTestSetupLobby(game, TEAMS_OBS, NO_SPOTS, SELFTEST_MAP);
+		performRandomAssign(&game, nullptr);
+		obsOk = obsOk && selfTestSpotsValid(game, 4) && game.getConstSlot(3)->getStartPos() == -1;
+	}
+	selfTestCheck(obsOk, "observer: slot left at -1, combatants placed");
+
+	// 5. FFA: four distinct spots.
+	Bool ffaOk = TRUE;
+	for (run = 0; run < 16; ++run)
+	{
+		SkirmishGameInfo game;
+		selfTestSetupLobby(game, TEAMS_FFA, NO_SPOTS, SELFTEST_MAP);
+		performRandomAssign(&game, nullptr);
+		ffaOk = ffaOk && selfTestSpotsValid(game, 4);
+	}
+	selfTestCheck(ffaOk, "ffa: four distinct spots");
+
+	// 6. Unknown map: nothing to place, every spot stays -1.
+	{
+		SkirmishGameInfo game;
+		selfTestSetupLobby(game, TEAMS_2V2, NO_SPOTS, "zulu_randomassign_no_such_map.map");
+		performRandomAssign(&game, nullptr);
+		Bool untouched = TRUE;
+		Int i;
+		for (i = 0; i < 4; ++i)
+			untouched = untouched && game.getConstSlot(i)->getStartPos() == -1;
+		selfTestCheck(untouched, "unknown map: start positions left alone");
+	}
+
+	TheMapCache->erase(AsciiString(SELFTEST_MAP));
+	fprintf(stdout, "[RANDOMASSIGN TEST] failures=%d\n", s_selfTestFailures);
+	return s_selfTestFailures;
 }
