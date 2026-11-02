@@ -908,7 +908,9 @@ void ConnectionManager::processChat(NetChatCommandMsg *msg)
 	if ( ((1<<m_localSlot) & msg->getPlayerMask() ) && canSeeChat  )
 	{
 		RGBColor rgb;
-		rgb.setFromInt(GameMakeColorReadable(player->getPlayerColor()));
+		// FFA mode: a colored chat line would tie the sender's name to their color
+		rgb.setFromInt(TheGameInfo->isSlotAnonymous(playerID) ? GameMakeColor(255, 255, 255, 255)
+			: GameMakeColorReadable(player->getPlayerColor()));
 #if defined(GENERALS_ONLINE)
 		TheInGameUI->messageColor(true, &rgb, UnicodeString(L"%ls"), unitext.str());
 #else

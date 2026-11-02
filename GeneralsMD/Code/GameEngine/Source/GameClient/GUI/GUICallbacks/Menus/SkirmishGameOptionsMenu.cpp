@@ -849,6 +849,9 @@ void updateMapStartSpots( GameInfo *myGame, GameWindow *buttonMapStartPositions[
 		GameSlot *gs =myGame->getSlot(i);
 		if(onLoadScreen)
 		{
+			// FFA mode: the slot number on a start spot matches the name row, so it would say who starts where
+			if (myGame->isSlotAnonymous(i))
+				continue;
 			Int startPos = gs->getApparentStartPos();
 			GameWindow* btn = buttonMapStartPositions[startPos];
 			if (!btn)

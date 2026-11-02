@@ -195,6 +195,7 @@ static NameKeyType checkBoxLimitSuperweaponsID = NAMEKEY_INVALID;
 // player's two dropdowns are locked (see EnableAcceptControls). The Randomize
 // button still resolves the randoms, because it sends a bulk slot update.
 static NameKeyType checkBoxEnforceRandomID = NAMEKEY_INVALID;
+static NameKeyType checkBoxFFAModeID = NAMEKEY_INVALID;
 static NameKeyType comboBoxStartingCashID = NAMEKEY_INVALID;
 static NameKeyType checkBoxLimitArmiesID = NAMEKEY_INVALID;
 
@@ -223,6 +224,7 @@ static GameWindow *windowMap = NULL;
 static GameWindow *checkBoxUseStats = NULL;
 static GameWindow *checkBoxLimitSuperweapons = NULL;
 static GameWindow *checkBoxEnforceRandom = NULL;
+static GameWindow *checkBoxFFAMode = NULL;
 static GameWindow *comboBoxStartingCash = NULL;
 static GameWindow *checkBoxLimitArmies = NULL;
 
@@ -925,6 +927,19 @@ static void handleEnforceRandomClick()
 	}
 }
 
+// Same arrangement as Enforce Random: the service owns the flag.
+static void handleFFAModeClick()
+{
+	if (checkBoxFFAMode == NULL)
+		return;
+
+	NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+	if (pLobbyInterface != nullptr && pLobbyInterface->IsHost())
+	{
+		pLobbyInterface->UpdateCurrentLobby_FFAMode(GadgetCheckBoxIsChecked(checkBoxFFAMode) ? true : false);
+	}
+}
+
 static void handleLimitSuperweaponsClick()
 {
 
@@ -969,6 +984,7 @@ static void WOLLockSettings()
 	buttonBack->winEnable(false);
 	checkBoxLimitSuperweapons->winEnable(false);
 	if (checkBoxEnforceRandom) checkBoxEnforceRandom->winEnable(false);
+	if (checkBoxFFAMode) checkBoxFFAMode->winEnable(false);
 	comboBoxStartingCash->winEnable(false);
 
 	for (Int i = 0; i < MAX_SLOTS; ++i)
@@ -1390,6 +1406,12 @@ void WOLDisplayGameOptions()
     Bool enforceRandom = theGame->getEnforceRandom();
     if ( enforceRandom != GadgetCheckBoxIsChecked(checkBoxEnforceRandom))
       GadgetCheckBoxSetChecked( checkBoxEnforceRandom, enforceRandom );
+  }
+  if (checkBoxFFAMode)
+  {
+    Bool ffaMode = theGame->getFFAMode();
+    if ( ffaMode != GadgetCheckBoxIsChecked(checkBoxFFAMode))
+      GadgetCheckBoxSetChecked( checkBoxFFAMode, ffaMode );
   }
 
   Int itemCount = GadgetComboBoxGetLength(comboBoxStartingCash);
@@ -2332,6 +2354,7 @@ void InitWOLGameGadgets()
 	windowMapID = TheNameKeyGenerator->nameToKey( "GameSpyGameOptionsMenu.wnd:MapWindow" );
   checkBoxLimitSuperweaponsID = TheNameKeyGenerator->nameToKey("GameSpyGameOptionsMenu.wnd:CheckboxLimitSuperweapons");
   checkBoxEnforceRandomID = TheNameKeyGenerator->nameToKey("GameSpyGameOptionsMenu.wnd:CheckboxEnforceRandom");
+  checkBoxFFAModeID = TheNameKeyGenerator->nameToKey("GameSpyGameOptionsMenu.wnd:CheckboxFFAMode");
   comboBoxStartingCashID = TheNameKeyGenerator->nameToKey("GameSpyGameOptionsMenu.wnd:ComboBoxStartingCash");
   checkBoxLimitArmiesID = TheNameKeyGenerator->nameToKey("GameSpyGameOptionsMenu.wnd:CheckBoxLimitArmies");
 	windowMapSelectMapID = TheNameKeyGenerator->nameToKey("WOLMapSelectMenu.wnd:WinMapPreview");
@@ -2367,6 +2390,12 @@ void InitWOLGameGadgets()
   {
     checkBoxEnforceRandom->winSetText(TheGameText->FETCH_OR_SUBSTITUTE("GUI:EnforceRandom", L"Enforce Random"));
     checkBoxEnforceRandom->winSetTooltip(TheGameText->FETCH_OR_SUBSTITUTE("TOOLTIP:EnforceRandom", L"Lock all players to random faction and random team"));
+  }
+  checkBoxFFAMode = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, checkBoxFFAModeID );
+  if (checkBoxFFAMode)
+  {
+    checkBoxFFAMode->winSetText(TheGameText->FETCH_OR_SUBSTITUTE("GUI:FFAMode", L"FFA Mode"));
+    checkBoxFFAMode->winSetTooltip(TheGameText->FETCH_OR_SUBSTITUTE("TOOLTIP:FFAMode", L"Hide who is who: names lose their colors and hovering a unit does not show its owner."));
   }
   DEBUG_ASSERTCRASH(windowMap, ("Could not find the GameSpyGameOptionsMenu.wnd:CheckboxLimitSuperweapons" ));
   comboBoxStartingCash = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, comboBoxStartingCashID );
@@ -2407,6 +2436,7 @@ void InitWOLGameGadgets()
   {
     checkBoxLimitSuperweapons->winEnable( false );
     if (checkBoxEnforceRandom) checkBoxEnforceRandom->winEnable( false );
+    if (checkBoxFFAMode) checkBoxFFAMode->winEnable( false );
     comboBoxStartingCash->winEnable( false );
     if (buttonRandomize) buttonRandomize->winEnable( false );
     if (buttonMapVote) buttonMapVote->winEnable( false );
@@ -2422,6 +2452,7 @@ void InitWOLGameGadgets()
 	  // below: locking everyone to random changes nobody's economy or rules,
 	  // and a ranked game is where it gets asked for.
 	  if (checkBoxEnforceRandom) checkBoxEnforceRandom->winEnable(true);
+	  if (checkBoxFFAMode) checkBoxFFAMode->winEnable(true);
 	  comboBoxStartingCash->winEnable(true);
 	  if (buttonRandomize) buttonRandomize->winEnable(true);
 	  if (buttonMapVote) buttonMapVote->winEnable(true);
@@ -2606,6 +2637,7 @@ void DeinitWOLGameGadgets()
 	checkBoxUseStats = NULL;
   checkBoxLimitSuperweapons = NULL;
   checkBoxEnforceRandom = NULL;
+  checkBoxFFAMode = NULL;
   comboBoxStartingCash = NULL;
 
 //	GameWindow *staticTextTitle = NULL;
@@ -3292,6 +3324,7 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 							comboBoxStartingCash->winEnable(TRUE);
 							checkBoxLimitSuperweapons->winEnable(TRUE);
 							if (checkBoxEnforceRandom) checkBoxEnforceRandom->winEnable(TRUE);
+							if (checkBoxFFAMode) checkBoxFFAMode->winEnable(TRUE);
 
 
 							NetworkLog(ELogVerbosity::LOG_RELEASE, "Host left and server migrated the host to us...");
@@ -4252,6 +4285,10 @@ WindowMsgHandledType WOLGameSetupMenuSystem( GameWindow *window, UnsignedInt msg
         else if ( controlID == checkBoxEnforceRandomID )
         {
           handleEnforceRandomClick();
+        }
+        else if ( controlID == checkBoxFFAModeID )
+        {
+          handleFFAModeClick();
         }
         else if ( controlID == checkBoxLimitSuperweaponsID )
         {

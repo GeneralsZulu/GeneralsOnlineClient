@@ -1845,14 +1845,17 @@ void MultiPlayerLoadScreen::init( GameInfo *game )
 		if (!slot || !slot->isOccupied())
 			continue;
 
-		Color houseColor = TheMultiplayerSettings->getColor(slot->getApparentColor())->getColor();
+		// FFA mode: another player's row loses its color, which would name whose units are whose
+		const Bool anonymous = game->isSlotAnonymous(i);
+		Color houseColor = anonymous ? GameMakeColor(255, 255, 255, 255)
+			: TheMultiplayerSettings->getColor(slot->getApparentColor())->getColor();
 #if RTS_GENERALS
 		GadgetProgressBarSetEnabledBarColor(m_progressBars[netSlot],houseColor );
 #else
 		// format the progress bar to house colors
 		AsciiString imageName;
 		imageName.format("LoadingBar_ProgressCenter%d", slot->getApparentColor());
-		const Image *houseImage = TheMappedImageCollection->findImageByName(imageName);
+		const Image *houseImage = anonymous ? nullptr : TheMappedImageCollection->findImageByName(imageName);
 		if (! houseImage)
 			houseImage = TheMappedImageCollection->findImageByName("LoadingBar_Progress");
 		m_progressBars[netSlot]->winSetEnabledImage( 6, houseImage );
@@ -2200,14 +2203,17 @@ GameSlot *lSlot = game->getSlot(game->getLocalSlotNum());
 		if (!slot || !slot->isOccupied())
 			continue;
 
-		Color houseColor = TheMultiplayerSettings->getColor(slot->getApparentColor())->getColor();
+		// FFA mode: another player's row loses its color, which would name whose units are whose
+		const Bool anonymous = game->isSlotAnonymous(i);
+		Color houseColor = anonymous ? GameMakeColor(255, 255, 255, 255)
+			: TheMultiplayerSettings->getColor(slot->getApparentColor())->getColor();
 #if RTS_GENERALS
 		GadgetProgressBarSetEnabledBarColor(m_progressBars[netSlot],houseColor );
 #else
 		// format the progress bar to house colors
 		AsciiString imageName;
 		imageName.format("LoadingBar_ProgressCenter%d", slot->getApparentColor());
-		const Image *houseImage = TheMappedImageCollection->findImageByName(imageName);
+		const Image *houseImage = anonymous ? nullptr : TheMappedImageCollection->findImageByName(imageName);
 		if (! houseImage)
 			houseImage = TheMappedImageCollection->findImageByName("LoadingBar_Progress");
 		m_progressBars[netSlot]->winSetEnabledImage( 6, houseImage );
@@ -2513,7 +2519,8 @@ void MapTransferLoadScreen::init( GameInfo *game )
 		GameSlot *slot = game->getSlot(i);
 		if (!slot || !slot->isHuman())
 			continue;
-		Color houseColor = TheMultiplayerSettings->getColor(slot->getApparentColor())->getColor();
+		Color houseColor = game->isSlotAnonymous(i) ? GameMakeColor(255, 255, 255, 255)
+			: TheMultiplayerSettings->getColor(slot->getApparentColor())->getColor();
 		GadgetProgressBarSetEnabledBarColor(m_progressBars[netSlot], houseColor );
 
 		UnicodeString name = slot->getName();

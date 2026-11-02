@@ -287,6 +287,15 @@ public:
 	inline Bool getEnforceRandom() const;
 	inline void setEnforceRandom( Bool enforceRandom );
 
+	// FFA mode: players cannot tell who they are playing against. Names lose
+	// their player colors (load screen, chat, diplomacy) and the hover
+	// tooltip drops the owner's name. Host-controlled, LAN and online.
+	inline Bool getFFAMode() const;
+	inline void setFFAMode( Bool ffaMode );
+	/// True when FFA mode hides who is in this slot from the local player.
+	/// Never for your own slot, for observers or in replays.
+	Bool isSlotAnonymous( Int slotNum ) const;
+
 protected:
 	Int m_preorderMask;
 	Int m_crcInterval;
@@ -312,6 +321,7 @@ protected:
 	// resume-from-replay arming (appended last so existing member offsets are untouched)
 	UnsignedInt m_resumeHandoffFrame;
 	Bool m_enforceRandom;
+	Bool m_ffaMode;
 };
 
 extern GameInfo *TheGameInfo;
@@ -335,6 +345,8 @@ Bool        GameInfo::oldFactionsOnly() const           { return m_oldFactionsOn
 void        GameInfo::setOldFactionsOnly( Bool oldFactionsOnly ) { m_oldFactionsOnly = oldFactionsOnly; }
 Bool        GameInfo::getEnforceRandom() const          { return m_enforceRandom; }
 void        GameInfo::setEnforceRandom( Bool enforceRandom ) { m_enforceRandom = enforceRandom; }
+Bool        GameInfo::getFFAMode() const                { return m_ffaMode; }
+void        GameInfo::setFFAMode( Bool ffaMode )        { m_ffaMode = ffaMode; }
 
 AsciiString GameInfoToAsciiString( const GameInfo *game );
 Bool ParseAsciiStringToGameInfo( GameInfo *game, AsciiString options );
