@@ -31,6 +31,7 @@
 #include "Common/LocalFileSystem.h"
 #include "Common/Recorder.h"
 #include "Common/ReplaySimulation.h"
+#include "Common/StatsUploader.h"
 #include "Common/version.h"
 #include "GameClient/ClientInstance.h"
 #include "GameClient/TerrainVisual.h" // for TERRAIN_LOD_MIN definition
@@ -626,6 +627,13 @@ Int parseRadarvanApiUrl(char *args[], int num)
 		TheWritableGlobalData->m_radarvanApiUrl = args[1];
 		return 2;
 	}
+	return 1;
+}
+
+// Needs nothing the engine sets up later, so it runs and exits right here.
+Int parseRadarvanReportTest(char *args[], int num)
+{
+	ExitProcess((UINT)RadarvanReportSelfTest());
 	return 1;
 }
 
@@ -1512,6 +1520,7 @@ static CommandLineParam paramsForStartup[] =
 	// Radarvan API base for the end-screen match report (story, win curve,
 	// pre-game prediction). Pass an empty string ("") to disable it.
 	{ "-radarvanApiUrl", parseRadarvanApiUrl },
+	{ "-radarvanreporttest", parseRadarvanReportTest },
 
 	// URL the map-select dialogs GET to fetch a JSON array of
 	// {map, matchCount} entries, used to annotate each row with how

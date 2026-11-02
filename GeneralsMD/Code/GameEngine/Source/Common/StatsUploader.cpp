@@ -44,6 +44,7 @@
 #define __MACTYPES__
 #include <zlib.h>
 #include <map>
+#include <string>
 #include <vector>
 
 #pragma comment(lib, "wininet.lib")
@@ -3713,6 +3714,49 @@ void RadarvanReportStart(const AsciiString& apiBaseUrl, int matchId, unsigned in
 		return;
 	}
 	CloseHandle(hThread);
+}
+
+// Self-test for the report's reply parsing (run with -radarvanreporttest).
+// Radarvan's replies are remote input, so the decoding and the curve thinning
+// get pinned here. Prints each failure; returns the failure count.
+int RadarvanReportSelfTest(void)
+{
+	int failures = 0;
+	char buf[64];
+#define RV_EXPECT(cond, what) do { if (!(cond)) { ++failures; fprintf(stdout, "[RADARVANREPORT TEST] FAIL: %s\n", what); } } while (0)
+
+	RV_EXPECT(jsonGetUtf8("{\"k\":\"Caf\\u00e9 \\ud83d\\ude00 \\\"q\\\"\"}", "k", buf, sizeof(buf))
+		&& strcmp(buf, "Caf\xC3\xA9 \xF0\x9F\x98\x80 \"q\"") == 0, "escapes and surrogate pairs decode to UTF-8");
+	RV_EXPECT(jsonGetUtf8("{\"k\":\"ab\\u00e9\"}", "k", buf, 4) && strcmp(buf, "ab") == 0, "truncation never splits a character");
+	RV_EXPECT(jsonGetUtf8("{\"k\":\"abc\\", "k", buf, sizeof(buf)) && strcmp(buf, "abc\\") == 0, "a backslash at the end of the body stays in bounds");
+	RV_EXPECT(!jsonGetUtf8("{\"k\":null}", "k", buf, sizeof(buf)), "null is not a string");
+	RV_EXPECT(!jsonGetUtf8("{\"other\":\"x\"}", "k", buf, sizeof(buf)), "a missing key is not a string");
+
+	RadarvanReport *r = (RadarvanReport *)calloc(1, sizeof(RadarvanReport));
+	if (r == nullptr)
+		return failures + 1;
+	RV_EXPECT(!parseNarrative("{\"headline\":\"\",\"beats\":[]}", *r), "an empty headline means radarvan does not have the match yet");
+
+	// A game longer than the buffer: thinned to the cap, ends kept.
+	std::string body = "{\"actual_winner\":\"team_b\",\"points\":[";
+	int i;
+	for (i = 0; i < 500; ++i)
+	{
+		char pt[64];
+		_snprintf(pt, sizeof(pt) - 1, "%s{\"at_minute\":%d.5,\"prob_team_a\":0.25}", i ? "," : "", i);
+		pt[sizeof(pt) - 1] = '\0';
+		body += pt;
+	}
+	body += "]}";
+	parseOverTime(body.c_str(), *r);
+	RV_EXPECT(r->hasCurve && r->pointCount == RADARVAN_REPORT_MAX_POINTS, "a long curve is thinned to the cap");
+	RV_EXPECT(r->pointMinute[0] == 0.5f && r->pointMinute[r->pointCount - 1] == 499.5f, "thinning keeps the first and last points");
+	RV_EXPECT(!r->teamAWon, "team_b as the winner");
+	free(r);
+
+#undef RV_EXPECT
+	fprintf(stdout, "[RADARVANREPORT TEST] %d failure(s)\n", failures);
+	return failures;
 }
 
 RadarvanReportState RadarvanReportPoll(RadarvanReport& out)
