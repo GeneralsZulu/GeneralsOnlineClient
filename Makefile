@@ -711,6 +711,16 @@ define go_stage_payload
 	cp "$(GO_CACERT)" "$(1)/cacert.pem"
 	cp "$(GO_README)" "$(1)/README.txt"
 	$(SIGN) "$(1)/$(GO_EXE_NAME)" "$(1)/$(GO_LAUNCHER_NAME)"
+	@# After Authenticode, which changes the bytes the build signature covers.
+	@# The key comes from the gcloud secret zulugo_build_key unless
+	@# ZULUGO_BUILD_KEY names a local one (see the script). A release has to
+	@# carry a signature: the service only trusts the prod key for it.
+	@rc=0; GCLOUD="$(GCLOUD)" scripts/zulugo/sign-build.sh "$(1)/$(GO_EXE_NAME)" "$(or $(ZULU_BUILD_VARIANT),dev)" || rc=$$?; \
+	if [ $$rc = 3 ] && [ "$(ZULU_BUILD_VARIANT)" != release ]; then \
+		echo "[buildsig] no signing key; this build only gets online through a crcfiles slot"; \
+	elif [ $$rc != 0 ]; then \
+		echo "ERROR: build signing failed (set ZULUGO_BUILD_KEY, or check gcloud access to secret zulugo_build_key)"; exit 1; \
+	fi
 endef
 
 # binkw32.dll and mss32.dll are excluded above on purpose: cmake copies those

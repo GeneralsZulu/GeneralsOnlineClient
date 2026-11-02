@@ -19,6 +19,11 @@ This is a developer-facing inventory, not a player-facing changelog.
   depleted-team `maxInstances` fix, distance-scoring tweak in
   `acquireEnemy`.
 
+## Online
+
+- [zulugo-dev-builds.md](zulugo-dev-builds.md): building, signing and
+  running a Zulu GO dev client, and how release builds are signed.
+
 ## LAN multiplayer
 
 - [lan-observer-mode.md](lan-observer-mode.md) — Late-joiner

@@ -428,6 +428,13 @@ void NGMP_OnlineServicesManager::StartVersionCheck(std::function<void(bool bSucc
 	j["ver"] = GENERALS_ONLINE_VERSION;
 	j["netver"] = GENERALS_ONLINE_NET_VERSION;
 	j["servicesver"] = GENERALS_ONLINE_SERVICE_VERSION;
+	// written by scripts/zulugo/sign-build.sh; lets a build in that has no crcfiles slot
+	std::ifstream sigFile(std::string(filePath) + ".buildsig");
+	std::string strBuildSig;
+	if (std::getline(sigFile, strBuildSig))
+	{
+		j["buildsig"] = strBuildSig;
+	}
 	std::string strPostData = j.dump();
 
 	std::map<std::string, std::string> mapHeaders;
@@ -442,7 +449,9 @@ void NGMP_OnlineServicesManager::StartVersionCheck(std::function<void(bool bSucc
 
 				if (authResp.result == EVersionCheckResponseResult::OK)
 				{
-					NetworkLog(ELogVerbosity::LOG_RELEASE, "VERSION CHECK: Up To Date");
+					// not part of the struct: an older service does not send it
+					m_bDevBuild = jsonObject.value("dev_build", false);
+					NetworkLog(ELogVerbosity::LOG_RELEASE, "VERSION CHECK: Up To Date%s", m_bDevBuild ? " (dev build)" : "");
 					fnCallback(true, false);
 				}
 				else if (authResp.result == EVersionCheckResponseResult::NEEDS_UPDATE)

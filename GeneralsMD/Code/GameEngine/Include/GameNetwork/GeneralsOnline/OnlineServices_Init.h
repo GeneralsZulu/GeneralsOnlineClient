@@ -539,6 +539,8 @@ public:
 	}
 
 	void StartVersionCheck(std::function<void(bool bSuccess, bool bNeedsUpdate)> fnCallback);
+	// let in by a dev key's signature (<exe>.buildsig) rather than as a release build
+	bool IsDevBuild() const { return m_bDevBuild; }
 
 	std::shared_ptr<WebSocket> Internal_GetWebSocket() const { return m_pWebSocket; }
 	HTTPManager* GetHTTPManager() const { return m_pHTTPManager; }
@@ -677,4 +679,5 @@ private:
 	std::string m_patcher_name;
 	std::string m_patcher_path;
 	int64_t m_patcher_size;
+	bool m_bDevBuild = false;
 };

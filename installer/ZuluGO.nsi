@@ -671,6 +671,13 @@ Section "${APPNAME}" SecMain
     File "${PAYLOAD_DIR}\${BIGNAME}"
     File "${PAYLOAD_DIR}\cacert.pem"
     File "${PAYLOAD_DIR}\README.txt"
+    ; The build signature the online service checks. Never leave an old one
+    ; behind: it belongs to the exe it was made for.
+!if /FileExists "${PAYLOAD_DIR}\${EXENAME}.buildsig"
+    File "${PAYLOAD_DIR}\${EXENAME}.buildsig"
+!else
+    Delete "$INSTDIR\${SUBDIR}\${EXENAME}.buildsig"
+!endif
 
     ; --- The launcher, and the dance needed to overwrite it --------------
     ; Same problem Zulu.nsi solves, in the subfolder instead of the install
