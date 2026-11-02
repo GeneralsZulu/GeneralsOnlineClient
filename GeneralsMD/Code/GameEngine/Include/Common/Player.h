@@ -630,6 +630,11 @@ public:
 	void setSurrenderConsented(Bool consented) { m_surrenderConsented = consented; }
 	Bool getSurrenderConsented() const { return m_surrenderConsented; }
 
+	// Actions per minute: rolling one-minute count of the commands this player issued,
+	// shown on the observer overlay. Client-side bookkeeping only; not CRC'd or saved.
+	void recordAction();
+	UnsignedInt getActionsPerMinute() const { return m_actionsPerMinute; }
+
 	Bool didPlayerPreorder() const { return m_isPreorder; }
 
 	/// Grab the scorekeeper so we can score up in here!
@@ -838,4 +843,10 @@ private:
 	Bool									m_isPlayerDead;
 	Bool									m_logicalRetaliationModeEnabled;
 	Bool									m_surrenderConsented;	///< latched by "!surrender" chat; cleared by "!unsurrender"
+
+	UnsignedInt						m_actionBuckets[60];	///< circular buffer of 60 seconds for action tracking
+	UnsignedInt						m_currentActionBucket;
+	UnsignedInt						m_actionsPerMinute;
+
+	void updateActionBucket();
 };

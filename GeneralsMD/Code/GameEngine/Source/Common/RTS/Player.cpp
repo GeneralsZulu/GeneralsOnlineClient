@@ -362,6 +362,10 @@ void Player::init(const PlayerTemplate* pt)
 	m_isPlayerDead = FALSE;
 	m_surrenderConsented = FALSE;
 
+	std::fill(m_actionBuckets, m_actionBuckets + ARRAY_SIZE(m_actionBuckets), 0u);
+	m_currentActionBucket = 0u;
+	m_actionsPerMinute = 0u;
+
 	m_radarCount = 0;
 	m_disableProofRadarCount = 0;
 	m_radarDisabled = FALSE;
@@ -728,6 +732,27 @@ void Player::update()
 #endif
 
 	m_money.updateIncomeBucket();
+	updateActionBucket();
+}
+
+//=============================================================================
+void Player::recordAction()
+{
+	++m_actionBuckets[m_currentActionBucket];
+	++m_actionsPerMinute;
+}
+
+//=============================================================================
+void Player::updateActionBucket()
+{
+	UnsignedInt frame = TheGameLogic->getFrame();
+	UnsignedInt nextBucket = (frame / LOGICFRAMES_PER_SECOND) % ARRAY_SIZE(m_actionBuckets);
+	if (nextBucket != m_currentActionBucket)
+	{
+		m_actionsPerMinute -= m_actionBuckets[nextBucket];
+		m_currentActionBucket = nextBucket;
+		m_actionBuckets[m_currentActionBucket] = 0u;
+	}
 }
 
 //=============================================================================

@@ -214,6 +214,32 @@ static Player *getMessagePlayer(GameMessage *msg)
 }
 
 // ------------------------------------------------------------------------------------------------
+/** Does this network message count toward the issuing player's actions per minute?
+	* Messages the client sends on its own (CRCs, replay camera, popup acks) are not actions.
+	* Deselect is skipped because a click-select sends a deselect followed by a select,
+	* and that should count once. */
+// ------------------------------------------------------------------------------------------------
+static Bool isPlayerAction(GameMessage::Type type)
+{
+	if (type <= GameMessage::MSG_BEGIN_NETWORK_MESSAGES || type >= GameMessage::MSG_BEGIN_DEBUG_NETWORK_MESSAGES)
+		return FALSE;
+
+	switch (type)
+	{
+		case GameMessage::MSG_DESTROY_SELECTED_GROUP:
+		case GameMessage::MSG_CLEAR_INGAME_POPUP_MESSAGE:
+		case GameMessage::MSG_SET_BEACON_TEXT:
+		case GameMessage::MSG_SET_REPLAY_CAMERA:
+		case GameMessage::MSG_SELF_DESTRUCT:
+		case GameMessage::MSG_LOGIC_CRC:
+		case GameMessage::MSG_SURRENDER_CONSENT:
+			return FALSE;
+		default:
+			return TRUE;
+	}
+}
+
+// ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
 static Object * getSingleObjectFromSelection(const AIGroup *currentlySelectedGroup)
 {
@@ -372,6 +398,9 @@ void GameLogic::logicMessageDispatcher( GameMessage *msg, void *userData )
 
 	if (isInGame())
 	{
+		if (isPlayerAction(msg->getType()))
+			msgPlayer->recordAction();
+
 		if (msg->getType() >= GameMessage::MSG_BEGIN_NETWORK_MESSAGES && msg->getType() <= GameMessage::MSG_END_NETWORK_MESSAGES)
 		{
 			if (msg->getType() != GameMessage::MSG_LOGIC_CRC && msg->getType() != GameMessage::MSG_SET_REPLAY_CAMERA)

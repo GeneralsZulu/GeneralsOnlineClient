@@ -6795,7 +6795,8 @@ void InGameUI::drawObserverStats(Int & x, Int & y)
 					p->getPlayerColor(),
 					(Bool)(p->getPlayerIndex() >= 0 && p->getPlayerIndex() < MAX_PLAYER_COUNT && m_playerHunted[p->getPlayerIndex()]),
 					(p->getPlayerIndex() >= 0 && p->getPlayerIndex() < MAX_PLAYER_COUNT && m_playerHunted[p->getPlayerIndex()])
-						? (Int)((TheGameLogic->getFrame() - m_playerHuntedSinceFrame[p->getPlayerIndex()]) / LOGICFRAMES_PER_SECOND) : 0
+						? (Int)((TheGameLogic->getFrame() - m_playerHuntedSinceFrame[p->getPlayerIndex()]) / LOGICFRAMES_PER_SECOND) : 0,
+					p->getActionsPerMinute()
 			};
 
 			setTeams.insert(team);
@@ -6844,6 +6845,7 @@ void InGameUI::drawObserverStats(Int & x, Int & y)
                         else {
                             cells[7] = L"-";
                         }
+                        cells[8].format(L"%u", pd.apm);
 
                         for (Int i = 0; i < numCols; ++i)
                         {
