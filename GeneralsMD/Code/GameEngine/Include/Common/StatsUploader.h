@@ -493,6 +493,10 @@ void RadarvanReportReset(void);
 /// Current state; when READY, copies the report into `out`. Non-blocking.
 RadarvanReportState RadarvanReportPoll(RadarvanReport& out);
 
+/// -radarvanreporttest: checks the reply parsing, prints each failure to
+/// stdout and returns the failure count.
+int RadarvanReportSelfTest(void);
+
 /// Result of a map_vote/<N>/choose API call.
 struct ChooseMapResult
 {

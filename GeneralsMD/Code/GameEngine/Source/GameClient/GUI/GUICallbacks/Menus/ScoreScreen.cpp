@@ -2089,7 +2089,7 @@ void initInternetMultiPlayer(void)
 #if defined(RADARVAN_MATCH_URL_FORMAT)
 				buttonContinue->winSetText(UnicodeString(L"VIEW ON RADARVAN"));
 
-				s_radarvanMatchURL.format(RADARVAN_MATCH_URL_FORMAT, TheGameInfo ? TheGameInfo->getSeed() : 0);
+				s_radarvanMatchURL.format(RADARVAN_MATCH_URL_FORMAT, (Int)GetGameLogicRandomSeed()); // the id the match report uses
 				UnicodeString radarvanURL;
 				radarvanURL.translate(s_radarvanMatchURL);
 				strMatchURL = L"\nView this match, its replay and player stats on Radarvan: ";
