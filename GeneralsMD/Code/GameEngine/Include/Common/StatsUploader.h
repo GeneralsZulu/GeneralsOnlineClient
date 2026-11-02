@@ -416,6 +416,83 @@ struct RadarvanIntelData
 /// which returns the formatted text). Non-blocking.
 bool RadarvanIntelReadyData(RadarvanIntelData& out);
 
+// ---------------------------------------------------------------------------
+// End-screen "match report": what radarvan made of the match just played.
+//
+// The end screen opens before radarvan has the match - the replay upload
+// (StartMatchTelemetryUpload) is still in flight - so the worker polls
+// /api/narrative/<id> until the match exists, then fetches the win curve
+// (/api/predict/over_time/<id>) and the pre-game prediction
+// (/api/predict/match/<id>). Radarvan keys matches by the game seed, so the
+// id is TheGameInfo->getSeed(), passed signed as the replay header writes it.
+//
+// Teams A/B are radarvan's: team A is the lower team id. The player lists
+// are radarvan's canonical names, which need not match in-game names.
+// Strings are UTF-8.
+// ---------------------------------------------------------------------------
+enum
+{
+	RADARVAN_REPORT_MAX_BEATS  = 16,
+	RADARVAN_REPORT_MAX_POINTS = 240, ///< 30s windows; longer curves are thinned
+	RADARVAN_REPORT_MAX_TEAM   = 8,
+	RADARVAN_REPORT_NAME_LEN   = 64,
+	RADARVAN_REPORT_TEXT_LEN   = 256
+};
+
+struct RadarvanReportBeat
+{
+	char  kind[24];       ///< "first_blood", "turning_point", ...; unknown kinds are plain beats
+	float atMinute;       ///< < 0 when the beat isn't pinned to a time
+	char  playerName[RADARVAN_REPORT_NAME_LEN]; ///< canonical name, or empty
+	char  text[RADARVAN_REPORT_TEXT_LEN];
+};
+
+struct RadarvanReport
+{
+	bool hasStory;
+	char headline[RADARVAN_REPORT_TEXT_LEN];
+	int  beatCount;
+	RadarvanReportBeat beats[RADARVAN_REPORT_MAX_BEATS];
+
+	bool  hasCurve;
+	bool  teamAWon;
+	int   pointCount;
+	float pointMinute[RADARVAN_REPORT_MAX_POINTS];
+	float pointProbA[RADARVAN_REPORT_MAX_POINTS]; ///< P(team A wins) given the game so far
+	int   teamACount;
+	int   teamBCount;
+	char  teamA[RADARVAN_REPORT_MAX_TEAM][RADARVAN_REPORT_NAME_LEN];
+	char  teamB[RADARVAN_REPORT_MAX_TEAM][RADARVAN_REPORT_NAME_LEN];
+
+	bool  hasPrediction;
+	float predProbA;      ///< pre-game P(team A wins), aligned to the curve's team A
+	int   predTeamACount;
+	char  predTeamA[RADARVAN_REPORT_MAX_TEAM][RADARVAN_REPORT_NAME_LEN];
+};
+
+enum RadarvanReportState
+{
+	RADARVAN_REPORT_IDLE = 0,  ///< never started, or reset
+	RADARVAN_REPORT_WAITING,   ///< worker polling radarvan
+	RADARVAN_REPORT_READY,     ///< report available (any part may still be missing)
+	RADARVAN_REPORT_FAILED     ///< radarvan never produced the match in time
+};
+
+/// Start fetching the report for `matchId` on a detached worker. Supersedes
+/// any report in progress. Non-blocking; an empty apiBaseUrl does nothing.
+/// @param apiBaseUrl radarvan's API base, ending in "/api/"
+/// @param matchId    the game seed, signed
+/// @param maxWaitSec how long to wait for radarvan to have the match: long
+///                   for a match just played (its upload is in flight),
+///                   short for an old replay that is either there or not
+void RadarvanReportStart(const AsciiString& apiBaseUrl, int matchId, unsigned int maxWaitSec);
+
+/// Drop any report and make an in-flight worker stop at its next poll.
+void RadarvanReportReset(void);
+
+/// Current state; when READY, copies the report into `out`. Non-blocking.
+RadarvanReportState RadarvanReportPoll(RadarvanReport& out);
+
 /// Result of a map_vote/<N>/choose API call.
 struct ChooseMapResult
 {

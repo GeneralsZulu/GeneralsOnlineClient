@@ -182,6 +182,12 @@ public:
 	AsciiString m_teamStatsUrl;
 	AsciiString m_synergyUrl;
 
+	// Base of radarvan's API for the end-screen match report (the story,
+	// the win-probability curve and the pre-game prediction for the match
+	// just played; see RadarvanReportStart). Must end in "/api/". Empty
+	// string disables the report.
+	AsciiString m_radarvanApiUrl;
+
 	// URL to GET a JSON array of {map, matchCount} entries the map-select
 	// dialogs use to annotate each listbox row with how often the map has
 	// been played. Empty string disables the call.

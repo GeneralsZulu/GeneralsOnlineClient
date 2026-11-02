@@ -2797,15 +2797,18 @@ static bool sameNameSet(const std::vector<AsciiString> &a,
 
 // GET or POST `url`; on HTTP 2xx, fills outResp with the body and returns
 // true. Bounds every phase with a timeout so a stalled server can't keep the
-// worker thread (and its WinINet handles) alive indefinitely.
+// worker thread (and its WinINet handles) alive indefinitely. *outStatus gets
+// the HTTP status, or 0 when no response arrived.
 //
 // url/body are plain C strings (the caller owns them) so nothing crosses the
 // thread boundary as a shared AsciiString. The AsciiString built here for
 // openHttpRequest is worker-local and never escapes, which is safe.
-static bool intelHttpJson(const char *url, const char *method,
-                          const char *body, AsciiString &outResp)
+static bool intelHttpJsonStatus(const char *url, const char *method,
+                                const char *body, AsciiString &outResp,
+                                DWORD *outStatus)
 {
 	outResp.clear();
+	*outStatus = 0;
 	if (url == nullptr || url[0] == '\0')
 		return false;
 
@@ -2839,6 +2842,7 @@ static bool intelHttpJson(const char *url, const char *method,
 	DWORD statusSize = sizeof(statusCode);
 	HttpQueryInfoA(s.hRequest, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER,
 	               &statusCode, &statusSize, nullptr);
+	*outStatus = statusCode;
 	if (statusCode < 200 || statusCode >= 300)
 	{
 		printf("Radarvan intel: %s -> %lu\n", url, statusCode);
@@ -2871,6 +2875,13 @@ static bool intelHttpJson(const char *url, const char *method,
 	outResp = buf;
 	free(buf);
 	return true;
+}
+
+static bool intelHttpJson(const char *url, const char *method,
+                          const char *body, AsciiString &outResp)
+{
+	DWORD status;
+	return intelHttpJsonStatus(url, method, body, outResp, &status);
 }
 
 // ---- composition ----------------------------------------------------------
@@ -3341,6 +3352,379 @@ bool RadarvanIntelReadyData(RadarvanIntelData& out)
 	}
 	LeaveCriticalSection(&s_intelCS);
 	return ready;
+}
+
+// ===========================================================================
+// End-screen "match report" (see StatsUploader.h).
+//
+// Same threading contract as the intel worker above: the job is a plain-C POD,
+// the worker builds only worker-local AsciiStrings, and the result is handed
+// back as a malloc'd POD under s_reportCS.
+// ===========================================================================
+
+static CRITICAL_SECTION s_reportCS;
+static bool s_reportCSInit = false;         // only touched from the main thread
+static RadarvanReportState s_reportState = RADARVAN_REPORT_IDLE; // guarded
+static RadarvanReport *s_report = nullptr;  // malloc'd result (guarded)
+static unsigned long s_reportGen = 0;       // bumped per start/reset (guarded)
+
+struct ReportJob
+{
+	char narrativeUrl[512];
+	char overTimeUrl[512];
+	char predictUrl[512];
+	unsigned int maxWaitMs;
+	unsigned long gen;
+};
+
+static void ensureReportCS(void)
+{
+	if (!s_reportCSInit)
+	{
+		InitializeCriticalSection(&s_reportCS);
+		s_reportCSInit = true;
+	}
+}
+
+static bool reportSuperseded(unsigned long gen)
+{
+	EnterCriticalSection(&s_reportCS);
+	bool stale = (gen != s_reportGen);
+	LeaveCriticalSection(&s_reportCS);
+	return stale;
+}
+
+// Sleep up to `ms`, waking early if the report is superseded. True if still current.
+static bool reportSleep(unsigned long gen, unsigned int ms)
+{
+	unsigned int slept = 0;
+	while (slept < ms)
+	{
+		Sleep(250);
+		slept += 250;
+		if (reportSuperseded(gen))
+			return false;
+	}
+	return true;
+}
+
+static void appendUtf8(char *out, unsigned int cap, unsigned int &n, unsigned int cp)
+{
+	char enc[4];
+	unsigned int len;
+	if (cp < 0x80)        { enc[0] = (char)cp; len = 1; }
+	else if (cp < 0x800)  { enc[0] = (char)(0xC0 | (cp >> 6)); enc[1] = (char)(0x80 | (cp & 0x3F)); len = 2; }
+	else if (cp < 0x10000){ enc[0] = (char)(0xE0 | (cp >> 12)); enc[1] = (char)(0x80 | ((cp >> 6) & 0x3F)); enc[2] = (char)(0x80 | (cp & 0x3F)); len = 3; }
+	else                  { enc[0] = (char)(0xF0 | (cp >> 18)); enc[1] = (char)(0x80 | ((cp >> 12) & 0x3F)); enc[2] = (char)(0x80 | ((cp >> 6) & 0x3F)); enc[3] = (char)(0x80 | (cp & 0x3F)); len = 4; }
+	if (n + len >= cap)
+		return; // truncate on a whole character
+	memcpy(out + n, enc, len);
+	n += len;
+}
+
+static unsigned int parseHex4(const char *p)
+{
+	unsigned int v = 0;
+	int i;
+	for (i = 0; i < 4; ++i)
+	{
+		char c = p[i];
+		v <<= 4;
+		if (c >= '0' && c <= '9')      v |= (unsigned int)(c - '0');
+		else if (c >= 'a' && c <= 'f') v |= (unsigned int)(c - 'a' + 10);
+		else if (c >= 'A' && c <= 'F') v |= (unsigned int)(c - 'A' + 10);
+		else return 0xFFFFFFFFu;
+	}
+	return v;
+}
+
+// jsonGetString for display text: decodes \uXXXX (and surrogate pairs) to
+// UTF-8 and writes into a fixed buffer, truncating. False when the key is
+// missing or its value isn't a string (e.g. null).
+static bool jsonGetUtf8(const char *body, const char *key, char *out, unsigned int cap)
+{
+	const char *p = jsonValueStart(body, key);
+	if (p == nullptr || *p != '"' || cap == 0)
+		return false;
+	++p;
+	unsigned int n = 0;
+	while (*p != '\0' && *p != '"')
+	{
+		if (*p != '\\' || p[1] == '\0')
+		{
+			if (n + 1 < cap)
+				out[n++] = *p;
+			++p;
+			continue;
+		}
+		char e = p[1];
+		p += 2;
+		switch (e)
+		{
+			case 'n': if (n + 1 < cap) out[n++] = '\n'; break;
+			case 't': if (n + 1 < cap) out[n++] = '\t'; break;
+			case 'r': break;
+			case 'b': case 'f': break;
+			case 'u':
+			{
+				unsigned int cp = parseHex4(p);
+				if (cp == 0xFFFFFFFFu)
+					break;
+				p += 4;
+				if (cp >= 0xD800 && cp <= 0xDBFF && p[0] == '\\' && p[1] == 'u')
+				{
+					unsigned int lo = parseHex4(p + 2);
+					if (lo >= 0xDC00 && lo <= 0xDFFF)
+					{
+						cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+						p += 6;
+					}
+				}
+				appendUtf8(out, cap, n, cp);
+				break;
+			}
+			default: if (n + 1 < cap) out[n++] = e; break; // \" \\ \/
+		}
+	}
+	out[n] = '\0';
+	return true;
+}
+
+static int copyNameList(const char *body, const char *key,
+                        char names[RADARVAN_REPORT_MAX_TEAM][RADARVAN_REPORT_NAME_LEN])
+{
+	std::vector<AsciiString> list;
+	jsonGetStringArray(body, key, list);
+	int count = 0;
+	size_t i;
+	for (i = 0; i < list.size() && count < RADARVAN_REPORT_MAX_TEAM; ++i)
+	{
+		strncpy(names[count], list[i].str(), RADARVAN_REPORT_NAME_LEN - 1);
+		names[count][RADARVAN_REPORT_NAME_LEN - 1] = '\0';
+		++count;
+	}
+	return count;
+}
+
+static void nameListToVector(char names[RADARVAN_REPORT_MAX_TEAM][RADARVAN_REPORT_NAME_LEN],
+                             int count, std::vector<AsciiString> &out)
+{
+	int i;
+	for (i = 0; i < count; ++i)
+		out.push_back(AsciiString(names[i]));
+}
+
+// Fill the story from a /api/narrative body. False when radarvan doesn't have
+// the match yet (empty headline).
+static bool parseNarrative(const char *body, RadarvanReport &r)
+{
+	if (!jsonGetUtf8(body, "headline", r.headline, sizeof(r.headline)) || r.headline[0] == '\0')
+		return false;
+	r.hasStory = true;
+	r.beatCount = 0;
+	std::vector<AsciiString> beats;
+	jsonSplitObjects(jsonValueStart(body, "beats"), beats);
+	size_t i;
+	for (i = 0; i < beats.size() && r.beatCount < RADARVAN_REPORT_MAX_BEATS; ++i)
+	{
+		RadarvanReportBeat &b = r.beats[r.beatCount];
+		const char *obj = beats[i].str();
+		if (!jsonGetUtf8(obj, "text", b.text, sizeof(b.text)) || b.text[0] == '\0')
+			continue;
+		if (!jsonGetUtf8(obj, "kind", b.kind, sizeof(b.kind)))
+			b.kind[0] = '\0';
+		if (!jsonGetUtf8(obj, "playerName", b.playerName, sizeof(b.playerName)))
+			b.playerName[0] = '\0';
+		double m;
+		b.atMinute = jsonGetFloat(obj, "atMinute", m) ? (float)m : -1.0f;
+		++r.beatCount;
+	}
+	return true;
+}
+
+static void parseOverTime(const char *body, RadarvanReport &r)
+{
+	std::vector<AsciiString> pts;
+	jsonSplitObjects(jsonValueStart(body, "points"), pts);
+	if (pts.size() < 2)
+		return;
+	// Thin evenly when the game outruns the fixed buffer; always keep the last point.
+	size_t total = pts.size();
+	size_t keep = total < (size_t)RADARVAN_REPORT_MAX_POINTS ? total : (size_t)RADARVAN_REPORT_MAX_POINTS;
+	size_t k;
+	r.pointCount = 0;
+	for (k = 0; k < keep; ++k)
+	{
+		size_t src = (keep == total) ? k : (k * (total - 1)) / (keep - 1);
+		double minute, prob;
+		if (!jsonGetFloat(pts[src].str(), "at_minute", minute) || !jsonGetFloat(pts[src].str(), "prob_team_a", prob))
+			continue;
+		r.pointMinute[r.pointCount] = (float)minute;
+		r.pointProbA[r.pointCount] = (float)prob;
+		++r.pointCount;
+	}
+	AsciiString winner;
+	jsonGetString(body, "actual_winner", winner);
+	r.teamAWon = (winner.compare("team_a") == 0);
+	r.teamACount = copyNameList(body, "team_a_players", r.teamA);
+	r.teamBCount = copyNameList(body, "team_b_players", r.teamB);
+	r.hasCurve = (r.pointCount >= 2);
+}
+
+static void parsePrediction(const char *body, RadarvanReport &r)
+{
+	double probA;
+	if (!jsonGetFloat(body, "prob_team_a_wins", probA))
+		return;
+	r.predTeamACount = copyNameList(body, "team_a_players", r.predTeamA);
+	r.predProbA = (float)probA;
+	r.hasPrediction = true;
+	// Both endpoints put the lower team id first, but if the name lists say
+	// otherwise, trust the names.
+	if (r.hasCurve)
+	{
+		std::vector<AsciiString> pa, cb;
+		nameListToVector(r.predTeamA, r.predTeamACount, pa);
+		nameListToVector(r.teamB, r.teamBCount, cb);
+		if (!pa.empty() && sameNameSet(pa, cb))
+			r.predProbA = 1.0f - r.predProbA;
+	}
+}
+
+static void publishReport(unsigned long gen, RadarvanReport *r, RadarvanReportState state)
+{
+	EnterCriticalSection(&s_reportCS);
+	if (gen == s_reportGen)
+	{
+		if (s_report != nullptr)
+			free(s_report);
+		s_report = r;
+		s_reportState = state;
+		r = nullptr;
+	}
+	LeaveCriticalSection(&s_reportCS);
+	if (r != nullptr)
+		free(r); // superseded
+}
+
+static unsigned __stdcall reportThreadProc(void *arg)
+{
+	ReportJob *job = (ReportJob *)arg;
+	RadarvanReport *r = (RadarvanReport *)malloc(sizeof(RadarvanReport));
+	if (r == nullptr)
+	{
+		publishReport(job->gen, nullptr, RADARVAN_REPORT_FAILED);
+		free(job);
+		return 0;
+	}
+	memset(r, 0, sizeof(RadarvanReport));
+
+	// 1) Wait for radarvan to have the match. A headline without beats means
+	//    the replay isn't parsed yet; give the beats a few more polls.
+	const unsigned int pollMs = 3000;
+	unsigned int waited = 0;
+	int beatRetries = 4;
+	AsciiString resp;
+	DWORD status;
+	for (;;)
+	{
+		if (intelHttpJsonStatus(job->narrativeUrl, "GET", nullptr, resp, &status)
+			&& parseNarrative(resp.str(), *r)
+			&& (r->beatCount > 0 || beatRetries-- <= 0))
+			break;
+		if (waited >= job->maxWaitMs || !reportSleep(job->gen, pollMs))
+			break;
+		waited += pollMs;
+	}
+	if (!r->hasStory || reportSuperseded(job->gen))
+	{
+		free(r);
+		publishReport(job->gen, nullptr, RADARVAN_REPORT_FAILED);
+		free(job);
+		return 0;
+	}
+
+	// 2) Win curve. 422 (not two even teams) and 503 (no model) are final;
+	//    anything else gets a couple of retries.
+	int tries;
+	for (tries = 0; tries < 3; ++tries)
+	{
+		if (intelHttpJsonStatus(job->overTimeUrl, "GET", nullptr, resp, &status))
+		{
+			parseOverTime(resp.str(), *r);
+			break;
+		}
+		if (status == 422 || status == 503 || !reportSleep(job->gen, pollMs))
+			break;
+	}
+
+	// 3) Pre-game prediction, best-effort.
+	if (intelHttpJsonStatus(job->predictUrl, "GET", nullptr, resp, &status))
+		parsePrediction(resp.str(), *r);
+
+	publishReport(job->gen, r, RADARVAN_REPORT_READY);
+	free(job);
+	return 0;
+}
+
+void RadarvanReportReset(void)
+{
+	ensureReportCS();
+	EnterCriticalSection(&s_reportCS);
+	++s_reportGen;
+	s_reportState = RADARVAN_REPORT_IDLE;
+	if (s_report != nullptr)
+	{
+		free(s_report);
+		s_report = nullptr;
+	}
+	LeaveCriticalSection(&s_reportCS);
+}
+
+void RadarvanReportStart(const AsciiString& apiBaseUrl, int matchId, unsigned int maxWaitSec)
+{
+	RadarvanReportReset();
+	if (apiBaseUrl.isEmpty())
+		return;
+
+	ReportJob *job = (ReportJob *)malloc(sizeof(ReportJob));
+	if (job == nullptr)
+		return;
+	memset(job, 0, sizeof(ReportJob));
+	const char *base = apiBaseUrl.str();
+	_snprintf(job->narrativeUrl, sizeof(job->narrativeUrl) - 1, "%snarrative/%d", base, matchId);
+	_snprintf(job->overTimeUrl, sizeof(job->overTimeUrl) - 1, "%spredict/over_time/%d", base, matchId);
+	_snprintf(job->predictUrl, sizeof(job->predictUrl) - 1, "%spredict/match/%d", base, matchId);
+	job->maxWaitMs = maxWaitSec * 1000;
+
+	EnterCriticalSection(&s_reportCS);
+	job->gen = s_reportGen;
+	s_reportState = RADARVAN_REPORT_WAITING;
+	LeaveCriticalSection(&s_reportCS);
+
+	unsigned threadId = 0;
+	HANDLE hThread = (HANDLE)_beginthreadex(nullptr, 0, reportThreadProc, job, 0, &threadId);
+	if (hThread == NULL)
+	{
+		EnterCriticalSection(&s_reportCS);
+		s_reportState = RADARVAN_REPORT_FAILED;
+		LeaveCriticalSection(&s_reportCS);
+		free(job);
+		return;
+	}
+	CloseHandle(hThread);
+}
+
+RadarvanReportState RadarvanReportPoll(RadarvanReport& out)
+{
+	if (!s_reportCSInit)
+		return RADARVAN_REPORT_IDLE;
+	EnterCriticalSection(&s_reportCS);
+	RadarvanReportState state = s_reportState;
+	if (state == RADARVAN_REPORT_READY && s_report != nullptr)
+		memcpy(&out, s_report, sizeof(RadarvanReport));
+	LeaveCriticalSection(&s_reportCS);
+	return state;
 }
 
 // ---------------------------------------------------------------------------
