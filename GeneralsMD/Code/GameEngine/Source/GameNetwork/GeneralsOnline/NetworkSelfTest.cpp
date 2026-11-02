@@ -30,6 +30,7 @@
 #include "Common/GlobalData.h"
 #include "Common/ReleaseLog.h"
 #include "Common/StatsUploader.h"
+#include "WWLib/realcrc.h"
 #include "GameNetwork/LANObserverStream.h"
 #include "GameNetwork/GeneralsOnline/NGMP_include.h"
 #include "GameNetwork/GeneralsOnline/OnlineServices_Init.h"
@@ -633,6 +634,35 @@ static AsciiString writePrevSessionWerEvents(time_t since)
 // dating back to August.
 static const time_t CRASH_RECORD_MAX_AGE_S = 24 * 60 * 60;
 
+// Size and CRC of a support DLL the exe actually loaded, so the release log proves
+// which build of it shipped.
+static void logDllFingerprint(const char *name)
+{
+	char path[MAX_PATH] = "";
+	HMODULE h = GetModuleHandleA(name);
+	if (h == nullptr || GetModuleFileNameA(h, path, sizeof(path)) == 0)
+	{
+		ReleaseLog("NETDIAG dll %s: not loaded", name);
+		return;
+	}
+	FILE *f = fopen(path, "rb");
+	if (f == nullptr)
+	{
+		ReleaseLog("NETDIAG dll %s: unreadable %s", name, path);
+		return;
+	}
+	unsigned long crc = 0, size = 0;
+	unsigned char buf[16384];
+	size_t n;
+	while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+	{
+		crc = CRC_Memory(buf, (unsigned long)n, crc);
+		size += (unsigned long)n;
+	}
+	fclose(f);
+	ReleaseLog("NETDIAG dll %s: %lu bytes crc=%08lx %s", name, size, crc, path);
+}
+
 void NetDiag_CheckForCrashOnLaunch()
 {
 	static Bool s_done = FALSE;
@@ -657,6 +687,9 @@ void NetDiag_CheckForCrashOnLaunch()
 		// exist; it happens on the first line written, which this is if nothing
 		// else has logged yet.
 		ReleaseLog("NETDIAG launch check");
+		// 2.1.0 and 2.1.1 shipped a stale GameNetworkingSockets.dll and no log line could tell.
+		logDllFingerprint("GameNetworkingSockets.dll");
+		logDllFingerprint("gamespy.dll");
 
 		// 1. A crash record the engine wrote (ReleaseCrash, or the crash
 		//    reporter's hook), newer than the last one we shipped.

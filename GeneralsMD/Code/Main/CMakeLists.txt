@@ -193,6 +193,22 @@ if(WIN32)
 			"$<TARGET_FILE_DIR:z_generals>/discord-rpc-LICENSE.txt"
 	)
 
+	# GNS and gamespy are built in-tree and land in their own output dirs. Nothing else
+	# put the fresh DLL beside the exe, and the docker entrypoint only stages a vcpkg copy
+	# when none exists, so 2.1.0 and 2.1.1 shipped an Oct 17 GameNetworkingSockets.dll.
+	foreach(_rt_dll GameNetworkingSockets gamespy)
+		if(TARGET ${_rt_dll})
+			get_target_property(_rt_dll_type ${_rt_dll} TYPE)
+			if(_rt_dll_type STREQUAL "SHARED_LIBRARY")
+				add_custom_command(TARGET z_generals POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy_if_different
+						"$<TARGET_FILE:${_rt_dll}>"
+						"$<TARGET_FILE_DIR:z_generals>/$<TARGET_FILE_NAME:${_rt_dll}>"
+				)
+			endif()
+		endif()
+	endforeach()
+
 	if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/sentry-native/crashpad_handler.exe")
 		# sentry's crashpad backend is an out-of-process watcher: it needs its
 		# own executable next to the game, at the default handler path sentry

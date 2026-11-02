@@ -706,6 +706,11 @@ define go_stage_payload
 	done; \
 	[ "$$n" -gt 0 ] || { echo "ERROR: no support DLLs in $(4)/GeneralsMD -- did the build run?"; exit 1; }; \
 	echo "[payload] staged $$n support DLL(s) from $(4)/GeneralsMD"
+	@set -e; for built in "$(4)/bin/GameNetworkingSockets.dll" "$(4)/gamespy.dll"; do \
+		staged="$(1)/$$(basename "$$built")"; \
+		[ -e "$$built" ] || { echo "ERROR: $$built missing -- did the build run?"; exit 1; }; \
+		cmp -s "$$built" "$$staged" || { echo "ERROR: $$staged is not the DLL this build produced ($$built); that is how 2.1.0/2.1.1 shipped a stale copy"; exit 1; }; \
+	done
 	$(GO_VCREDIST) "$(1)"
 	cp "$(GO_TMP_BIG)" "$(1)/$(GO_BIG_NAME)"
 	cp "$(GO_CACERT)" "$(1)/cacert.pem"
