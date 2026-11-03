@@ -196,7 +196,8 @@ if(WIN32)
 	# GNS and gamespy are built in-tree and land in their own output dirs. Nothing else
 	# put the fresh DLL beside the exe, and the docker entrypoint only stages a vcpkg copy
 	# when none exists, so 2.1.0 and 2.1.1 shipped an Oct 17 GameNetworkingSockets.dll.
-	foreach(_rt_dll GameNetworkingSockets gamespy)
+	# libcurl_shared too: with no vcpkg copy staged, the -log build shipped no libcurl.dll at all.
+	foreach(_rt_dll GameNetworkingSockets gamespy libcurl_shared)
 		if(TARGET ${_rt_dll})
 			get_target_property(_rt_dll_type ${_rt_dll} TYPE)
 			if(_rt_dll_type STREQUAL "SHARED_LIBRARY")
