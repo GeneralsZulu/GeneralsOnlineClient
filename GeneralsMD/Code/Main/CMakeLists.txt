@@ -238,6 +238,8 @@ if(MSVC)
     if(NOT IS_VS6_BUILD)
         target_link_options(z_generals PRIVATE
             "/MANIFEST:NO"
+            # 4 GB of address space on 64-bit Windows; long games ran out at 2 GB.
+            "/LARGEADDRESSAWARE"
         )
     endif()
 

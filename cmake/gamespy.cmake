@@ -16,6 +16,11 @@ foreach(_gamespy_header IN ITEMS
     "${gamespy_SOURCE_DIR}/include/gamespy/gstats/gstats.h"
     "${gamespy_SOURCE_DIR}/include/gamespy/gstats/gpersist.h")
     file(READ "${_gamespy_header}" _gamespy_header_contents)
+    # Already patched: re-running the REPLACE would nest the #if inside its own
+    # #else on every configure, so the header changes and recompiles each build.
+    if(_gamespy_header_contents MATCHES "GAMESPY_IMPORT_DATA")
+        continue()
+    endif()
     string(REPLACE
         "extern char gcd_secret_key[256];"
         "#if defined(_WIN32) && defined(GAMESPY_IMPORT_DATA)\n\textern __declspec(dllimport) char gcd_secret_key[256];\n#else\n\textern char gcd_secret_key[256];\n#endif"
