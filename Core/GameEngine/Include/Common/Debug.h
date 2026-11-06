@@ -224,8 +224,10 @@ DEBUG_EXTERN_C void ReleaseFatalError(const char* title, const char* message);
 // plus a minidump), without exiting or showing a dialog. Called from the crash
 // reporter's hook, so a crash outside GameEngine::update still leaves the file
 // the next launch's crash upload looks for. e_info may be null.
+// Returns zero if no record could be written, so the caller can let Windows
+// file the crash instead of swallowing it.
 struct _EXCEPTION_POINTERS;
-DEBUG_EXTERN_C void ReleaseCrashRecordUnhandled(struct _EXCEPTION_POINTERS* e_info);
+DEBUG_EXTERN_C int ReleaseCrashRecordUnhandled(struct _EXCEPTION_POINTERS* e_info);
 
 #define RELEASE_CRASH(m)				do { ReleaseCrash(m); } while (0)
 #define RELEASE_CRASHLOCALIZED(p, m)		do { ReleaseCrashLocalized(p, m); } while (0)

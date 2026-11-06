@@ -43,6 +43,11 @@ void ReleaseLog(const char *fmt, ...);
 // Path/name of the release log file, for the telemetry uploader. Never null.
 const char *ReleaseGetLogFileName();
 
+// The per-user data directory, cached the first time it is resolvable. The crash
+// writers need it after TheGlobalData has been freed (post-match teardown).
+// NULL only if it was never resolved at all.
+const char *ReleaseLogGetUserDataDir();
+
 // The release log of the previous app session ("ReleaseLog.prev.txt"). The
 // current log truncates once per session, so without this a player who
 // crashes or quits and relaunches loses exactly the log that explains it.

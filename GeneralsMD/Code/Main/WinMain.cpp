@@ -882,7 +882,7 @@ static LONG WINAPI UnHandledExceptionFilter(struct _EXCEPTION_POINTERS* e_info)
 	// on-crash callback otherwise writes the record), and the next launch's
 	// crash upload keys off ReleaseCrashInfo.txt.
 	// It also walks the stack and writes the minimal minidump.
-	ReleaseCrashRecordUnhandled(e_info);
+	const int recorded = ReleaseCrashRecordUnhandled(e_info);
 #ifdef RTS_ENABLE_CRASHDUMP
 	if (TheMiniDumper && TheMiniDumper->IsInitialized())
 	{
@@ -891,6 +891,14 @@ static LONG WINAPI UnHandledExceptionFilter(struct _EXCEPTION_POINTERS* e_info)
 
 	MiniDumper::shutdownMiniDumper();
 #endif
+	// We captured nothing, so do not report this as handled: letting it fall
+	// through means Windows files the crash and WER LocalDumps can catch it.
+	// Without this a teardown crash left no dump, no record and no WER entry,
+	// and the game just vanished to desktop.
+	if (!recorded)
+	{
+		return EXCEPTION_CONTINUE_SEARCH;
+	}
 	return EXCEPTION_EXECUTE_HANDLER;
 }
 

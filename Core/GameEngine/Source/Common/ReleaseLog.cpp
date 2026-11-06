@@ -38,6 +38,7 @@ static const char *const RELEASE_LOG_FILE_NAME = "ReleaseLog.txt";
 static const char *const RELEASE_LOG_PREV_FILE_NAME = "ReleaseLog.prev.txt";
 static char s_releaseLogPath[512] = "";
 static char s_releaseLogPrevPath[512] = "";
+static char s_userDataDir[512] = "";
 
 // Background workers (the network self-test, the telemetry uploader) write
 // here too, so the lazy open and every write are serialized.
@@ -61,7 +62,14 @@ static const char *releaseLogPath()
 	strcat(s_releaseLogPath, RELEASE_LOG_FILE_NAME);
 	strcpy(s_releaseLogPrevPath, dir.str());
 	strcat(s_releaseLogPrevPath, RELEASE_LOG_PREV_FILE_NAME);
+	strcpy(s_userDataDir, dir.str());
 	return s_releaseLogPath;
+}
+
+const char *ReleaseLogGetUserDataDir()
+{
+	releaseLogPath();	// cache it now, while TheGlobalData may still exist
+	return (s_userDataDir[0] != '\0') ? s_userDataDir : NULL;
 }
 
 // Opened lazily on first write, truncating once per app session so a single

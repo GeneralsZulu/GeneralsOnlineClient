@@ -61,6 +61,7 @@
 #include "Common/CommandLine.h"
 #include "Common/Debug.h"
 #include "Common/CRCDebug.h"
+#include "Common/ReleaseLog.h"
 #include "Common/UnicodeString.h"
 #include "GameClient/ClientInstance.h"
 #include "GameClient/GameText.h"
@@ -831,13 +832,16 @@ void ReleaseCrash(const char *reason)
 	char prevbuf[ _MAX_PATH ];
 	char curbuf[ _MAX_PATH ];
 
-	if (TheGlobalData==nullptr) {
-		return; // We are shutting down, and TheGlobalData has been freed.  jba. [4/15/2003]
+	// Cached, not TheGlobalData: during shutdown and post-match teardown it has
+	// already been freed, and returning here threw the crash record away.
+	const char *userDataDir = ReleaseLogGetUserDataDir();
+	if (userDataDir == NULL) {
+		return;
 	}
 
-	strlcpy(prevbuf, TheGlobalData->getPath_UserData().str(), ARRAY_SIZE(prevbuf));
+	strlcpy(prevbuf, userDataDir, ARRAY_SIZE(prevbuf));
 	strlcat(prevbuf, RELEASECRASH_FILE_NAME_PREV, ARRAY_SIZE(prevbuf));
-	strlcpy(curbuf, TheGlobalData->getPath_UserData().str(), ARRAY_SIZE(curbuf));
+	strlcpy(curbuf, userDataDir, ARRAY_SIZE(curbuf));
 	strlcat(curbuf, RELEASECRASH_FILE_NAME, ARRAY_SIZE(curbuf));
 
  	remove(prevbuf);
@@ -896,19 +900,24 @@ void ReleaseCrash(const char *reason)
 	_exit(1);
 }
 
-void ReleaseCrashRecordUnhandled(struct _EXCEPTION_POINTERS* e_info)
+int ReleaseCrashRecordUnhandled(struct _EXCEPTION_POINTERS* e_info)
 {
-	if (TheGlobalData == nullptr)
-	{
-		return;
-	}
-
+	// The dump goes first: it must not depend on anything the teardown may
+	// already have freed.
 #ifdef RTS_ENABLE_CRASHDUMP
 	if (e_info != nullptr && TheMiniDumper && TheMiniDumper->IsInitialized())
 	{
 		TheMiniDumper->TriggerMiniDumpForException(e_info, DumpType_Minimal);
 	}
 #endif
+
+	// Not TheGlobalData: a crash during post-match teardown happens after it is
+	// freed, so keying off it discarded exactly the reports we needed most.
+	const char *userDataDir = ReleaseLogGetUserDataDir();
+	if (userDataDir == NULL)
+	{
+		return 0;
+	}
 
 	// Registers, the faulting address and the crashing thread's stack, into
 	// g_LastErrorDump, exactly as the engine's own exception filter would.
@@ -923,9 +932,9 @@ void ReleaseCrashRecordUnhandled(struct _EXCEPTION_POINTERS* e_info)
 
 	char prevbuf[ _MAX_PATH ];
 	char curbuf[ _MAX_PATH ];
-	strlcpy(prevbuf, TheGlobalData->getPath_UserData().str(), ARRAY_SIZE(prevbuf));
+	strlcpy(prevbuf, userDataDir, ARRAY_SIZE(prevbuf));
 	strlcat(prevbuf, RELEASECRASH_FILE_NAME_PREV, ARRAY_SIZE(prevbuf));
-	strlcpy(curbuf, TheGlobalData->getPath_UserData().str(), ARRAY_SIZE(curbuf));
+	strlcpy(curbuf, userDataDir, ARRAY_SIZE(curbuf));
 	strlcat(curbuf, RELEASECRASH_FILE_NAME, ARRAY_SIZE(curbuf));
 	remove(prevbuf);
 	if (rename(curbuf, prevbuf) != 0)
@@ -936,7 +945,7 @@ void ReleaseCrashRecordUnhandled(struct _EXCEPTION_POINTERS* e_info)
 	FILE *f = fopen(curbuf, "w");
 	if (f == nullptr)
 	{
-		return;
+		return 0;
 	}
 	// The exe's load address, so a bare address in the dump below can be
 	// turned into an offset into the PDB without the module list.
@@ -952,6 +961,7 @@ void ReleaseCrashRecordUnhandled(struct _EXCEPTION_POINTERS* e_info)
 	}
 	fflush(f);
 	fclose(f);
+	return 1;
 }
 
 void ReleaseCrashLocalized(const AsciiString& p, const AsciiString& m)
