@@ -70,28 +70,29 @@ string(REPLACE
     "${_gns_steamwebrtc_contents}")
 file(WRITE "${_gns_steamwebrtc_cmake}" "${_gns_steamwebrtc_contents}")
 
-# The fork's native ICE client never refreshes TURN permissions, so every relayed
-# link dies 300 s after it connects. Skip if a previous configure already applied it;
-# --ignore-whitespace because the build checks GNS out with CRLF endings.
-# The docker build runs Windows CMake under wine, where git is only reachable as
-# GIT_EXECUTABLE.
+# GNS source patches, in order; one already in the tree is skipped. --ignore-whitespace
+# because the checkout has CRLF endings; under wine git is only reachable as GIT_EXECUTABLE.
 find_package(Git REQUIRED)
-set(_gns_turn_patch "${CMAKE_CURRENT_LIST_DIR}/patches/gns-turn-permission-refresh.patch")
-execute_process(
-    COMMAND "${GIT_EXECUTABLE}" apply --ignore-whitespace --reverse --check "${_gns_turn_patch}"
-    WORKING_DIRECTORY "${gamenetworkingsockets_SOURCE_DIR}"
-    RESULT_VARIABLE _gns_turn_patch_applied
-    OUTPUT_QUIET ERROR_QUIET)
-if(NOT _gns_turn_patch_applied EQUAL 0)
+set(_gns_patches
+    "${CMAKE_CURRENT_LIST_DIR}/patches/gns-turn-permission-refresh.patch"
+    "${CMAKE_CURRENT_LIST_DIR}/patches/gns-snp-send-crypt-guard.patch")
+foreach(_gns_patch IN LISTS _gns_patches)
     execute_process(
-        COMMAND "${GIT_EXECUTABLE}" apply --ignore-whitespace "${_gns_turn_patch}"
+        COMMAND "${GIT_EXECUTABLE}" apply --ignore-whitespace --reverse --check "${_gns_patch}"
         WORKING_DIRECTORY "${gamenetworkingsockets_SOURCE_DIR}"
-        RESULT_VARIABLE _gns_turn_patch_result
-        ERROR_VARIABLE _gns_turn_patch_error)
-    if(NOT _gns_turn_patch_result EQUAL 0)
-        message(FATAL_ERROR "Could not apply ${_gns_turn_patch} (${_gns_turn_patch_result}): ${_gns_turn_patch_error}")
+        RESULT_VARIABLE _gns_patch_applied
+        OUTPUT_QUIET ERROR_QUIET)
+    if(NOT _gns_patch_applied EQUAL 0)
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" apply --ignore-whitespace "${_gns_patch}"
+            WORKING_DIRECTORY "${gamenetworkingsockets_SOURCE_DIR}"
+            RESULT_VARIABLE _gns_patch_result
+            ERROR_VARIABLE _gns_patch_error)
+        if(NOT _gns_patch_result EQUAL 0)
+            message(FATAL_ERROR "Could not apply ${_gns_patch} (${_gns_patch_result}): ${_gns_patch_error}")
+        endif()
     endif()
-endif()
+endforeach()
 
 add_subdirectory(
     "${gamenetworkingsockets_SOURCE_DIR}"
