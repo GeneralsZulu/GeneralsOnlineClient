@@ -1175,6 +1175,7 @@ void DeinitLanGameGadgets()
 void LanGameOptionsMenuInit( WindowLayout *layout, void *userData )
 {
 	s_randomizeCount = 0;
+	RadarvanMapSummaryReset(); // no "/intel" reply from a previous lobby
 	if (TheLAN->GetMyGame() && TheLAN->GetMyGame()->isGameInProgress())
 	{
 		// If we init while the game is in progress, we are really returning to the menu
@@ -1404,6 +1405,7 @@ static void shutdownComplete( WindowLayout *layout )
 //-------------------------------------------------------------------------------------------------
 void LanGameOptionsMenuShutdown( WindowLayout *layout, void *userData )
 {
+	RadarvanMapSummaryReset();
 	TheMouse->setCursor(Mouse::ARROW);
 	TheMouse->setMouseText(UnicodeString::TheEmptyString,nullptr,nullptr);
 	EnableSlotListUpdates(FALSE);
@@ -1444,6 +1446,10 @@ void LanGameOptionsMenuUpdate( WindowLayout * layout, void *userData)
 	if(LANisShuttingDown && TheShell->isAnimFinished() && TheTransitionHandler->isFinished())
 		shutdownComplete(layout);
 	//TheLAN->update(); // this is handled in the lobby
+
+	// Show a "/intel" reply once it arrives.
+	if (!LANisShuttingDown)
+		lobbyIntelPoll(lanLocalSystemChat);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1961,6 +1967,12 @@ WindowMsgHandledType LanGameOptionsMenuSystem( GameWindow *window, UnsignedInt m
 						{
 							// TheSuperHackers @feature bill-rich 11/10/2026 Network self-test, results uploaded.
 							lanLocalSystemChat(NetSelfTest_Start("chat command", TRUE));
+						}
+						else if (_wcsnicmp(txtInput.str(), L"/intel", 6) == 0 &&
+						         (txtInput.str()[6] == L'\0' || txtInput.str()[6] == L' '))
+						{
+							// Like the online lobby: anything after "/intel" is ignored, never sent as chat.
+							lobbyIntelCommand(TheLAN->GetMyGame(), lanLocalSystemChat);
 						}
 						else if (txtInput.compareNoCase(L"/resume") == 0 || txtInput.compareNoCase(L"/resume off") == 0)
 						{

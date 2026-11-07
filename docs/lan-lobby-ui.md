@@ -43,7 +43,7 @@ assets baked into `Zulu.big`. About 300 lines.
 ## LAN Randomize button and team balancing (PR #1, #12, #17, #19)
 
 The original Zulu Randomize button (commit `00f8423e6`) does
-three things on host-press:
+two things on host-press:
 
 1. **Balance teams via API** — POSTs `{players: [{name, general,
    team}]}` to the radarvan `balance_teams` endpoint and applies
@@ -55,16 +55,42 @@ three things on host-press:
 2. **Randomize unconditional slots** — every slot that doesn't have
    a locked faction / color / start position gets a randomized
    assignment under `performRandomAssign`.
-3. **Fetch and broadcast `map_summary` blurb** — once balance + random
-   succeed, POST the post-randomize roster to the radarvan
-   `map_summary` endpoint and echo each `\n`-split line of the
-   response into the lobby chat. PR #19 (`54876c1ce`) extended
-   this from "host-only echo" to "broadcast to all players in the
-   lobby."
+The `map_summary` chat blurb that `c67abc07e` / PR #19 added to Randomize
+was dropped in the Zero Hour port (`a2677782d`); it now lives behind the
+`/intel` chat command instead (below).
 
 Code touchpoints: `LanGameOptionsMenu.cpp` (Randomize handler),
-`GlobalData.{cpp,h}` (`m_balanceTeamsUrl`, `m_mapSummaryUrl`),
+`GlobalData.{cpp,h}` (`m_balanceTeamsUrl`),
 `StatsUploader.cpp` (the actual HTTPS calls).
+
+## `/intel` chat command
+
+Any player in a LAN or online lobby can type `/intel` (anything after it
+is ignored). The client POSTs the map and roster to radarvan's
+`map_summary/` endpoint (built from `m_radarvanApiUrl`) and prints the
+reply - games on this map, team h2h, each player's record on this map
+and general, recent form - into that player's own chat only. Nothing is
+broadcast.
+
+- **Map:** the `.map` file's leaf name without the extension
+  (`RadarvanMapKey`), which is what radarvan's `map_key` joins on. It is
+  the same in every client language and needs no map cache, so a guest
+  who has not downloaded the map yet can still ask. The load-screen
+  intel sends the same key.
+- **Roster:** names as UTF-8 (`RadarvanPlayerName`, AI spaces removed),
+  general as radarvan's `General` enum, team 1-based. A player still on
+  Random goes out as `UNRECOGNIZED`; the client drops radarvan's
+  `name[UNRECOGNIZED] 0-0` record entries for them and adds a note that
+  they show map results only.
+- **Discord:** radarvan's `map_summary` also posts each prediction to its
+  (dev) notify webhook; that is expected.
+- **Threading:** one request at a time on a worker thread, bounded by
+  `intelHttpJsonStatus`'s timeouts; the lobby polls it each frame, and
+  `~GameEngine` waits for a running one so it cannot outlive the engine.
+
+Code touchpoints: `lobbyIntelCommand` / `lobbyIntelPoll`
+(`RandomAssign.cpp`), `RadarvanMapSummary*` (`StatsUploader.cpp`), the
+chat handlers in `LanGameOptionsMenu.cpp` and `WOLGameSetupMenu.cpp`.
 
 ## Radarvan Pick player count
 
@@ -84,11 +110,11 @@ list includes only playing humans, excluding observer names.
   `RequestGameStart` so by the time the sim runs every client sees
   the same slots.
 - **API-server dependencies.** `balance_teams` and `map_summary`
-  are radarvan endpoints. If they're down or slow, Randomize still
-  randomizes locally but the chat blurb is skipped; the network
-  error is shown as a SYSTEM line in lobby chat. The default URLs
-  live in `GlobalData.cpp` and can be overridden via the
-  `-balanceTeamsUrl` / `-mapSummaryUrl` command-line flags.
+  are radarvan endpoints. If `balance_teams` is down or slow,
+  Randomize still randomizes locally and the network error is shown
+  as a SYSTEM line in lobby chat; if `map_summary` is down, `/intel`
+  says so. The default URLs live in `GlobalData.cpp`; `balance_teams`
+  can be overridden with `-balanceTeamsUrl`.
 - **Discord post timing.** The Discord webhook post (see
   [lan-lobby-discord.md](lan-lobby-discord.md)) also fires from the
   Randomize handler, after `lanUpdateSlotList()`. It's blocking

@@ -34,7 +34,7 @@ This is a developer-facing inventory, not a player-facing changelog.
   on Randomize.
 - [lan-lobby-ui.md](lan-lobby-ui.md) — Map-select player-count
   filter, lobby map preview derrick/crate overlays, Randomize button,
-  `map_summary` blurb echoed to lobby chat.
+  `/intel` chat command (radarvan `map_summary` blurb).
 
 ## Visuals / UI
 

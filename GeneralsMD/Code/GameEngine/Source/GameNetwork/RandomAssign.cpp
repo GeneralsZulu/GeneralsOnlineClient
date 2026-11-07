@@ -533,19 +533,7 @@ void performRandomAssign(GameInfo *game, std::vector<RandomSlotAssignment> *outC
 // table doesn't have to care about spacing. Human names pass through.
 static AsciiString slotNameForApi(const GameSlot *slot)
 {
-	AsciiString out;
-	out.translate(slot->getName());
-	if (slot->isAI())
-	{
-		AsciiString joined;
-		for (const char *p = out.str(); *p != '\0'; ++p)
-		{
-			if (*p != ' ')
-				joined.concat(*p);
-		}
-		out = joined;
-	}
-	return out;
+	return RadarvanPlayerName(slot->getName(), slot->isAI());
 }
 
 // Hand-maintained aliases for slot-display-name <-> server-canonical-name
@@ -765,6 +753,132 @@ bool tryBalanceTeamsViaApi(GameInfo *game, AsciiString *outError)
 	}
 
 	return true;
+}
+
+//-----------------------------------------------------------------------------
+// Lobby "/intel": radarvan's map_summary blurb (games on this map, team h2h,
+// each player's record and recent form here and on their general), shown
+// only to the player who asked.
+//-----------------------------------------------------------------------------
+
+// Whether the roster of the request in flight had players on Random (main
+// thread only): their general is unknown, so the reply covers the map only.
+static Bool s_intelHadRandom = FALSE;
+
+void lobbyIntelCommand(const GameInfo *game, LobbyIntelSink sink)
+{
+	if (TheGlobalData->m_radarvanApiUrl.isEmpty())
+	{
+		sink(UnicodeString(L"/intel: radarvan is not configured in this build."));
+		return;
+	}
+	if (game == nullptr)
+	{
+		sink(UnicodeString(L"/intel: not in a game lobby."));
+		return;
+	}
+	if (RadarvanMapSummaryBusy())
+	{
+		sink(UnicodeString(L"/intel: still waiting for the last answer."));
+		return;
+	}
+	AsciiString mapKey = RadarvanMapKey(game->getMap());
+	if (mapKey.isEmpty())
+	{
+		sink(UnicodeString(L"/intel: no map is selected."));
+		return;
+	}
+
+	std::vector<MapSummaryPlayer> roster;
+	Bool hadRandom = FALSE;
+	for (Int i = 0; i < MAX_SLOTS; ++i)
+	{
+		const GameSlot *slot = game->getConstSlot(i);
+		if (!slot || !slot->isOccupied())
+			continue;
+		if (slot->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
+			continue;
+		MapSummaryPlayer entry;
+		entry.name = slotNameForApi(slot);
+		if (entry.name.isEmpty())
+			continue;
+		entry.general = slot->getPlayerTemplate();
+		if (entry.general == PLAYERTEMPLATE_RANDOM)
+			hadRandom = TRUE;
+		entry.team = slot->getTeamNumber(); // 0-based, -1 = none; sent 1-based
+		roster.push_back(entry);
+	}
+	if (roster.empty())
+	{
+		sink(UnicodeString(L"/intel: no players in the lobby yet."));
+		return;
+	}
+
+	AsciiString url = TheGlobalData->m_radarvanApiUrl;
+	url.concat("map_summary/");
+	if (!RadarvanMapSummaryStart(url, mapKey, roster))
+	{
+		sink(UnicodeString(L"/intel: could not start the request."));
+		return;
+	}
+	s_intelHadRandom = hadRandom;
+	sink(UnicodeString(L"/intel: asking radarvan about this map and lineup..."));
+}
+
+// radarvan's "player records here: a[USA] 4-1, b[UNRECOGNIZED] 0-0" line
+// reports a Random player's (unknown) general as UNRECOGNIZED with a
+// meaningless record. Drop those entries, and the line if none are left.
+// Returns false when the line should not be shown.
+static Bool stripUnrecognizedRecords(UnicodeString &line)
+{
+	static const WideChar prefix[] = L"player records here: ";
+	const size_t prefixLen = wcslen(prefix);
+	if (wcsncmp(line.str(), prefix, prefixLen) != 0 || wcsstr(line.str(), L"[UNRECOGNIZED]") == nullptr)
+		return TRUE;
+
+	UnicodeString out;
+	Int kept = 0;
+	const WideChar *p = line.str() + prefixLen;
+	while (*p != 0)
+	{
+		const WideChar *e = wcsstr(p, L", ");
+		size_t len = (e != nullptr) ? (size_t)(e - p) : wcslen(p);
+		UnicodeString entry;
+		entry.set(p, (Int)len);
+		if (wcsstr(entry.str(), L"[UNRECOGNIZED]") == nullptr)
+		{
+			out.concat(kept == 0 ? prefix : L", ");
+			out.concat(entry);
+			++kept;
+		}
+		p += len;
+		if (e != nullptr)
+			p += 2;
+	}
+	line = out;
+	return kept > 0;
+}
+
+void lobbyIntelPoll(LobbyIntelSink sink)
+{
+	std::vector<UnicodeString> lines;
+	RadarvanMapSummaryState state = RadarvanMapSummaryPoll(lines);
+	if (state == RADARVAN_SUMMARY_FAILED)
+	{
+		sink(UnicodeString(L"/intel: radarvan did not answer."));
+	}
+	else if (state == RADARVAN_SUMMARY_DONE)
+	{
+		if (lines.empty())
+			sink(UnicodeString(L"/intel: radarvan has nothing on this map and lineup yet."));
+		for (size_t i = 0; i < lines.size(); ++i)
+		{
+			if (stripUnrecognizedRecords(lines[i]))
+				sink(lines[i]);
+		}
+		if (s_intelHadRandom && !lines.empty())
+			sink(UnicodeString(L"/intel: players on Random show map results only; their general's record shows once they pick one."));
+	}
 }
 
 //-----------------------------------------------------------------------------

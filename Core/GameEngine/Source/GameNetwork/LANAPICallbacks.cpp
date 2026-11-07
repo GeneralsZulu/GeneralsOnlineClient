@@ -226,19 +226,7 @@ static void startLanBattlefieldIntel(GameInfo *game)
 		if (slot->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
 			continue;
 		MapSummaryPlayer entry;
-		entry.name.translate(slot->getName());
-		if (slot->isAI())
-		{
-			// AI names carry spaces ("Easy AI"); strip them so the server sees
-			// a single token, matching how map_summary sends AI slots.
-			AsciiString joined;
-			for (const char *p = entry.name.str(); *p != '\0'; ++p)
-			{
-				if (*p != ' ')
-					joined.concat(*p);
-			}
-			entry.name = joined;
-		}
+		entry.name = RadarvanPlayerName(slot->getName(), slot->isAI());
 		if (entry.name.isEmpty())
 			continue;
 		entry.general = slot->getPlayerTemplate();
@@ -288,33 +276,8 @@ static void startLanBattlefieldIntel(GameInfo *game)
 	localTeam = (localRosterIdx >= 0 && localRosterIdx < (Int)roster.size())
 		? roster[localRosterIdx].team : 0;
 
-	// Map name: prefer the .map's display name (what players see), stripped of
-	// the trailing " (N)" player-count suffix and lowercased, matching what
-	// map_summary sends so the server keys on the same identifier.
-	AsciiString mapName;
-	if (TheMapCache)
-	{
-		const MapMetaData *md = TheMapCache->findMap(game->getMap());
-		if (md && !md->m_displayName.isEmpty())
-			mapName.translate(md->m_displayName);
-	}
-	const char *ms = mapName.str();
-	Int mlen = mapName.getLength();
-	if (mlen >= 4 && ms[mlen - 1] == ')')
-	{
-		Int mi = mlen - 2;
-		while (mi > 0 && ms[mi] >= '0' && ms[mi] <= '9')
-			--mi;
-		if (mi >= 1 && ms[mi] == '(' && ms[mi - 1] == ' ' && mi != mlen - 2)
-		{
-			AsciiString trimmed;
-			Int j;
-			for (j = 0; j < mi - 1; ++j)
-				trimmed.concat(ms[j]);
-			mapName = trimmed;
-		}
-	}
-	mapName.toLower();
+	// The map as radarvan keys it (same as lobby "/intel" sends).
+	AsciiString mapName = RadarvanMapKey(game->getMap());
 
 	RadarvanIntelStart(TheGlobalData->m_predictUrl,
 	                   TheGlobalData->m_teamStatsUrl,

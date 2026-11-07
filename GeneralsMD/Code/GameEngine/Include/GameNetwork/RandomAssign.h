@@ -24,6 +24,7 @@
 
 #include "Lib/BaseType.h"
 #include "Common/AsciiString.h"
+#include "Common/UnicodeString.h"
 
 #include <vector>
 
@@ -56,6 +57,14 @@ void performRandomAssign(GameInfo *game, std::vector<RandomSlotAssignment> *outC
 // network failure; *outError is then a player-facing message fit for chat, and
 // the slots are left untouched.
 bool tryBalanceTeamsViaApi(GameInfo *game, AsciiString *outError);
+
+// Chat "/intel": radarvan's map_summary blurb for the lobby's map and roster,
+// shown only to the player who asked. lobbyIntelCommand starts the request
+// (non-blocking) and reports through `sink`; call lobbyIntelPoll from the
+// lobby's per-frame update to print the reply once it arrives.
+typedef void (*LobbyIntelSink)(const UnicodeString &line);
+void lobbyIntelCommand(const GameInfo *game, LobbyIntelSink sink);
+void lobbyIntelPoll(LobbyIntelSink sink);
 
 // Source of randomness for assignStartPositionsGlobal. Returns a value in
 // [lo, hi] inclusive. Game start passes a GameLogicRandomValue wrapper so

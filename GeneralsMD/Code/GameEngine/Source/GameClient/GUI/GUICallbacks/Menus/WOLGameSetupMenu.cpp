@@ -2665,6 +2665,7 @@ Bool initialAcceptEnable = FALSE;
 void WOLGameSetupMenuInit( WindowLayout *layout, void *userData )
 {
 	s_randomizeCount = 0;
+	RadarvanMapSummaryReset(); // no "/intel" reply from a previous lobby
 	s_localSlotChosen = FALSE;
 	s_applyingLobbyUpdate = FALSE;
 	// A fresh lobby: forget the last one's map-download bookkeeping.
@@ -3188,6 +3189,7 @@ static void shutdownComplete( WindowLayout *layout )
 //-------------------------------------------------------------------------------------------------
 void WOLGameSetupMenuShutdown( WindowLayout *layout, void *userData )
 {
+	RadarvanMapSummaryReset();
 	NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
 
 	if (pLobbyInterface != nullptr)
@@ -3257,6 +3259,9 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 
 	// Fetch the lobby's map if we do not have it (see wolUpdateMapDownload).
 	wolUpdateMapDownload();
+
+	// Show a "/intel" reply once it arrives.
+	lobbyIntelPoll(wolLocalSystemChat);
 
 	// need to exit?
 	if (NGMP_OnlineServicesManager::GetInstance() != nullptr && NGMP_OnlineServicesManager::GetInstance()->IsPendingFullTeardown())
@@ -3595,10 +3600,18 @@ Bool handleGameSetupSlashCommands(UnicodeString uText)
 		wolTryArmResumeFromReplay(arg == "off");
 		return TRUE; // was a slash command
 	}
+	else if (token == "intel")
+	{
+		NGMP_OnlineServices_LobbyInterface* pIntelLobby = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+		NGMPGame *intelGame = pIntelLobby ? pIntelLobby->GetCurrentGame() : nullptr;
+		lobbyIntelCommand(intelGame, wolLocalSystemChat);
+		return TRUE; // was a slash command
+	}
 	else if (token == "help" || token == "commands")
 	{
 		const Color helpColor = GameMakeColor(127, 127, 127, 255);
 		GadgetListBoxAddEntryText(listboxGameSetupChat, UnicodeString(L"/me <message> - Send an emote."), helpColor, -1, -1);
+		GadgetListBoxAddEntryText(listboxGameSetupChat, UnicodeString(L"/intel - Show radarvan's history for this map and lineup (only you see it)."), helpColor, -1, -1);
 		GadgetListBoxAddEntryText(listboxGameSetupChat, UnicodeString(L"/resume - Same as the Resume button: continue the host's last recorded match; /resume off cancels (host only)."), helpColor, -1, -1);
 		GadgetListBoxAddEntryText(listboxGameSetupChat, UnicodeString(L"/friendsonly - Let only friends join (host only)."), helpColor, -1, -1);
 		GadgetListBoxAddEntryText(listboxGameSetupChat, UnicodeString(L"/public - Let anyone join (host only)."), helpColor, -1, -1);
