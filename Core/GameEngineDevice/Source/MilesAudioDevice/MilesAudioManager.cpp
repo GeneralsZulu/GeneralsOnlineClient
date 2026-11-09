@@ -93,6 +93,7 @@ MilesAudioManager::MilesAudioManager() :
 	m_numStreams(0),
 	m_delayFilter(nullptr),
 	m_binkHandle(nullptr),
+	m_jukeboxOwnsMusic(false),
 	m_pref3DProvider(AsciiString::TheEmptyString),
 	m_prefSpeaker(AsciiString::TheEmptyString)
 {
@@ -450,6 +451,8 @@ void MilesAudioManager::reset()
 #endif
 
 	AudioManager::reset();
+	m_jukeboxOwnsMusic = FALSE;
+	m_jukebox.restart();	// every game gets its own order
 	stopAllAudioImmediately();
   removeAllAudioRequests();
   // This must come after stopAllAudioImmediately() and removeAllAudioRequests(), to ensure that
@@ -465,6 +468,7 @@ void MilesAudioManager::update()
 	processRequestList();
 	processPlayingList();
 	processFadingList();
+	updateJukebox();
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -652,6 +656,22 @@ void MilesAudioManager::playAudioEvent( AudioRequest* req )
 	AudioHandle handleToKill = event->getHandleToKill();
 
 	AsciiString fileToPlay = event->getFilename();
+
+	// TheSuperHackers @feature While the jukebox is on it owns the music: the stock per-faction
+	// script chain keeps asking for its tracks and silences on hand-typed timers, and all of that
+	// is ignored. Done here rather than in addAudioEvent so no logical audio bookkeeping changes.
+	Bool jukeboxSubstituted = FALSE;
+	if (info->m_soundType == AT_Music && jukeboxActive()) {
+		// Remember the event so updateJukebox can reuse its MusicTrack info and volume.
+		m_jukeboxEventName = event->getEventName();
+		if (findActiveMusic() != nullptr) {
+			return;
+		}
+		fileToPlay = m_jukebox.currentTrack();
+		jukeboxSubstituted = TRUE;
+		m_jukeboxOwnsMusic = TRUE;
+	}
+
 	PlayingAudio *newPlaying = allocatePlayingAudio();
 	newPlaying->m_requestStop = req->m_requestStop;
 
@@ -688,6 +708,13 @@ void MilesAudioManager::playAudioEvent( AudioRequest* req )
 				stream = AIL_open_stream(m_digitalHandle, fileToPlay.str(), 0);
 			} else {
 				stream = nullptr;
+			}
+
+			if (jukeboxSubstituted && !stream) {
+				// Miles could not decode it. Forget the file so it is not retried every cycle;
+				// updateJukebox starts the next one.
+				m_jukeboxOwnsMusic = FALSE;
+				m_jukebox.dropCurrentTrack();
 			}
 
 			// Put this on here, so that the audio event RTS will be cleaned up regardless.
@@ -867,6 +894,12 @@ void MilesAudioManager::stopAudioEvent( AudioHandle handle )
 
 	std::list<PlayingAudio *>::iterator it;
 	if ( handle == AHSV_StopTheMusic || handle == AHSV_StopTheMusicFade ) {
+		// A jukebox song plays to its end. This is what stops the stock script chain from cutting
+		// it off at whatever length was typed into the scb timer.
+		if (m_jukeboxOwnsMusic && jukeboxActive() && findActiveMusic() != nullptr) {
+			return;
+		}
+
 		// for music, find and stop the currently playing music stream(s).
 		for ( it = m_playingStreams.begin(); it != m_playingStreams.end(); ++it ) {
 			PlayingAudio *playing = (*it);
@@ -1359,6 +1392,10 @@ void MilesAudioManager::initFilters3D( H3DSAMPLE sample, AudioEventRTS *event, c
 //-------------------------------------------------------------------------------------------------
 AsciiString MilesAudioManager::nextMusicTrack()
 {
+	if (jukeboxActive()) {
+		return jukeboxSkip(TRUE);
+	}
+
 	AsciiString trackName;
 
 	if (PlayingAudio *playing = findActiveMusic()) {
@@ -1378,6 +1415,10 @@ AsciiString MilesAudioManager::nextMusicTrack()
 //-------------------------------------------------------------------------------------------------
 AsciiString MilesAudioManager::prevMusicTrack()
 {
+	if (jukeboxActive()) {
+		return jukeboxSkip(FALSE);
+	}
+
 	AsciiString trackName;
 
 	if (PlayingAudio *playing = findActiveMusic()) {
@@ -1403,12 +1444,116 @@ Bool MilesAudioManager::isMusicPlaying() const
 //-------------------------------------------------------------------------------------------------
 Bool MilesAudioManager::hasMusicTrackCompleted( const AsciiString& trackName, Int numberOfTimes ) const
 {
+	// While the jukebox owns the music the named stock track is not playing at all. Its stream
+	// carries our song and a loop count of 1, which would read as "finished" immediately.
+	if (m_jukeboxOwnsMusic) {
+		return FALSE;
+	}
+
 	if (const PlayingAudio *playing = findActiveMusic(&trackName)) {
 		if (INFINITE_LOOP_COUNT - AIL_stream_loop_count(playing->m_stream) >= numberOfTimes) {
 			return TRUE;
 		}
 	}
 	return FALSE;
+}
+
+//-------------------------------------------------------------------------------------------------
+/** TRUE when the player's Music folder holds mp3s and we are in a game. The shell map behind the
+	* menus and the score screen keep their stock tracks. */
+//-------------------------------------------------------------------------------------------------
+Bool MilesAudioManager::jukeboxActive()
+{
+	if (m_digitalHandle == nullptr) {
+		return FALSE;	// no audio device: headless, or audio off
+	}
+
+	if (!isOn(AudioAffect_Music)) {
+		return FALSE;
+	}
+
+	if (TheGameLogic == nullptr || !TheGameLogic->isInGame() || TheGameLogic->isInShellGame()) {
+		return FALSE;
+	}
+
+	// setLoadingMap() wraps the whole of startNewGame, so this is exactly the load screen: the
+	// faction load jingle keeps it, and we take over once the match is up.
+	if (TheGameLogic->isLoadingMap()) {
+		return FALSE;
+	}
+
+	m_jukebox.scanOnce();
+	return !m_jukebox.isEmpty();
+}
+
+//-------------------------------------------------------------------------------------------------
+/** The stock next/prev track keys (Shift+M and friends) walk the playlist instead of the INI
+	* track list. Returns the new song's file name, for the on-screen message. */
+//-------------------------------------------------------------------------------------------------
+AsciiString MilesAudioManager::jukeboxSkip( Bool forward )
+{
+	if (forward) {
+		m_jukebox.advance();
+	} else {
+		m_jukebox.retreat();
+	}
+
+	// Clear the flag first: it is what makes stopAudioEvent swallow a stop, and it also stops
+	// updateJukebox advancing a second time when it sees the music gone. The new song starts
+	// from updateJukebox once the stop has been processed.
+	m_jukeboxOwnsMusic = FALSE;
+	removeAudioEvent(AHSV_StopTheMusic);
+
+	return m_jukebox.currentTrackLeafName();
+}
+
+//-------------------------------------------------------------------------------------------------
+/** Keeps the playlist running: starts the next song once the current one ends, and hands the music
+	* back when we leave the game or the player turns music off. */
+//-------------------------------------------------------------------------------------------------
+void MilesAudioManager::updateJukebox()
+{
+	if (!jukeboxActive()) {
+		if (m_jukeboxOwnsMusic) {
+			// Left the game, or music was switched off. Release our song so whatever plays next
+			// (the menus, the score screen) is not talking over it. Advance even though the song
+			// did not finish, or unmuting - or the next game - would start it over.
+			m_jukeboxOwnsMusic = FALSE;
+			m_jukebox.advance();
+			removeAudioEvent(AHSV_StopTheMusicFade);
+		}
+		return;
+	}
+
+	// The jukebox borrows its MusicTrack info, and so its volume, from the last music event that
+	// was asked for, so it stays quiet until something has asked once.
+	if (m_jukeboxEventName.isEmpty() || m_jukebox.isEmpty()) {
+		return;
+	}
+
+	if (findActiveMusic() != nullptr) {
+		if (!m_jukeboxOwnsMusic) {
+			// Music we don't own is playing: the load jingle, or a stock track that started
+			// before we became active. Either loops forever on its own, so fade it out; the
+			// next update starts our song.
+			removeAudioEvent(AHSV_StopTheMusicFade);
+		}
+		return;
+	}
+
+	// With the slider at the bottom addAudioEvent culls the event as muted, so don't queue a
+	// request per frame for nothing.
+	if (getVolume(AudioAffect_Music) < m_audioSettings->m_minVolume) {
+		return;
+	}
+
+	if (m_jukeboxOwnsMusic) {
+		m_jukeboxOwnsMusic = FALSE;	// our song finished; the substitution in playAudioEvent sets it again
+		m_jukebox.advance();
+	}
+
+	AudioEventRTS event(m_jukeboxEventName);
+	addAudioEvent(&event);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -2737,7 +2882,8 @@ void MilesAudioManager::playStream( AudioEventRTS *event, HSTREAM stream )
 {
 	// Force it to the beginning
 	if (event->getAudioEventInfo()->m_soundType == AT_Music) {
-		AIL_set_stream_loop_count(stream, INFINITE_LOOP_COUNT);
+		// A stock track loops until a script changes it. A jukebox song ends, so the playlist moves on.
+		AIL_set_stream_loop_count(stream, m_jukeboxOwnsMusic ? 1 : INFINITE_LOOP_COUNT);
 	}
 
 	AIL_register_stream_callback(stream, setStreamCompleted);

@@ -22,6 +22,7 @@
 
 #include "Common/AsciiString.h"
 #include "Common/GameAudio.h"
+#include "Common/MusicJukebox.h"
 #include "mss/mss.h"
 #include "WWLib/mutex.h"
 
@@ -281,6 +282,12 @@ class MilesAudioManager : public AudioManager
 		PlayingAudio *findActiveMusic( const AsciiString *trackName = nullptr );
 		const PlayingAudio *findActiveMusic( const AsciiString* trackName = nullptr ) const;
 
+		// TheSuperHackers @feature The player's own Music folder, played in place of the stock
+		// faction playlists. See MusicJukebox.h.
+		Bool jukeboxActive();		///< TRUE when the jukebox, not the script chain, owns the music
+		void updateJukebox();		///< start the next song once the current one ends
+		AsciiString jukeboxSkip( Bool forward );	///< the next/prev track keys, routed to the playlist
+
 		void releasePlayingAudioInListIfStopped(std::list<PlayingAudio *> &list, CriticalSectionClass &cs);
 		void stopAllAudioImmediately();
 		void freeAllMilesHandles();
@@ -336,6 +343,10 @@ class MilesAudioManager : public AudioManager
 
 		AudioFileCache *m_audioCache;
 		PlayingAudio *m_binkHandle;
+
+		MusicJukebox m_jukebox;
+		AsciiString m_jukeboxEventName;	///< last music event asked for, reused to carry its MusicTrack info
+		Bool m_jukeboxOwnsMusic;				///< a jukebox song is playing right now
 		UnsignedInt m_num2DSamples;
 		UnsignedInt m_num3DSamples;
 		UnsignedInt m_numStreams;
