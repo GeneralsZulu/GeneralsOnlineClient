@@ -37,6 +37,7 @@
 #include "GameClient/TerrainVisual.h" // for TERRAIN_LOD_MIN definition
 #include "GameClient/GameText.h"
 #include "GameNetwork/NetworkDefs.h"
+#include "Common/MusicJukebox.h"
 #include "GameNetwork/RandomAssign.h"
 #include "WWLib/trim.h"
 
@@ -415,6 +416,13 @@ Int parseMapName(char *args[], int num)
 Int parseRandomAssignTest(char *args[], int num)
 {
 	requestRandomAssignSelfTest();
+	return 1;
+}
+
+// Run the music jukebox playlist self-test after engine init and exit (see MusicJukebox.h).
+Int parseMusicJukeboxTest(char *args[], int num)
+{
+	requestMusicJukeboxSelfTest();
 	return 1;
 }
 
@@ -1441,6 +1449,7 @@ static CommandLineParam paramsForStartup[] =
 	// This runs the game without a window, graphics, input and audio. You can combine this with -replay
 	{ "-headless", parseHeadless },
 	{ "-randomassigntest", parseRandomAssignTest },
+	{ "-musicjukeboxtest", parseMusicJukeboxTest },
 
 	// TheSuperHackers @feature helmutbuhler 13/04/2025
 	// Play back a replay. Pass the filename including .rep afterwards.

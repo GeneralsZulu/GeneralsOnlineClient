@@ -106,6 +106,7 @@
 #include "GameNetwork/LANAPI.h"
 #include "GameNetwork/GameSpy/GameResultsThread.h"
 #include "GameNetwork/MapDownloadHook.h"
+#include "Common/MusicJukebox.h"
 #include "GameNetwork/RandomAssign.h"
 #include "Common/StatsUploader.h"
 
@@ -812,6 +813,14 @@ void GameEngine::init()
 			// just quit, since the map cache has already updated
 			//populateMapListbox(nullptr, true, true);
 			m_quitting = TRUE;
+		}
+
+		if (isMusicJukeboxSelfTestRequested())
+		{
+			// Playlist logic only; nothing here needs the audio device.
+			Int failures = runMusicJukeboxSelfTest();
+			fflush(stdout);
+			ExitProcess(failures);
 		}
 
 		if (isRandomAssignSelfTestRequested())

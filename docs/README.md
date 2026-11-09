@@ -47,6 +47,13 @@ This is a developer-facing inventory, not a player-facing changelog.
 - [slide-anim-snap.md](slide-anim-snap.md) — Snap-to-final-position
   fix for `SlideFromRight/Left` window animations.
 
+## Audio
+
+- [music-jukebox.md](music-jukebox.md) — mp3s in the user-data
+  `Music\` folder play shuffled in place of the hardcoded per-faction
+  script chains, with no `Music.ini` entry, scb edit or configured
+  song length.
+
 ## Replays / Telemetry
 
 - [telemetry-uploads.md](telemetry-uploads.md) — radarvan replay /
