@@ -339,6 +339,9 @@ GameEngine::~GameEngine()
 
 	TheGameResultsQueue->endThreads();
 
+	// A lobby "/intel" request may still be running; it uses the game allocator.
+	RadarvanMapSummaryShutdown();
+
 	// TheSuperHackers @fix helmutbuhler 03/06/2025
 	// Reset all subsystems before deletion to prevent crashing due to cross dependencies.
 	reset();

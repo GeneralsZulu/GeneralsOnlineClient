@@ -18,6 +18,7 @@
 #pragma once
 
 #include "Common/AsciiString.h"
+#include "Common/UnicodeString.h"
 #include "GameNetwork/MapDownloadHook.h"
 
 #include <vector>
@@ -321,9 +322,11 @@ struct BalanceTeamsResult
 BalanceTeamsResult BalanceTeamsFromServer(const AsciiString& url,
                                           const std::vector<AsciiString>& playerNames);
 
-/// One name + general (faction template index, as found in a replay header)
-/// + team (lobby team index from GameSlot::getTeamNumber(); -1 = no team).
-/// Note: MapSummaryFromServer emits team 1-based on the wire (team + 1).
+/// One roster entry for radarvan's predict and map_summary endpoints.
+/// `name` is UTF-8 (see RadarvanPlayerName). `general` is the faction
+/// template index (GameSlot::getPlayerTemplate()); it goes out on the wire
+/// as radarvan's General enum. `team` is whatever the caller documents
+/// (predict: 1-based; /intel: GameSlot::getTeamNumber(), 0-based, -1 = none).
 struct MapSummaryPlayer
 {
 	AsciiString name;
@@ -331,25 +334,53 @@ struct MapSummaryPlayer
 	int team;
 };
 
-/// Result of a map_summary API call. `success` is true only when the server
-/// returned HTTP 2xx. The body, if any, is split on '\n' (empty lines
-/// dropped) and surfaced in `lines`.
-struct MapSummaryResult
+/// A player name as radarvan expects it: UTF-8, and for AI slots with the
+/// spaces removed ("Easy Army" -> "EasyArmy").
+AsciiString RadarvanPlayerName(const UnicodeString& name, bool isAI);
+
+/// The map identifier radarvan keys on: the .map file's leaf name without
+/// the extension, as UTF-8 (radarvan's map_key does the rest). Unlike the
+/// display name it is the same in every language and needs no map cache.
+/// Empty when mapPath is empty.
+AsciiString RadarvanMapKey(const AsciiString& mapPath);
+
+// ---------------------------------------------------------------------------
+// Lobby "/intel": the map_summary blurb, fetched on a worker thread so the
+// lobby never stalls. One request at a time; the lobby polls each frame.
+// ---------------------------------------------------------------------------
+
+enum RadarvanMapSummaryState
 {
-	bool success;
-	std::vector<AsciiString> lines;
+	RADARVAN_SUMMARY_IDLE,     ///< nothing requested, or the result was already handed over
+	RADARVAN_SUMMARY_PENDING,  ///< request in flight
+	RADARVAN_SUMMARY_DONE,     ///< reply arrived (lines filled by the poll; may be empty)
+	RADARVAN_SUMMARY_FAILED    ///< network error, timeout or non-2xx
 };
 
-/// Ask the map_summary endpoint for a human-readable blurb describing recent
-/// history on the given map for the given roster. POSTs a JSON body of the
-/// form { "map_name": "...", "players": [{"name": "...", "general": <int>, "team": <int>}, ...] }.
-/// Best-effort, blocking; uses WinINet's default timeouts.
-/// @param url Full URL of the map_summary endpoint
-/// @param mapName Display name of the map
-/// @param players Roster (name + general index) to summarize
-MapSummaryResult MapSummaryFromServer(const AsciiString& url,
-                                      const AsciiString& mapName,
-                                      const std::vector<MapSummaryPlayer>& players);
+/// Start a map_summary request for `mapName` (RadarvanMapKey) and `players`
+/// (team 0-based, -1 = none). Returns false if nothing was started: a
+/// previous request is still running (see RadarvanMapSummaryBusy), the URL
+/// or roster is empty, or the thread could not be spawned.
+bool RadarvanMapSummaryStart(const AsciiString& url,
+                             const AsciiString& mapName,
+                             const std::vector<MapSummaryPlayer>& players);
+
+/// True while a worker is still running, even one whose result was dropped
+/// by RadarvanMapSummaryReset.
+bool RadarvanMapSummaryBusy(void);
+
+/// Non-blocking. Returns DONE or FAILED exactly once per request (with the
+/// reply's non-empty lines in outLines on DONE), PENDING while in flight,
+/// IDLE otherwise.
+RadarvanMapSummaryState RadarvanMapSummaryPoll(std::vector<UnicodeString>& outLines);
+
+/// Drop any unread result and ignore the reply of a request in flight
+/// (e.g. on leaving a lobby).
+void RadarvanMapSummaryReset(void);
+
+/// Wait (bounded by the request timeouts) for a running worker to finish.
+/// Called from GameEngine's destructor so no worker outlives the engine.
+void RadarvanMapSummaryShutdown(void);
 
 // ---------------------------------------------------------------------------
 // Multiplayer loading-screen "battlefield intel".

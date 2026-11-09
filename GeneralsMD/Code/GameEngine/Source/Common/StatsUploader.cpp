@@ -1457,144 +1457,91 @@ static void appendJsonEscaped(AsciiString &out, const char *src)
 	}
 }
 
-MapSummaryResult MapSummaryFromServer(const AsciiString& url,
-                                      const AsciiString& mapName,
-                                      const std::vector<MapSummaryPlayer>& players)
+// ---------------------------------------------------------------------------
+// Names as radarvan keys them. Request bodies are JSON, which is UTF-8, so
+// text goes out as UTF-8 rather than in the system code page.
+// ---------------------------------------------------------------------------
+
+static AsciiString wideToUtf8(const WideChar *w)
 {
-	MapSummaryResult result;
-	result.success = false;
+	AsciiString out;
+	if (w == nullptr || *w == 0)
+		return out;
+	int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+	if (n <= 1)
+		return out;
+	char *buf = (char *)malloc((size_t)n);
+	if (buf == nullptr)
+		return out;
+	WideCharToMultiByte(CP_UTF8, 0, w, -1, buf, n, nullptr, nullptr);
+	out = buf;
+	free(buf);
+	return out;
+}
 
-	if (url.isEmpty())
-		return result;
+// UTF-8 bytes [b, b + len) to a UnicodeString.
+static UnicodeString utf8ToUnicode(const char *b, int len)
+{
+	UnicodeString out;
+	if (b == nullptr || len <= 0)
+		return out;
+	int n = MultiByteToWideChar(CP_UTF8, 0, b, len, nullptr, 0);
+	if (n <= 0)
+		return out;
+	WideChar *buf = (WideChar *)malloc(((size_t)n + 1) * sizeof(WideChar));
+	if (buf == nullptr)
+		return out;
+	MultiByteToWideChar(CP_UTF8, 0, b, len, buf, n);
+	buf[n] = 0;
+	out = buf;
+	free(buf);
+	return out;
+}
 
-	// Build the JSON body: { "map_name": "...", "players": [{"name":"...","general":N,"team":T}, ...] }
-	AsciiString body;
-	body.concat("{\"map_name\":\"");
-	appendJsonEscaped(body, mapName.isEmpty() ? "" : mapName.str());
-	body.concat("\",\"players\":[");
-	size_t i;
-	for (i = 0; i < players.size(); ++i)
+AsciiString RadarvanPlayerName(const UnicodeString& name, bool isAI)
+{
+	if (!isAI)
+		return wideToUtf8(name.str());
+	// AI names carry spaces ("Easy Army"); join them into one token.
+	UnicodeString joined;
+	const WideChar *p;
+	for (p = name.str(); *p != 0; ++p)
 	{
-		if (i > 0)
-			body.concat(',');
-		body.concat("{\"name\":\"");
-		appendJsonEscaped(body, players[i].name.isEmpty() ? "" : players[i].name.str());
-		char gbuf[64];
-		// players[i].team is 0-based (-1 = no team); emit it 1-based in the
-		// map_summary request so teams start at 1 (0 = no team) on the wire.
-		sprintf(gbuf, "\",\"general\":%d,\"team\":%d}", players[i].general, players[i].team + 1);
-		body.concat(gbuf);
+		if (*p != L' ')
+			joined.concat(*p);
 	}
-	body.concat("]}");
+	return wideToUtf8(joined.str());
+}
 
-	WinInetSession s;
-	if (!openHttpRequest(url, "POST", nullptr, "Map summary", &s))
-		return result;
-
-	const char *headers = "Content-Type: application/json\r\nAccept: application/json\r\n";
-	BOOL sent = HttpSendRequestA(s.hRequest, headers, (DWORD)strlen(headers),
-	                             const_cast<char*>(body.str()), (DWORD)body.getLength());
-	if (!sent)
+AsciiString RadarvanMapKey(const AsciiString& mapPath)
+{
+	if (mapPath.isEmpty())
+		return AsciiString::TheEmptyString;
+	const char *leaf = mapPath.str();
+	const char *c;
+	for (c = mapPath.str(); *c != '\0'; ++c)
 	{
-		printf("Map summary: HttpSendRequest failed (%lu)\n", GetLastError());
-		closeHttpRequest(&s);
-		return result;
+		if (*c == '\\' || *c == '/')
+			leaf = c + 1;
 	}
+	int len = (int)strlen(leaf);
+	if (len > 4 && _stricmp(leaf + len - 4, ".map") == 0)
+		len -= 4;
+	if (len <= 0)
+		return AsciiString::TheEmptyString;
 
-	DWORD statusCode = 0;
-	DWORD statusSize = sizeof(statusCode);
-	HttpQueryInfoA(s.hRequest, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER,
-	               &statusCode, &statusSize, nullptr);
-	if (statusCode < 200 || statusCode >= 300)
-	{
-		printf("Map summary: %s -> %lu\n", url.str(), statusCode);
-		closeHttpRequest(&s);
-		return result;
-	}
-
-	// Read the response body. The server returns a JSON string (a single
-	// quoted, possibly newline-bearing token). Cap at 16 KiB.
-	static const DWORD bodyCap = 16 * 1024;
-	char *resp = (char *)malloc(bodyCap);
-	if (resp == nullptr)
-	{
-		closeHttpRequest(&s);
-		return result;
-	}
-	DWORD totalRead = 0;
-	for (;;)
-	{
-		DWORD bytesRead = 0;
-		if (!InternetReadFile(s.hRequest, resp + totalRead,
-		                      bodyCap - 1 - totalRead, &bytesRead))
-			break;
-		if (bytesRead == 0) break;
-		totalRead += bytesRead;
-		if (totalRead >= bodyCap - 1) break;
-	}
-	resp[totalRead] = '\0';
-	closeHttpRequest(&s);
-
-	printf("Map summary: %s -> %lu\n", url.str(), statusCode);
-
-	// Strip a single layer of surrounding double-quotes if present (the
-	// endpoint returns a bare JSON string), and unescape \n / \" / \\ so
-	// the caller can split the text on real newlines.
-	const char *p = resp;
-	while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
-		++p;
-	const char *end = resp + totalRead;
-	while (end > p && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n'))
-		--end;
-	if (end > p && *p == '"' && end[-1] == '"')
-	{
-		++p;
-		--end;
-	}
-
-	AsciiString current;
-	while (p < end)
-	{
-		char c = *p++;
-		if (c == '\\' && p < end)
-		{
-			char n = *p++;
-			switch (n)
-			{
-				case 'n':
-					if (!current.isEmpty())
-					{
-						result.lines.push_back(current);
-						current.clear();
-					}
-					break;
-				case 'r':                          break;
-				case 't':  current.concat('\t');   break;
-				case '"':  current.concat('"');    break;
-				case '\\': current.concat('\\');   break;
-				case '/':  current.concat('/');    break;
-				default:   current.concat(n);      break;
-			}
-		}
-		else if (c == '\n')
-		{
-			if (!current.isEmpty())
-			{
-				result.lines.push_back(current);
-				current.clear();
-			}
-		}
-		else if (c != '\r')
-		{
-			current.concat(c);
-		}
-	}
-	if (!current.isEmpty())
-		result.lines.push_back(current);
-
-	free(resp);
-	result.success = true;
-	return result;
+	// The path is in the system code page; re-encode it as UTF-8.
+	int n = MultiByteToWideChar(CP_ACP, 0, leaf, len, nullptr, 0);
+	if (n <= 0)
+		return AsciiString::TheEmptyString;
+	WideChar *w = (WideChar *)malloc(((size_t)n + 1) * sizeof(WideChar));
+	if (w == nullptr)
+		return AsciiString::TheEmptyString;
+	MultiByteToWideChar(CP_ACP, 0, leaf, len, w, n);
+	w[n] = 0;
+	AsciiString out = wideToUtf8(w);
+	free(w);
+	return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -3203,6 +3150,34 @@ static int templateIndexToGeneral(int tmpl)
 	}
 }
 
+// The roster body predict and map_summary share:
+// {"map_name":"...","players":[{"name":"...","general":G,"team":T}, ...]}
+// general goes out as radarvan's General enum; team as players[i].team +
+// teamOffset (predict's callers already hold 1-based teams, /intel 0-based).
+static AsciiString buildRosterBody(const AsciiString& mapName,
+                                   const std::vector<MapSummaryPlayer>& players,
+                                   int teamOffset)
+{
+	AsciiString body;
+	body.concat("{\"map_name\":\"");
+	appendJsonEscaped(body, mapName.isEmpty() ? "" : mapName.str());
+	body.concat("\",\"players\":[");
+	size_t i;
+	for (i = 0; i < players.size(); ++i)
+	{
+		if (i > 0)
+			body.concat(',');
+		body.concat("{\"name\":\"");
+		appendJsonEscaped(body, players[i].name.isEmpty() ? "" : players[i].name.str());
+		char gb[64];
+		sprintf(gb, "\",\"general\":%d,\"team\":%d}",
+		        templateIndexToGeneral(players[i].general), players[i].team + teamOffset);
+		body.concat(gb);
+	}
+	body.concat("]}");
+	return body;
+}
+
 void RadarvanIntelStart(const AsciiString& predictUrl,
                         const AsciiString& teamStatsUrl,
                         const AsciiString& synergyUrl,
@@ -3241,26 +3216,14 @@ void RadarvanIntelStart(const AsciiString& predictUrl,
 	job->localTeam = localTeam;
 	job->gen = gen;
 
-	// Prebuild the predict request body: {"map_name":"...","players":[...]}.
-	AsciiString body;
-	body.concat("{\"map_name\":\"");
-	appendJsonEscaped(body, mapName.isEmpty() ? "" : mapName.str());
-	body.concat("\",\"players\":[");
+	// Prebuild the predict request body (teams are already 1-based here).
+	AsciiString body = buildRosterBody(mapName, players, 0);
 	size_t i;
 	int teamSizes[2];
 	int teamNums[2];
 	int distinctTeams = 0;
 	for (i = 0; i < players.size(); ++i)
 	{
-		if (i > 0)
-			body.concat(',');
-		body.concat("{\"name\":\"");
-		appendJsonEscaped(body, players[i].name.isEmpty() ? "" : players[i].name.str());
-		char gb[64];
-		// players[i].general is the raw template index; predict wants the
-		// General enum, so convert (mirrors radarvan's replay ingestion).
-		sprintf(gb, "\",\"general\":%d,\"team\":%d}", templateIndexToGeneral(players[i].general), players[i].team);
-		body.concat(gb);
 		// track team sizes so we can derive the synergy game_format (NvN)
 		int t = players[i].team;
 		int d;
@@ -3274,7 +3237,6 @@ void RadarvanIntelStart(const AsciiString& predictUrl,
 			++distinctTeams;
 		}
 	}
-	body.concat("]}");
 	strncpy(job->body, body.str(), sizeof(job->body) - 1);
 
 	strncpy(job->predictUrl, predictUrl.str(), sizeof(job->predictUrl) - 1);
@@ -3439,15 +3401,11 @@ static unsigned int parseHex4(const char *p)
 	return v;
 }
 
-// jsonGetString for display text: decodes \uXXXX (and surrogate pairs) to
-// UTF-8 and writes into a fixed buffer, truncating. False when the key is
-// missing or its value isn't a string (e.g. null).
-static bool jsonGetUtf8(const char *body, const char *key, char *out, unsigned int cap)
+// Decode a JSON string body starting just past its opening quote into out
+// (UTF-8, NUL-terminated, truncating): \uXXXX and surrogate pairs become
+// UTF-8, \n stays a newline, \r \b \f are dropped.
+static void jsonDecodeUtf8(const char *p, char *out, unsigned int cap)
 {
-	const char *p = jsonValueStart(body, key);
-	if (p == nullptr || *p != '"' || cap == 0)
-		return false;
-	++p;
 	unsigned int n = 0;
 	while (*p != '\0' && *p != '"')
 	{
@@ -3488,7 +3446,208 @@ static bool jsonGetUtf8(const char *body, const char *key, char *out, unsigned i
 		}
 	}
 	out[n] = '\0';
+}
+
+// jsonGetString for display text: decodes \uXXXX (and surrogate pairs) to
+// UTF-8 and writes into a fixed buffer, truncating. False when the key is
+// missing or its value isn't a string (e.g. null).
+static bool jsonGetUtf8(const char *body, const char *key, char *out, unsigned int cap)
+{
+	const char *p = jsonValueStart(body, key);
+	if (p == nullptr || *p != '"' || cap == 0)
+		return false;
+	jsonDecodeUtf8(p + 1, out, cap);
 	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Lobby "/intel": map_summary on a worker thread.
+//
+// Same threading rules as the load-screen intel above: the job is a plain-C
+// POD built on the main thread, the request goes through intelHttpJsonStatus
+// (so it is bounded by timeouts), and the decoded reply comes back as a
+// malloc'd UTF-8 C string, so no AsciiString buffer crosses threads. At most
+// one worker runs at a time; GameEngine's destructor waits for it.
+// ---------------------------------------------------------------------------
+
+struct MapSummaryJob
+{
+	char url[512];
+	char body[4096];
+	unsigned long gen;
+};
+
+static const unsigned int MAP_SUMMARY_TEXT_CAP = 16 * 1024;
+
+static CRITICAL_SECTION s_summaryCS;
+static bool s_summaryCSInit = false;          // only touched from the main thread
+static HANDLE s_summaryThread = NULL;         // the last worker; main thread only
+static RadarvanMapSummaryState s_summaryState = RADARVAN_SUMMARY_IDLE; // guarded
+static char *s_summaryTextC = nullptr;        // malloc'd UTF-8 reply, guarded
+static unsigned long s_summaryGen = 0;        // bumped per request/reset; stale workers discard
+
+static void ensureSummaryCS(void)
+{
+	if (!s_summaryCSInit)
+	{
+		InitializeCriticalSection(&s_summaryCS);
+		s_summaryCSInit = true;
+	}
+}
+
+static unsigned __stdcall mapSummaryThreadProc(void *arg)
+{
+	MapSummaryJob *job = (MapSummaryJob *)arg;
+	char *text = nullptr;
+	{
+		AsciiString resp; // worker-local
+		DWORD status = 0;
+		if (intelHttpJsonStatus(job->url, "POST", job->body, resp, &status))
+		{
+			// The endpoint returns one JSON string.
+			const char *p = resp.str();
+			while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+				++p;
+			if (*p == '"')
+			{
+				text = (char *)malloc(MAP_SUMMARY_TEXT_CAP);
+				if (text != nullptr)
+					jsonDecodeUtf8(p + 1, text, MAP_SUMMARY_TEXT_CAP);
+			}
+		}
+	}
+
+	EnterCriticalSection(&s_summaryCS);
+	if (job->gen == s_summaryGen)
+	{
+		if (s_summaryTextC != nullptr)
+			free(s_summaryTextC);
+		s_summaryTextC = text;
+		s_summaryState = (text != nullptr) ? RADARVAN_SUMMARY_DONE : RADARVAN_SUMMARY_FAILED;
+	}
+	else if (text != nullptr)
+	{
+		free(text); // superseded; discard
+	}
+	LeaveCriticalSection(&s_summaryCS);
+
+	free(job);
+	return 0;
+}
+
+void RadarvanMapSummaryReset(void)
+{
+	ensureSummaryCS();
+	EnterCriticalSection(&s_summaryCS);
+	++s_summaryGen;
+	s_summaryState = RADARVAN_SUMMARY_IDLE;
+	if (s_summaryTextC != nullptr)
+	{
+		free(s_summaryTextC);
+		s_summaryTextC = nullptr;
+	}
+	LeaveCriticalSection(&s_summaryCS);
+}
+
+bool RadarvanMapSummaryBusy(void)
+{
+	return s_summaryThread != NULL && WaitForSingleObject(s_summaryThread, 0) == WAIT_TIMEOUT;
+}
+
+bool RadarvanMapSummaryStart(const AsciiString& url,
+                             const AsciiString& mapName,
+                             const std::vector<MapSummaryPlayer>& players)
+{
+	if (RadarvanMapSummaryBusy())
+		return false;
+	if (s_summaryThread != NULL)
+	{
+		CloseHandle(s_summaryThread);
+		s_summaryThread = NULL;
+	}
+
+	RadarvanMapSummaryReset();
+	if (url.isEmpty() || players.empty())
+		return false;
+
+	// players[i].team is 0-based (-1 = none); map_summary wants 1-based.
+	AsciiString body = buildRosterBody(mapName, players, 1);
+	if ((size_t)body.getLength() >= sizeof(((MapSummaryJob *)0)->body) ||
+	    (size_t)url.getLength() >= sizeof(((MapSummaryJob *)0)->url))
+		return false;
+
+	MapSummaryJob *job = (MapSummaryJob *)malloc(sizeof(MapSummaryJob));
+	if (job == nullptr)
+		return false;
+	memset(job, 0, sizeof(MapSummaryJob));
+	strncpy(job->url, url.str(), sizeof(job->url) - 1);
+	strncpy(job->body, body.str(), sizeof(job->body) - 1);
+
+	EnterCriticalSection(&s_summaryCS);
+	job->gen = s_summaryGen;
+	s_summaryState = RADARVAN_SUMMARY_PENDING;
+	LeaveCriticalSection(&s_summaryCS);
+
+	unsigned threadId = 0;
+	HANDLE hThread = (HANDLE)_beginthreadex(nullptr, 0, mapSummaryThreadProc, job, 0, &threadId);
+	if (hThread == NULL)
+	{
+		EnterCriticalSection(&s_summaryCS);
+		s_summaryState = RADARVAN_SUMMARY_IDLE;
+		LeaveCriticalSection(&s_summaryCS);
+		free(job);
+		return false;
+	}
+	s_summaryThread = hThread; // kept so shutdown can wait for it
+	return true;
+}
+
+RadarvanMapSummaryState RadarvanMapSummaryPoll(std::vector<UnicodeString>& outLines)
+{
+	outLines.clear();
+	if (!s_summaryCSInit)
+		return RADARVAN_SUMMARY_IDLE;
+
+	RadarvanMapSummaryState state;
+	char *text = nullptr;
+	EnterCriticalSection(&s_summaryCS);
+	state = s_summaryState;
+	if (state == RADARVAN_SUMMARY_DONE || state == RADARVAN_SUMMARY_FAILED)
+	{
+		// Hand the result over once; the next poll sees IDLE.
+		text = s_summaryTextC;
+		s_summaryTextC = nullptr;
+		s_summaryState = RADARVAN_SUMMARY_IDLE;
+	}
+	LeaveCriticalSection(&s_summaryCS);
+
+	if (text != nullptr)
+	{
+		const char *p = text;
+		while (*p != '\0')
+		{
+			const char *e = strchr(p, '\n');
+			if (e == nullptr)
+				e = p + strlen(p);
+			UnicodeString line = utf8ToUnicode(p, (int)(e - p));
+			line.trim();
+			if (!line.isEmpty())
+				outLines.push_back(line);
+			p = (*e == '\n') ? e + 1 : e;
+		}
+		free(text);
+	}
+	return state;
+}
+
+void RadarvanMapSummaryShutdown(void)
+{
+	if (s_summaryThread == NULL)
+		return;
+	// Bounded by intelHttpJsonStatus's timeouts; don't hang exit beyond that.
+	WaitForSingleObject(s_summaryThread, 20000);
+	CloseHandle(s_summaryThread);
+	s_summaryThread = NULL;
 }
 
 static int copyNameList(const char *body, const char *key,

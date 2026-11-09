@@ -28,7 +28,7 @@ map history blurbs work. The pipeline:
 - **Replay upload** lets the radarvan site show recent games per
   map, per player, per general matchup without players having to
   hand-share `.rep` files.
-- **Map upload** is what enables the lobby `map_summary` blurb,
+- **Map upload** is what enables the lobby `/intel` blurb (`map_summary`),
   the labeled Discord preview, and the in-progress observer
   flow (LAN observer mode reads the host's `mapPreviews/<map>.tga`
   rather than the `.map`, but the backend's preview is what the
@@ -51,10 +51,10 @@ map history blurbs work. The pipeline:
 - `GeneralsMD/Code/GameEngine/Include/Common/StatsExporter.h` plus
   the cncstats serialization in `StatsExporter.cpp`.
 - `GeneralsMD/Code/GameEngine/Source/Common/GlobalData.cpp` — the
-  default URLs (`m_replayUrl`, `m_balanceTeamsUrl`,
-  `m_mapSummaryUrl`).
+  default URLs (`m_replayUrl`, `m_balanceTeamsUrl`, and
+  `m_radarvanApiUrl`, which `/intel` builds `map_summary/` from).
 - `GeneralsMD/Code/GameEngine/Source/Common/CommandLine.cpp` —
-  matching `-replayUrl`, `-balanceTeamsUrl`, `-mapSummaryUrl`
+  matching `-replayUrl`, `-balanceTeamsUrl`
   overrides so QA / staging can redirect away from production.
 - `cmake/zuluclientkey.cmake` — bakes the build-time radarvan auth
   key into `ZuluClientKey.h`, which `StatsUploader.cpp` injects as
