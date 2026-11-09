@@ -77,7 +77,14 @@ static void diagLabels(const char *phase, std::string &seedLabel, std::string &p
 	SYSTEMTIME st;
 	GetSystemTime(&st);
 	char buf[128];
-	snprintf(buf, sizeof(buf), "connfail-%04u%02u%02u", (unsigned)st.wYear, (unsigned)st.wMonth, (unsigned)st.wDay);
+	// A crash report is not a connection failure. Every phase used to land in
+	// connfail-<date>, so crash and prevabort uploads were filed where nobody
+	// looks for them; crash-<date> is where the /crash receiver already puts
+	// minidumps. Connection diagnostics (nettest, meshhost) keep connfail-.
+	const Bool isCrash = (phase != nullptr &&
+		(strcmp(phase, "crash") == 0 || strcmp(phase, "prevabort") == 0));
+	snprintf(buf, sizeof(buf), "%s-%04u%02u%02u", isCrash ? "crash" : "connfail",
+		(unsigned)st.wYear, (unsigned)st.wMonth, (unsigned)st.wDay);
 	seedLabel = buf;
 	snprintf(buf, sizeof(buf), "%s-%02u%02u%02u-%s", diagNick().c_str(),
 		(unsigned)st.wHour, (unsigned)st.wMinute, (unsigned)st.wSecond, phase ? phase : "diag");

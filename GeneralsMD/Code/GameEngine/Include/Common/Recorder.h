@@ -344,6 +344,15 @@ protected:
 	Int         m_liveObserverEdgeMarginBytes;
 	Bool        m_liveObserverPlayedAny;		///< at least one record of the live file has been consumed
 	UnsignedInt m_liveObserverStarvedSinceMs;	///< wall clock when the byte starvation began, 0 while fed
+	Bool m_observerLogUploaded;								///< this watch's end-of-session log has already been shipped
+	Bool m_observerLogMismatchSent;						///< this watch's CRC-mismatch log has already been shipped
+	UnsignedInt m_observedMatchSeed;					///< seed of the match being watched, captured when the watch starts
+
+	/// Upload this client's logs during/at the end of a live-observer session,
+	/// keyed by the watched match's seed. Spectators run none of the
+	/// match-telemetry path, so without this a failed watch leaves no evidence
+	/// anywhere. `alreadySent` is the caller's one-shot guard.
+	void uploadObserverLog(UnsignedInt seed, const char *reason, Bool &alreadySent);
 	// resume-from-replay state (see the accessors above)
 	File* m_resumeSourceFile;												///< the resume source (Resume.rep) being read during catchup; m_file is the new recording
 	UnsignedInt m_resumeArmedHandoffFrame;					///< handoff frame for the next MSG_NEW_GAME, 0 when not armed
