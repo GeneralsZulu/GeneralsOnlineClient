@@ -948,7 +948,11 @@ static void handleLimitSuperweaponsClick()
 	bool bLimitSuperweapons = GadgetCheckBoxIsChecked(checkBoxLimitSuperweapons);
 
 	NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
-	if (pLobbyInterface != nullptr)
+	// Host only, like handleFFAModeClick above: the lobby PUT is a host-only
+	// endpoint, so a guest's call could only ever come back 401. Guests reached
+	// here because applying the lobby's state to the checkbox fires its click
+	// handler, which is why every guest logged one 401 per lobby join.
+	if (pLobbyInterface != nullptr && pLobbyInterface->IsHost())
 	{
 		pLobbyInterface->UpdateCurrentLobby_LimitSuperweapons(bLimitSuperweapons);
 	}
