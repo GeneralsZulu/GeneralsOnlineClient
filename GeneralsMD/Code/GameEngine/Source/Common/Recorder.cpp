@@ -65,6 +65,9 @@
 #include "GameNetwork/LANObserverStream.h"
 #include "../NGMPGame.h"
 #include "../OnlineServices_Init.h"
+// OnlineServices_Init.h only forward-declares the auth interface; the full
+// definition is needed for the spectator upload's display name.
+#include "GameNetwork/GeneralsOnline/OnlineServices_Auth.h"
 
 extern NGMPGame* TheNGMPGame;
 
@@ -609,6 +612,9 @@ void RecorderClass::init() {
 	m_liveObserverFpsBoosted      = FALSE;
 	m_liveObserverSavedFpsLimit   = 0;
 	m_liveObserverStarvedSinceMs  = 0;
+	m_observerLogUploaded         = FALSE;
+	m_observerLogMismatchSent     = FALSE;
+	m_observedMatchSeed           = 0;
 	m_liveObserverSavedUseFpsLimit = TRUE;
 	m_liveObserverKnownLength     = 0;
 	m_liveObserverBytesArrived    = FALSE;
@@ -626,6 +632,14 @@ void RecorderClass::init() {
  * Reset the recorder to the "initialized state."
  */
 void RecorderClass::reset() {
+	// Quitting a watch from the in-game menu never reaches stopPlayback: the
+	// menu calls clearGameData directly, and clearGameData lands here. Catch
+	// that exit too, or the watches a spectator abandons - the ones most
+	// likely to have gone wrong - are exactly the ones that upload nothing.
+	// The upload is one-shot, so overlapping with stopPlayback costs nothing.
+	if (isLiveObserverMode())
+		uploadObserverLog(m_observedMatchSeed, "watchend", m_observerLogUploaded);
+
 	if (m_file != nullptr) {
 		m_file->close();
 		m_file = nullptr;
@@ -835,12 +849,90 @@ void RecorderClass::setLiveObserverEdgeMargin(Int bytes) {
 }
 
 /**
+ * Ship this client's logs for a live-observer session, keyed by the seed of the
+ * match being watched so they land beside the players' logs under one match.
+ *
+ * Spectators produce no telemetry at all otherwise: the match-telemetry block
+ * in stopRecording() is gated on StatsExporterIsActive(), which is FALSE for a
+ * watch, so a client that only observed uploads nothing and its evidence dies
+ * with its next launch. That is a real hole, not a theoretical one: on
+ * 2026-11-08 a spectator reported a CRC mismatch and left not one byte on the
+ * server, while all three players finished desync=0.
+ *
+ * Unlike a player's upload this carries the ReleaseLog and the GeneralsOnline
+ * network log as well as ObserverLog.txt. For a spectator those files describe
+ * nothing but this watch, and the mismatch frame, the stream starvation and the
+ * livestream HTTP traffic are the whole question.
+ *
+ * The player id is prefixed "obs-" so it cannot collide with the same person's
+ * own upload if they also played the match from another client.
+ */
+void RecorderClass::uploadObserverLog(UnsignedInt seed, const char *reason, Bool &alreadySent)
+{
+	// One upload per reason per watch; every call site can be reached twice on
+	// the way out, and a mismatch repeats at every CRC interval.
+	if (alreadySent)
+		return;
+	if (TheGlobalData == nullptr || TheGlobalData->m_logsUrl.isEmpty())
+		return;
+	alreadySent = TRUE;
+
+	AsciiString playerId = "obs-";
+#if defined(GENERALS_ONLINE)
+	NGMP_OnlineServices_AuthInterface *pAuth = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_AuthInterface>();
+	if (pAuth != nullptr)
+		playerId.concat(pAuth->GetDisplayName().c_str());
+#endif
+	if (TheLAN != nullptr && playerId == "obs-")
+		appendUtf8(playerId, TheLAN->GetMyName());
+	if (playerId == "obs-")
+		playerId.concat("unknown");
+	// A mismatch upload and the end-of-watch upload must not land on the same
+	// path, or the second would overwrite the first.
+	if (reason != nullptr && strcmp(reason, "watchend") != 0)
+	{
+		playerId.concat("-");
+		playerId.concat(reason);
+	}
+
+	AsciiString seedLabel;
+	if (seed != 0)
+	{
+		seedLabel.format("%u", seed);
+	}
+	else
+	{
+		// A watch that died before its header was parsed has no seed, and
+		// filing it under match "0" buries it. Name the bucket instead: a
+		// findable upload beats a correct-looking one nobody opens.
+		seedLabel = "obs-noseed";
+	}
+
+	std::vector<AsciiString> logs;
+	logs.push_back(AsciiString(LANObsGetLogFileName()));
+	logs.push_back(AsciiString(ReleaseGetLogFileName()));
+	if (NetworkLogGetFileName()[0] != '\0')
+		logs.push_back(AsciiString(NetworkLogGetFileName()));
+
+	ReleaseLog("OBSUPLOAD shipping observer logs for match seed %u as %s/%s (%s)",
+		seed, seedLabel.str(), playerId.str(), reason != nullptr ? reason : "");
+	LANObsLog("uploading observer logs for match seed %u as '%s' (%s)",
+		seed, playerId.str(), reason != nullptr ? reason : "");
+	StartDiagnosticLogUpload(TheGlobalData->m_logsUrl, seedLabel, playerId, logs);
+}
+
+/**
  * Stop the currently running playback. This is probably due either to the user exiting out of the playback or
  * reaching the end of the playback file.
  */
 void RecorderClass::stopPlayback() {
 	if (isLiveObserverMode())
+	{
+		// Ship the watch log before exitGame() below tears the session down.
+		// This is the path a dead stream and the starvation timeout take.
+		uploadObserverLog(m_observedMatchSeed, "watchend", m_observerLogUploaded);
 		setLiveObserverBoost(FALSE);
+	}
 	if (m_file != nullptr) {
 		m_file->close();
 		m_file = nullptr;
@@ -1604,6 +1696,15 @@ Bool RecorderClass::playbackFileLiveObserver(AsciiString filename)
 	}
 
 	m_mode = RECORDERMODETYPE_LIVE_OBSERVER;
+	// A fresh watch gets fresh uploads, keyed by the seed the header we just
+	// parsed carries. Set here rather than in init(), which runs mid-
+	// playbackFile above (clearGameData -> reset) and would undo them. Holding
+	// the seed in a member rather than reading m_gameInfo at upload time
+	// matters: the upload can fire from reset(), by which point m_gameInfo may
+	// already describe the NEXT thing being loaded.
+	m_observerLogUploaded     = FALSE;
+	m_observerLogMismatchSent = FALSE;
+	m_observedMatchSeed       = (UnsignedInt)m_gameInfo.getSeed();
 	// Seed the tracked read offset from the file, which is reliable right after the
 	// open; from here on every read updates it, since File::position() is not
 	// trustworthy on every file class once reads have failed.
@@ -1706,12 +1807,31 @@ void RecorderClass::handleCRCMessage(UnsignedInt newCRC, Int playerIndex, Bool f
 			DEBUG_LOG(("Replay has gone out of sync!\nInGame:%8.8X Replay:%8.8X\nFrame:%d",
 				playbackCRC, newCRC, mismatchFrame));
 
+			// DEBUG_LOG is compiled out of release builds, so without this the
+			// uploaded log of a spectator's mismatch says nothing about it.
+			// NOTE the argument order: newCRC is what this client simulated and
+			// playbackCRC is what the recording says, which is the opposite of
+			// the labels the UI message and DEBUG_LOG above print them under.
+			ReleaseLog("CRCMISMATCH playback diverged: inGame=%8.8X replay=%8.8X frame=%u player=%d liveobs=%d",
+				newCRC, playbackCRC, mismatchFrame, playerIndex, isLiveObserverMode() ? 1 : 0);
+
 			// Print Mismatch in case we are simulating replays from console.
 			printf("CRC Mismatch in Frame %d\n", mismatchFrame);
 
+			// A live observer must NOT pause here. The stream keeps arriving
+			// while a paused client stops consuming it, so pausing converts a
+			// cosmetic mismatch into a starved, then dead, watch. Ship the logs
+			// instead - this is the one moment that explains why a spectator's
+			// re-simulation diverged while the players stayed in sync - and mark
+			// it seen so the message does not repeat every CRC interval.
+			if (isLiveObserverMode())
+			{
+				uploadObserverLog(m_observedMatchSeed, "crcmismatch", m_observerLogMismatchSent);
+				m_crcInfo.setSawCRCMismatch();
+			}
 			// TheSuperHackers @tweak Pause the game on mismatch.
 			// But not when a window with focus is opened, because that can make resuming difficult.
-			if (TheWindowManager->winGetFocus() == nullptr)
+			else if (TheWindowManager->winGetFocus() == nullptr)
 			{
 				Bool pause = TRUE;
 				Bool pauseMusic = FALSE;
