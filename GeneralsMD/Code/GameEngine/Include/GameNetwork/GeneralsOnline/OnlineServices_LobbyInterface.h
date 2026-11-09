@@ -30,7 +30,10 @@ struct LobbyMemberEntry : public NetworkMemberBase
 	bool has_map = false;
 	bool has_resume_replay = false; // TheSuperHackers @feature bill-rich 24/09/2026 holds a usable copy of the resume-from-replay source
 
-	uint16_t m_SlotIndex = 999999;
+	// 0xFFFF, not 999999: that literal does not fit a uint16_t and silently
+	// truncated to 16959, a plausible-looking index that made the
+	// "bad slot index 16959" log line read like real data.
+	uint16_t m_SlotIndex = 0xFFFF;
 	uint16_t m_SlotState = SlotState::SLOT_OPEN;
 
 	std::string region;
