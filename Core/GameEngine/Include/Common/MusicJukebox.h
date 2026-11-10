@@ -53,6 +53,9 @@ public:
 	// Just the file name of that song, for the on-screen track message.
 	AsciiString currentTrackLeafName() const;
 
+	// Length of that song in ms from its Xing/Info header, or 0 if it has none (CBR files).
+	Int currentTrackLengthMs() const;
+
 	// Move to the next song, reshuffling when the playlist wraps.
 	void advance();
 
@@ -81,6 +84,9 @@ private:
 // shell, then exit the process with its failure count as the code.
 void requestMusicJukeboxSelfTest();
 Bool isMusicJukeboxSelfTestRequested();
+
+// Length in ms of an mp3 whose first bytes are given, from its Xing/Info frame count, or 0.
+Int mp3LengthMsFromHeader(const UnsignedByte *buf, Int len);
 
 // Exercise the playlist order, wrap and drop handling, and report what the real Music folder
 // holds. Prints one "[MUSICJUKEBOX TEST] ..." line per check on stdout; returns the failure count.

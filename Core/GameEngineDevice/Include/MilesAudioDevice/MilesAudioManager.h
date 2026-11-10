@@ -347,6 +347,7 @@ class MilesAudioManager : public AudioManager
 		MusicJukebox m_jukebox;
 		AsciiString m_jukeboxEventName;	///< last music event asked for, reused to carry its MusicTrack info
 		Bool m_jukeboxOwnsMusic;				///< a jukebox song is playing right now
+		UnsignedInt m_jukeboxSongEndsAt;	///< GetTickCount at which the playing song is over
 		UnsignedInt m_num2DSamples;
 		UnsignedInt m_num3DSamples;
 		UnsignedInt m_numStreams;

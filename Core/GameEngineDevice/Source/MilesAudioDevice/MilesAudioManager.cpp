@@ -43,6 +43,7 @@
 #include "MilesAudioDevice/MilesAudioManager.h"
 
 #include "Common/AudioAffect.h"
+#include "Common/ReleaseLog.h"
 #include "Common/AudioHandleSpecialValues.h"
 #include "Common/AudioRequest.h"
 #include "Common/AudioSettings.h"
@@ -94,6 +95,7 @@ MilesAudioManager::MilesAudioManager() :
 	m_delayFilter(nullptr),
 	m_binkHandle(nullptr),
 	m_jukeboxOwnsMusic(false),
+	m_jukeboxSongEndsAt(0),
 	m_pref3DProvider(AsciiString::TheEmptyString),
 	m_prefSpeaker(AsciiString::TheEmptyString)
 {
@@ -728,6 +730,21 @@ void MilesAudioManager::playAudioEvent( AudioRequest* req )
 	 			}
 				AIL_set_stream_volume_pan(stream, getEffectiveVolume(event), 0.5f);
 				playStream(event, stream);
+
+				if (jukeboxSubstituted) {
+					// Miles gives no usable end-of-stream signal for these files (no callback, no loop,
+					// no loop count change), so the song is timed by its length instead. The Xing
+					// header has the real length; Miles's own figure is only right for CBR files.
+					S32 lengthMs = m_jukebox.currentTrackLengthMs();
+					if (lengthMs <= 0) {
+						AIL_stream_ms_position(stream, &lengthMs, nullptr);
+					}
+					if (lengthMs <= 0) {
+						lengthMs = 5 * 60 * 1000;	// shortcut: a file with no reported length gets five minutes, pick a real duration source if this is ever logged
+					}
+					m_jukeboxSongEndsAt = GetTickCount() + lengthMs;
+					ReleaseLog("MUSICJUKEBOX: playing '%s' for event '%s', %d ms", m_jukebox.currentTrackLeafName().str(), m_jukeboxEventName.str(), lengthMs);
+				}
 
 				CriticalSectionClass::LockClass lock(m_playingStreamsCS);
 				m_playingStreams.push_back(newPlaying);
@@ -1531,14 +1548,29 @@ void MilesAudioManager::updateJukebox()
 		return;
 	}
 
-	if (findActiveMusic() != nullptr) {
+	if (PlayingAudio *playing = findActiveMusic()) {
 		if (!m_jukeboxOwnsMusic) {
 			// Music we don't own is playing: the load jingle, or a stock track that started
 			// before we became active. Either loops forever on its own, so fade it out; the
 			// next update starts our song.
 			removeAudioEvent(AHSV_StopTheMusicFade);
+			return;
 		}
-		return;
+		if (playing->m_stream == nullptr) {
+			return;
+		}
+		// Our song: over when its length is up (set where it opened, in playAudioEvent).
+		// Signed difference so the tick counter wrapping does not matter.
+		if ((Int)(GetTickCount() - m_jukeboxSongEndsAt) < 0) {
+			return;
+		}
+		S32 totalMs = 0;
+		S32 currentMs = 0;
+		AIL_stream_ms_position(playing->m_stream, &totalMs, &currentMs);
+		ReleaseLog("MUSICJUKEBOX: song over, stream at %d of %d ms", currentMs, totalMs);
+		// Release it here so findActiveMusic stops reporting it and the next song can have a
+		// stream; the list entry itself is reaped by the next processPlayingList.
+		stopPlayingAudio(playing);
 	}
 
 	// With the slider at the bottom addAudioEvent culls the event as muted, so don't queue a
@@ -1710,7 +1742,9 @@ void MilesAudioManager::notifyOfAudioCompletion( UnsignedInt handle, UnsignedInt
 	}
 	case PAT_Stream:
 	{
-		if (playing->m_audioEventRTS->getAudioEventInfo()->m_soundType == AT_Music) {
+		// A stock track restarts here, which is how music loops forever with nothing but a script
+		// to end it. A jukebox song must be let go instead, so updateJukebox starts the next one.
+		if (playing->m_audioEventRTS->getAudioEventInfo()->m_soundType == AT_Music && !m_jukeboxOwnsMusic) {
 			playStream(playing->m_audioEventRTS.Peek(), playing->m_stream);
 			return;
 		}

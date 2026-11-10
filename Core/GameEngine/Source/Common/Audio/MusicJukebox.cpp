@@ -115,6 +115,71 @@ AsciiString MusicJukebox::currentTrackLeafName() const
 }
 
 //-------------------------------------------------------------------------------------------------
+/** Miles sizes a stream as file bytes over the first frame's bitrate. A VBR file opens with a
+	* 64 kbps Xing frame, so Miles reports four times the real length and the song never ends
+	* inside a match. The Xing frame count is the real length. */
+//-------------------------------------------------------------------------------------------------
+Int mp3LengthMsFromHeader(const UnsignedByte *buf, Int len)
+{
+	Int i = 0;
+	if (len >= 10 && buf[0] == 'I' && buf[1] == 'D' && buf[2] == '3') {
+		i = 10 + ((buf[6] << 21) | (buf[7] << 14) | (buf[8] << 7) | buf[9]);	// skip the ID3v2 tag
+		if (buf[5] & 0x10) {
+			i += 10;	// footer
+		}
+	}
+	while (i + 4 <= len && !(buf[i] == 0xFF && (buf[i + 1] & 0xE0) == 0xE0)) {
+		++i;	// frame sync
+	}
+	if (i + 4 > len) {
+		return 0;
+	}
+	const Int version = (buf[i + 1] >> 3) & 3;	// 3 = MPEG1, 2 = MPEG2, 0 = MPEG2.5
+	const Int rateIndex = (buf[i + 2] >> 2) & 3;
+	if (version == 1 || rateIndex == 3) {
+		return 0;
+	}
+	static const Int rates[3] = { 44100, 48000, 32000 };
+	const Int sampleRate = rates[rateIndex] / (version == 3 ? 1 : version == 2 ? 2 : 4);
+	const Int samplesPerFrame = version == 3 ? 1152 : 576;	// layer III
+
+	// The Xing/Info tag sits after the side info, whose size depends on version and channels;
+	// scanning the frame for it is simpler than that table.
+	Int t;
+	for (t = i + 4; t + 16 <= len && t < i + 48; ++t) {
+		if ((buf[t] == 'X' && buf[t + 1] == 'i' && buf[t + 2] == 'n' && buf[t + 3] == 'g') ||
+		    (buf[t] == 'I' && buf[t + 1] == 'n' && buf[t + 2] == 'f' && buf[t + 3] == 'o')) {
+			if ((buf[t + 7] & 1) == 0) {
+				return 0;	// no frame count field
+			}
+			const UnsignedInt frames = ((UnsignedInt)buf[t + 8] << 24) | (buf[t + 9] << 16) | (buf[t + 10] << 8) | buf[t + 11];
+			return (Int)((Int64)frames * samplesPerFrame * 1000 / sampleRate);
+		}
+	}
+	return 0;
+}
+
+//-------------------------------------------------------------------------------------------------
+Int MusicJukebox::currentTrackLengthMs() const
+{
+	const AsciiString& path = currentTrack();
+	if (path.isEmpty()) {
+		return 0;
+	}
+
+	// Loose local file: the tag can be 100 KB of album art, so read past it.
+	FILE *f = fopen(path.str(), "rb");
+	if (f == nullptr) {
+		return 0;
+	}
+	std::vector<UnsignedByte> buf(512 * 1024);
+	const Int len = (Int)fread(&buf[0], 1, buf.size(), f);
+	fclose(f);
+
+	return mp3LengthMsFromHeader(&buf[0], len);
+}
+
+//-------------------------------------------------------------------------------------------------
 void MusicJukebox::retreat()
 {
 	if (m_tracks.empty()) {
@@ -372,11 +437,26 @@ Int runMusicJukeboxSelfTest()
 	jukebox.friend_setTracks(onePath);
 	selfTestCheck(jukebox.currentTrackLeafName() == "My Song.mp3", "name: the track message shows just the file name");
 
-	// 7. Not a check: report what the player's real folder holds.
+	// 7. The length parser: ID3v2 tag, MPEG1 44.1 kHz frame, Xing with 7386 frames = 192940 ms.
+	{
+		UnsignedByte mp3[80] = { 'I', 'D', '3', 3, 0, 0, 0, 0, 0, 6,  0, 0, 0, 0, 0, 0,
+			0xFF, 0xFB, 0x50, 0x00 };
+		const char *xing = "Xing";
+		UnsignedByte *p = mp3 + 16 + 4 + 32;
+		memcpy(p, xing, 4);
+		p[7] = 1;
+		p[8] = 0; p[9] = 0; p[10] = 0x1C; p[11] = 0xDA;	// 7386
+		selfTestCheck(mp3LengthMsFromHeader(mp3, sizeof(mp3)) == 192940, "length: Xing frame count gives the song length");
+		p[7] = 0;
+		selfTestCheck(mp3LengthMsFromHeader(mp3, sizeof(mp3)) == 0, "length: a header without a frame count gives 0");
+		selfTestCheck(mp3LengthMsFromHeader(mp3, 12) == 0, "length: a truncated file gives 0");
+	}
+
+	// 8. Not a check: report what the player's real folder holds.
 	MusicJukebox real;
 	real.scanOnce();
-	fprintf(stdout, "[MUSICJUKEBOX TEST] note %s folder: %s\n",
-		MUSIC_JUKEBOX_FOLDER, real.isEmpty() ? "empty or missing, stock music in use" : real.currentTrack().str());
+	fprintf(stdout, "[MUSICJUKEBOX TEST] note %s folder: %s, %d ms\n",
+		MUSIC_JUKEBOX_FOLDER, real.isEmpty() ? "empty or missing, stock music in use" : real.currentTrack().str(), real.currentTrackLengthMs());
 
 	fprintf(stdout, "[MUSICJUKEBOX TEST] failures=%d\n", s_selfTestFailures);
 	return s_selfTestFailures;
