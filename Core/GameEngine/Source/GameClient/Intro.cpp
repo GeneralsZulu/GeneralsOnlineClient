@@ -166,6 +166,7 @@ struct DisplaySetting
 		, sizeY(10)
 		, bold(false)
 		, centered(false)
+		, dim(false)
 	{}
 
 	const Char* imageName;
@@ -176,6 +177,7 @@ struct DisplaySetting
 	Int sizeY;
 	Bool bold;
 	Bool centered;
+	Bool dim; // secondary text, drawn gray
 };
 
 void Intro::doGeneralsOnlineLogo()
@@ -268,12 +270,12 @@ void Intro::doGeneralsOnlineLogo()
     m_fadeValue = 0.0f;
 }
 
-// The screen for the build the player actually launched. Same shape as the two
-// above it, with the insignia carrying the wordmark so only one line of text is
-// needed above it. "ZuluGOLogo" is a MappedImage out of Zulu.modbig
-// (Data/INI/MappedImages/HandCreated/ZuluGOIntro.ini); run without the mod
-// archive and findImageByName simply returns null, which drawDisplayEntities
-// skips, leaving the text.
+// The screen for the build the player actually launched. Unlike the two cards
+// above it, the insignia is the main mark, so it leads and the text is a caption
+// under it, the whole group centered on the screen. "ZuluGOLogo" is a
+// MappedImage out of Zulu.modbig (Data/INI/MappedImages/HandCreated/ZuluGOIntro.ini);
+// run without the mod archive and findImageByName returns null, which
+// drawDisplayEntities skips, leaving the text.
 void Intro::doZuluGOLogo()
 {
 	m_displayEntities.clear();
@@ -282,69 +284,56 @@ void Intro::doZuluGOLogo()
 
 	const Real resolutionScale = GlobalLanguage::getResolutionFontSizeScale(GlobalLanguage::ResolutionFontSizeMethod_Strict);
 	const Int screenWidth = TheDisplay->getWidth();
-	const Int screenHeight = TheDisplay->getHeight();
-	Int centerOffsetY = -(screenHeight * 0.05f);
 
+	m_unicodeStrings[0] = TheGameText->FETCH_OR_SUBSTITUTE("CREDITS:ZuluGOIntroPretext", L"Created by");
+	m_unicodeStrings[0].concat(L" OneThree111 (bill-rich)");
+
+	// Offsets are in unscaled units from the top of the group; the group is
+	// centered once its height is known.
+	Int y = 0;
 	{
-		// Pretext
-		m_unicodeStrings[0] = TheGameText->FETCH_OR_SUBSTITUTE("CREDITS:ZuluGOIntroPretext", L"Competitive Zero Hour by");
+		// GeneralsZulu insignia, the org mark
 		DisplaySetting setting;
-		setting.font = "Consolas";
-		setting.text = m_unicodeStrings[0].str();
-		setting.sizeY = 16;
-		centerOffsetY -= setting.sizeY * resolutionScale * 2;
-		setting.centerOffsetY = centerOffsetY;
-		centerOffsetY += setting.sizeY * resolutionScale * 2;
-		setting.bold = false;
-		setting.centered = true;
+		setting.imageName = "ZuluGOLogo";
+		setting.centerOffsetY = y;
+		setting.sizeX = 160;
+		setting.sizeY = 160;
 		settings.push_back(setting);
+		y += setting.sizeY + 16;
 	}
 	{
-		// Team name
+		// The client
 		DisplaySetting setting;
 		setting.font = "Consolas";
 		setting.text = L"ZULU GO";
 		setting.sizeY = 32;
-		setting.centerOffsetY = centerOffsetY;
-		centerOffsetY += setting.sizeY * resolutionScale * 2;
+		setting.centerOffsetY = y;
 		setting.bold = true;
 		setting.centered = true;
 		settings.push_back(setting);
+		y += setting.sizeY + 12;
 	}
+	const WideChar* captions[] =
 	{
-		// Author
+		L"Bleeding edge Zero Hour",
+		m_unicodeStrings[0].str(),
+		L"Radarvan by Modus (f4hy)",
+		L"Stats powered by cncstats",
+		L"www.radarvan.com",
+	};
+	for (size_t c = 0; c < ARRAY_SIZE(captions); ++c)
+	{
 		DisplaySetting setting;
 		setting.font = "Consolas";
-		setting.text = L"Created by bill-rich";
+		setting.text = captions[c];
 		setting.sizeY = 16;
-		setting.centerOffsetY = centerOffsetY;
-		centerOffsetY += setting.sizeY * resolutionScale * 2;
-		setting.bold = false;
+		setting.centerOffsetY = y;
 		setting.centered = true;
+		setting.dim = true;
 		settings.push_back(setting);
+		y += setting.sizeY + 8;
 	}
-	{
-		// Website: matches, replays and stats for this community
-		DisplaySetting setting;
-		setting.font = "Consolas";
-		setting.text = L"www.radarvan.com";
-		setting.sizeY = 16;
-		setting.centerOffsetY = centerOffsetY;
-		centerOffsetY += setting.sizeY * resolutionScale * 2;
-		setting.bold = false;
-		setting.centered = true;
-		settings.push_back(setting);
-	}
-	{
-		// GeneralsZulu insignia. Drawn larger than the two marks above because
-		// it is the wordmark, not a decoration beside one.
-		DisplaySetting setting;
-		setting.imageName = "ZuluGOLogo";
-		setting.centerOffsetY = centerOffsetY;
-		setting.sizeX = 160;
-		setting.sizeY = 160;
-		settings.push_back(setting);
-	}
+	const Int groupHeight = y - 8;
 
 	m_displayEntities.resize(settings.size());
 
@@ -368,7 +357,8 @@ void Intro::doZuluGOLogo()
 			e.image = TheMappedImageCollection->findImageByName(s.imageName);
 		}
 
-		e.centerOffsetY = s.centerOffsetY;
+		e.centerOffsetY = Int((s.centerOffsetY - groupHeight / 2) * resolutionScale);
+		e.dim = s.dim;
 	}
 
 	doAsyncWait(3000);
@@ -486,6 +476,7 @@ void Intro::drawDisplayEntities()
 {
 	const Real alpha = 255.0f * clamp(0.0f, m_fadeValue, 1.0f);
 	const Color color = GameMakeColor(255, 255, 255, (Int)alpha);
+	const Color dimColor = GameMakeColor(180, 180, 180, (Int)alpha);
 	const Color dropColor = GameMakeColor(255, 255, 255, 0);
 	const Int screenWidth = TheDisplay->getWidth();
 	const Int screenHeight = TheDisplay->getHeight();
@@ -500,7 +491,7 @@ void Intro::drawDisplayEntities()
 			e.displayString->getSize(&pos.x, &pos.y);
 			pos.x = (screenWidth / 2) - (pos.x / 2);
 			pos.y = (screenHeight / 2) + e.centerOffsetY;
-			e.displayString->draw(pos.x, pos.y, color, dropColor);
+			e.displayString->draw(pos.x, pos.y, e.dim ? dimColor : color, dropColor);
 		}
 
 		if (e.image != nullptr)

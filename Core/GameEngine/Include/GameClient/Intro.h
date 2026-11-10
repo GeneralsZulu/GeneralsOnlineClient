@@ -48,6 +48,7 @@ class Intro
 			, sizeX(10)
 			, sizeY(10)
 			, centerOffsetY(0)
+			, dim(false)
 		{}
 		~DisplayEntity();
 
@@ -56,6 +57,7 @@ class Intro
 		Int sizeX;
 		Int sizeY;
 		Int centerOffsetY;
+		Bool dim; // secondary text, drawn gray
 	};
 
 public:
