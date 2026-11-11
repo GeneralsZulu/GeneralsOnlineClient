@@ -71,6 +71,7 @@ struct PlayingAudio
 	Bool m_fade;
 	volatile Bool m_rerequestOnNextUpdate;
 	volatile Bool m_requestStop; // Let the audio finish but stop looping if it is looping
+	volatile long m_completionsInFlight; // MSS completion callbacks still using this; it must not be deleted until 0
 
 	PlayingAudio()
 		: m_sample(nullptr)
@@ -82,6 +83,7 @@ struct PlayingAudio
 		, m_fade(false)
 		, m_rerequestOnNextUpdate(false)
 		, m_requestStop(false)
+		, m_completionsInFlight(0)
 	{}
 
 	Bool isPlaying() const
@@ -190,7 +192,8 @@ class MilesAudioManager : public AudioManager
 		virtual Bool isCurrentlyPlaying( AudioHandle handle ) override;
 
 		virtual void notifyOfAudioCompletion( UnsignedInt handle, UnsignedInt flags ) override; ///< Is called on MSS Timer thread
-		virtual PlayingAudio *findPlayingAudioFrom( UnsignedInt handle, UnsignedInt flags );
+		virtual PlayingAudio *findPlayingAudioFrom( UnsignedInt handle, UnsignedInt flags ); ///< Returns it with m_completionsInFlight raised
+		void handleAudioCompletion( PlayingAudio *playing );
 
 		virtual UnsignedInt getProviderCount() const override;
 		virtual AsciiString getProviderName( UnsignedInt providerNum ) const override;
@@ -289,6 +292,7 @@ class MilesAudioManager : public AudioManager
 		AsciiString jukeboxSkip( Bool forward );	///< the next/prev track keys, routed to the playlist
 
 		void releasePlayingAudioInListIfStopped(std::list<PlayingAudio *> &list, CriticalSectionClass &cs);
+		Int m_releasesDeferred; ///< Stopped audio kept a frame longer because a completion callback still held it
 		void stopAllAudioImmediately();
 		void freeAllMilesHandles();
 

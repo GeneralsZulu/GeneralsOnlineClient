@@ -97,7 +97,8 @@ MilesAudioManager::MilesAudioManager() :
 	m_jukeboxOwnsMusic(false),
 	m_jukeboxSongEndsAt(0),
 	m_pref3DProvider(AsciiString::TheEmptyString),
-	m_prefSpeaker(AsciiString::TheEmptyString)
+	m_prefSpeaker(AsciiString::TheEmptyString),
+	m_releasesDeferred(0)
 {
 	m_audioCache = NEW AudioFileCache;
 }
@@ -1207,11 +1208,16 @@ void MilesAudioManager::releasePlayingAudioInListIfStopped(std::list<PlayingAudi
 	{
 		playing = (*it);
 
-		if (playing->m_status == PS_Stopped)
+		// The count only rises under this lock, so once 0 here no callback can still reach it
+		if (playing->m_status == PS_Stopped && playing->m_completionsInFlight == 0)
 		{
 			releasePlayingAudio(playing);
 			it = list.erase(it);
 			continue;
+		}
+		if (playing->m_status == PS_Stopped)
+		{
+			++m_releasesDeferred;
 		}
 
 		++it;
@@ -1249,11 +1255,23 @@ void MilesAudioManager::stopAllAudioImmediately()
 
 	//
 	// Release audio with locking. Must not call into Miles!
+	// A completion callback still running keeps its entry alive; give it a moment to finish.
 	//
-	releasePlayingAudioInListIfStopped(m_playingSounds, m_playingSoundsCS);
-	releasePlayingAudioInListIfStopped(m_playing3DSounds, m_playing3DSoundsCS);
-	releasePlayingAudioInListIfStopped(m_playingStreams, m_playingStreamsCS);
-	releasePlayingAudioInListIfStopped(m_fadingAudio, m_fadingAudioCS);
+	Int attempt;
+	for (attempt = 0; attempt < 1000; ++attempt) {
+		releasePlayingAudioInListIfStopped(m_playingSounds, m_playingSoundsCS);
+		releasePlayingAudioInListIfStopped(m_playing3DSounds, m_playing3DSoundsCS);
+		releasePlayingAudioInListIfStopped(m_playingStreams, m_playingStreamsCS);
+		releasePlayingAudioInListIfStopped(m_fadingAudio, m_fadingAudioCS);
+		if (m_playingSounds.empty() && m_playing3DSounds.empty() && m_playingStreams.empty() && m_fadingAudio.empty()) {
+			break;
+		}
+		Sleep(1);
+	}
+	if (attempt > 0 || m_releasesDeferred > 0) {
+		ReleaseLog("MILESAUDIO: stop all waited %d ms; %d releases deferred for completion callbacks since the last stop", attempt, m_releasesDeferred);
+	}
+	m_releasesDeferred = 0;
 
 	DEBUG_ASSERTCRASH(m_playingSounds.empty(), ("List is expected to be empty now"));
 	DEBUG_ASSERTCRASH(m_playing3DSounds.empty(), ("List is expected to be empty now"));
@@ -1687,12 +1705,22 @@ Bool MilesAudioManager::isCurrentlyPlaying( AudioHandle handle )
 //-------------------------------------------------------------------------------------------------
 void MilesAudioManager::notifyOfAudioCompletion( UnsignedInt handle, UnsignedInt flags )
 {
+	// Runs on the MSS timer thread, so the main thread may stop this audio meanwhile. The in-flight
+	// count taken by findPlayingAudioFrom keeps it, and its AudioEventRTS, from being deleted until we
+	// are done with it (the GO Sentry crash CLIENT-RH: a freed AudioEventRTS in the localization lookup).
 	PlayingAudio *playing = findPlayingAudioFrom(handle, flags);
 	if (!playing) {
 		DEBUG_CRASH(("Audio has completed playing, but we can't seem to find it. - jkmcd"));
 		return;
 	}
 
+	handleAudioCompletion(playing);
+	InterlockedDecrement(&playing->m_completionsInFlight);
+}
+
+//-------------------------------------------------------------------------------------------------
+void MilesAudioManager::handleAudioCompletion( PlayingAudio *playing )
+{
 	if (playing->m_audioEventRTS->getAudioEventInfo()->m_control & AC_LOOP) {
 		if (playing->m_audioEventRTS->getNextPlayPortion() == PP_Attack) {
 			playing->m_audioEventRTS->setNextPlayPortion(PP_Sound);
@@ -1768,6 +1796,7 @@ PlayingAudio *MilesAudioManager::findPlayingAudioFrom( UnsignedInt handle, Unsig
 		for (it = m_playingSounds.begin(); it != m_playingSounds.end(); ++it) {
 			playing = *it;
 			if (playing->m_sample == sample) {
+				InterlockedIncrement(&playing->m_completionsInFlight);
 				return playing;
 			}
 		}
@@ -1779,6 +1808,7 @@ PlayingAudio *MilesAudioManager::findPlayingAudioFrom( UnsignedInt handle, Unsig
 		for (it = m_playing3DSounds.begin(); it != m_playing3DSounds.end(); ++it) {
 			playing = *it;
 			if (playing->m_3DSample == sample3D) {
+				InterlockedIncrement(&playing->m_completionsInFlight);
 				return playing;
 			}
 		}
@@ -1791,6 +1821,7 @@ PlayingAudio *MilesAudioManager::findPlayingAudioFrom( UnsignedInt handle, Unsig
 			for (it = m_playingStreams.begin(); it != m_playingStreams.end(); ++it) {
 				playing = *it;
 				if (playing->m_stream == stream) {
+					InterlockedIncrement(&playing->m_completionsInFlight);
 					return playing;
 				}
 			}
@@ -1800,6 +1831,7 @@ PlayingAudio *MilesAudioManager::findPlayingAudioFrom( UnsignedInt handle, Unsig
 			for (it = m_fadingAudio.begin(); it != m_fadingAudio.end(); ++it) {
 				playing = *it;
 				if (playing->m_stream == stream) {
+					InterlockedIncrement(&playing->m_completionsInFlight);
 					return playing;
 				}
 			}
