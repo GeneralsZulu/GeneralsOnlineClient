@@ -623,8 +623,11 @@ void LANAPI::OnGameOptions( UnsignedInt playerIP, Int playerSlot, AsciiString op
 				}
 				else if (key == "StartPos" && slot->getPlayerTemplate() != PLAYERTEMPLATE_OBSERVER)
 				{
-
-					if (val >= -1 && val < MAX_SLOTS && val != slot->getStartPos())
+					if (m_currentGame->getEnforceRandom() && val >= 0)
+					{
+						DEBUG_LOG(("Rejecting StartPos %d because enforce random is set", val));
+					}
+					else if (val >= -1 && val < MAX_SLOTS && val != slot->getStartPos())
 					{
 						Bool startPosAvailable = TRUE;
 						if(val != -1)
