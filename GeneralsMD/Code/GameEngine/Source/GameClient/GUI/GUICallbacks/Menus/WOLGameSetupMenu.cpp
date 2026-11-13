@@ -798,6 +798,9 @@ static void handleStartPositionSelection(Int player, int startPos)
 		NGMPGameSlot * slot = myGame->getGameSpySlot(player);
 		if (!slot)
 			return;
+		// enforce random locks start spots to random too; the service refuses them as well
+		if (startPos >= 0 && myGame->getEnforceRandom())
+			return;
 
 		if (startPos == slot->getStartPos())
 			return;
@@ -2393,7 +2396,7 @@ void InitWOLGameGadgets()
   if (checkBoxEnforceRandom)
   {
     checkBoxEnforceRandom->winSetText(TheGameText->FETCH_OR_SUBSTITUTE("GUI:EnforceRandom", L"Enforce Random"));
-    checkBoxEnforceRandom->winSetTooltip(TheGameText->FETCH_OR_SUBSTITUTE("TOOLTIP:EnforceRandom", L"Lock all players to random faction and random team"));
+    checkBoxEnforceRandom->winSetTooltip(TheGameText->FETCH_OR_SUBSTITUTE("TOOLTIP:EnforceRandom", L"Lock all players to random faction, team and start position"));
   }
   checkBoxFFAMode = TheWindowManager->winGetWindowFromId( parentWOLGameSetup, checkBoxFFAModeID );
   if (checkBoxFFAMode)

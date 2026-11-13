@@ -570,6 +570,9 @@ static void handleStartPositionSelection(Int player, int startPos)
 		LANGameSlot * slot = myGame->getLANSlot(player);
 		if (startPos == slot->getStartPos())
 			return;
+		// enforce random locks start spots to random too
+		if (startPos >= 0 && myGame->getEnforceRandom())
+			return;
 		Bool skip = FALSE;
 		if (startPos < 0)
 		{
@@ -732,8 +735,8 @@ static void handleEnforceRandomClick()
 
     if (checked)
     {
-      // Snap every occupied, non-observer slot to random faction and random
-      // team. Color is left alone. The Randomize button may still assign
+      // Snap every occupied, non-observer slot to random faction, random
+      // team and random start spot. Color is left alone. The Randomize button may still assign
       // concrete values afterwards; the dropdowns stay locked until the
       // host unchecks the box.
       for (Int i = 0; i < MAX_SLOTS; i++)
@@ -745,6 +748,7 @@ static void handleEnforceRandomClick()
           continue;
         slot->setPlayerTemplate( PLAYERTEMPLATE_RANDOM );
         slot->setTeamNumber( -1 );
+        slot->setStartPos( -1 );
       }
     }
     myGame->resetAccepted();

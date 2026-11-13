@@ -176,7 +176,7 @@ GUI:EnforceRandom
 END
 
 TOOLTIP:EnforceRandom
-"Lock all players to random faction and random team"
+"Lock all players to random faction, team and start position"
 END
 
 GUI:FFAMode
