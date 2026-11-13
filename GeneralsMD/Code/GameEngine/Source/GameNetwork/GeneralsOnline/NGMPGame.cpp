@@ -520,6 +520,20 @@ void NGMPGame::launchGame(void)
 
 	TheNetwork->initTransport();
 
+	{
+		NGMP_OnlineServices_LobbyInterface* pLobby = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+		Int routerSlot = -1;
+		if (pLobby != nullptr)
+		{
+			for (const LobbyMemberEntry& member : pLobby->GetCurrentLobby().members)
+			{
+				if (member.IsHuman() && member.user_id == pLobby->m_routerUserID && member.m_SlotIndex < MAX_SLOTS)
+					routerSlot = member.m_SlotIndex;
+			}
+			pLobby->m_routerUserID = -1;
+		}
+		NetSetPreferredRouterSlot(routerSlot);
+	}
 	TheNetwork->parseUserList(this);
 
 	if (TheGameLogic->isInGame()) {

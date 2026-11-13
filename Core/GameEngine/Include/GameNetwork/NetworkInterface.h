@@ -46,6 +46,9 @@ CommandPacket *GetCommandPacket();											///< TheNetwork calls GetCommandPac
 // line, so a slow game can be pinned on drawing or on the simulation.
 void NetPerfNoteClient(UnsignedInt ms);
 void NetPerfNoteLogic(UnsignedInt ms);
+// The slot the online service picked to relay everyone's moves, for the next
+// parseUserList only; -1 keeps the first human slot.
+void NetSetPreferredRouterSlot(Int slot);
 
 
 

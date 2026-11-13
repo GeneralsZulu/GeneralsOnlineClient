@@ -361,6 +361,9 @@ public:
 		m_RosterNeedsRefreshCallback = nullptr;
 	}
 
+	// From START_GAME: who relays everyone's moves, consumed by the next game start; -1 = default
+	int64_t m_routerUserID = -1;
+
 	// TODO_NGMP: Better support for packet callbacks
 	std::function<void()> m_callbackStartGamePacket = nullptr;
 	void RegisterForGameStartPacket(std::function<void()> cb)

@@ -1040,9 +1040,15 @@ CURLcode WebSocket::RecvOne()
 
 										// always start, even if we couldnt parse the url
                                         NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
-                                        if (pLobbyInterface != nullptr && pLobbyInterface->m_callbackStartGamePacket != nullptr)
+                                        if (pLobbyInterface != nullptr)
                                         {
-                                            pLobbyInterface->m_callbackStartGamePacket();
+											// the member the service picked to relay everyone's moves (absent from older services)
+											pLobbyInterface->m_routerUserID = (jsonObject.contains("router_user_id") && jsonObject["router_user_id"].is_number_integer())
+												? jsonObject["router_user_id"].get<int64_t>() : -1;
+											if (pLobbyInterface->m_callbackStartGamePacket != nullptr)
+											{
+												pLobbyInterface->m_callbackStartGamePacket();
+											}
                                         }
 									}
 									break;
@@ -1063,6 +1069,7 @@ CURLcode WebSocket::RecvOne()
 										// respond with our state
 										std::vector<int64_t> connectivityMap;
 										std::vector<int64_t> connectingMap;
+										std::vector<int> pingMap; // per connectivityMap entry, -1 when relayed
 										NetworkMesh* pMesh = nullptr;
 										NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
 										if (pLobbyInterface != nullptr)
@@ -1083,6 +1090,7 @@ CURLcode WebSocket::RecvOne()
 													//if (userID != 1)
 													{
 														connectivityMap.push_back(userID);
+														pingMap.push_back(playerConn.IsDirect() ? playerConn.GetLatency() : -1);
 													}
 												}
 												else if (playerConn.GetState() == EConnectionState::CONNECTING_DIRECT || playerConn.GetState() == EConnectionState::FINDING_ROUTE)
@@ -1128,6 +1136,7 @@ CURLcode WebSocket::RecvOne()
 										j["attempt"] = meshCheckAttempt;
 										j["connectivity_map"] = connectivityMap;
 										j["connecting_map"] = connectingMap;
+										j["ping_ms"] = pingMap;
 										std::string strBody = j.dump();
 
 										Send(strBody.c_str());
