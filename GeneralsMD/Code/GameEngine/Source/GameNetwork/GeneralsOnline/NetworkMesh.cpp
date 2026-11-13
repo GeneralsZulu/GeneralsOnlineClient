@@ -722,6 +722,13 @@ bool NetworkMeshLibrary::EnsureInitialized(int64_t userID)
 	SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendRateMax, 1024 * 1024);
 	SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendBufferSize, 2 * 1024 * 1024);
 
+	// Give up on a dead connection after 3 s instead of the 10 s default. Lockstep
+	// cannot advance while a link is dead, so every second of this timeout freezes
+	// the game for all players (the Nov 11 8 player games froze ~11 s each time
+	// until the library dropped the link and reconnected, in under a second,
+	// through the relay).
+	SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_TimeoutConnected, 3000);
+
 	// Every STUN entry must resolve to a distinct address, or the native ICE client retries
 	// duplicates forever.
 #if defined(ZULU_GO_SELFHOST_BASE)
