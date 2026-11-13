@@ -61,7 +61,7 @@
 ; that survive into the Sections are guarded with IfSilent.
 
 !ifndef APPVERSION
-    !define APPVERSION "2.1.6"
+    !define APPVERSION "2.1.7"
 !endif
 
 !define APPNAME       "Zulu GO"
