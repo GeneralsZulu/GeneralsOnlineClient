@@ -214,3 +214,167 @@ END
 CREDITS:ZuluGOIntroPretext
 "Created by"
 END
+
+GUI:NetFormButton
+"NETWORK FORM"
+END
+
+GUI:NetFormPersona
+"PERSONA"
+END
+
+GUI:NetFormTitle
+"Last 5 online games, compared with the regulars. Hover a row or a badge for details."
+END
+
+GUI:NetFormNetwork
+"NETWORK"
+END
+
+GUI:NetFormPC
+"PC"
+END
+
+GUI:NetFormBadges
+"BADGES"
+END
+
+GUI:NetFormNoBadges
+"No badges yet"
+END
+
+GUI:NetFormPing
+"Ping"
+END
+
+GUI:NetFormDirect
+"Direct links"
+END
+
+GUI:NetFormLagCaused
+"Lag caused"
+END
+
+GUI:NetFormFps
+"Game speed"
+END
+
+GUI:NetFormHeldBack
+"Slowest PC"
+END
+
+GUI:NetFormDrawMs
+"Drawing"
+END
+
+GUI:NetFormSimMs
+"Simulation"
+END
+
+GUI:NetFormTierTop
+"TOP TIER"
+END
+
+GUI:NetFormTierSolid
+"SOLID"
+END
+
+GUI:NetFormTierRough
+"ROUGH PATCH"
+END
+
+GUI:NetFormTierNone
+"NOT YET"
+END
+
+GUI:NetFormImproving
+"Improving"
+END
+
+GUI:NetFormSlipping
+"Slipping"
+END
+
+GUI:NetFormSteady
+"Steady"
+END
+
+GUI:NetFormWas
+"was"
+END
+
+GUI:NetFormNotEnough
+"Not enough games yet"
+END
+
+TOOLTIP:NetForm
+"Regulars: everyone with 3 or more games in the last 30 days. Top tier is their best third, Rough patch their worst third. The dots are your last 5 games, oldest first."
+END
+
+TOOLTIP:NetFormPing
+"Ping to the other players: the middle link of each game, so one far away player does not count against you."
+END
+
+TOOLTIP:NetFormDirect
+"Share of your links that did not need a relay server. A relayed link only counts against the player who needed relays with everyone."
+END
+
+TOOLTIP:NetFormLagCaused
+"Freeze time the game spent waiting on you, per game. Only waits longer than 0.1 s count, and 1v1 games are left out."
+END
+
+TOOLTIP:NetFormFps
+"Frames per second your PC kept up. The slowest PC sets the speed for everyone."
+END
+
+TOOLTIP:NetFormHeldBack
+"Share of the game you were the slowest PC and under 54 fps."
+END
+
+TOOLTIP:NetFormDrawMs
+"Time per frame spent on input, interface and drawing."
+END
+
+TOOLTIP:NetFormSimMs
+"Time per frame spent on the game simulation."
+END
+
+GUI:ZuluBadgeLink
+"Rock Solid Link"
+END
+
+GUI:ZuluBadgeNoLag
+"Never the Lag"
+END
+
+GUI:ZuluBadgeComms
+"Frontline Comms"
+END
+
+GUI:ZuluBadgeMachine
+"War Machine"
+END
+
+GUI:ZuluBadgeImproved
+"Most Improved"
+END
+
+TOOLTIP:ZuluBadgeLink
+"Rock Solid Link: never the reason a link needed a relay, in the last 5 games."
+END
+
+TOOLTIP:ZuluBadgeNoLag
+"Never the Lag: under 2 seconds of freeze caused per game, last 5 games."
+END
+
+TOOLTIP:ZuluBadgeComms
+"Frontline Comms: the lowest ping of all the regulars."
+END
+
+TOOLTIP:ZuluBadgeMachine
+"War Machine: the fastest PC of all the regulars."
+END
+
+TOOLTIP:ZuluBadgeImproved
+"Most Improved: the biggest drop in lag caused, compared with the 5 games before."
+END
