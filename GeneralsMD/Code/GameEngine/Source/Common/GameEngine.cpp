@@ -1179,7 +1179,11 @@ void GameEngine::update()
 				frameMsg->appendTimestampArgument( TheGameClient->getFrame() );
 			}
 			else
+			{
+				const UnsignedInt clientStartMs = timeGetTime();
 				TheGameClient->UPDATE();
+				NetPerfNoteClient(timeGetTime() - clientStartMs);
+			}
 			TheMessageStream->propagateMessages();
 
             if (TheNetwork != nullptr)
@@ -1210,7 +1214,9 @@ void GameEngine::update()
 		// TheSuperHackers @info Ignores frozen time because the script engine needs updating in the logic update regardless.
 		if (canUpdateGameLogic(FramePacer::IgnoreFrozenTime))
 		{
+			const UnsignedInt logicStartMs = timeGetTime();
 			TheGameLogic->UPDATE();
+			NetPerfNoteLogic(timeGetTime() - logicStartMs);
 
 			// step() advances view animations, so it is only meaningful when
 			// this frame is actually going to be drawn.

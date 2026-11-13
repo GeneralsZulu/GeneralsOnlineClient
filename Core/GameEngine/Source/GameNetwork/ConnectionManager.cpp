@@ -3224,8 +3224,33 @@ void ConnectionManager::requestFrameDataResend(Int playerID, UnsignedInt frame, 
 // main thread not turning at all. Separating the two is what tells "his link"
 // apart from "his box".
 // -----------------------------------------------------------------------------
+// Client (input, UI, drawing) and logic update times since the last NETSTAT line.
+// The frame pacer's sleep is outside both, but a vsync wait inside the draw is not.
+struct NetPerfWindow {
+	UnsignedInt clientMs, clientMax, clientN;
+	UnsignedInt logicMs, logicMax, logicN;
+};
+static NetPerfWindow s_netPerf;
+
+void NetPerfNoteClient(UnsignedInt ms) {
+	s_netPerf.clientMs += ms;
+	++s_netPerf.clientN;
+	if (ms > s_netPerf.clientMax) {
+		s_netPerf.clientMax = ms;
+	}
+}
+
+void NetPerfNoteLogic(UnsignedInt ms) {
+	s_netPerf.logicMs += ms;
+	++s_netPerf.logicN;
+	if (ms > s_netPerf.logicMax) {
+		s_netPerf.logicMax = ms;
+	}
+}
+
 void ConnectionManager::resetNetStats() {
 	memset(&m_netStats, 0, sizeof(m_netStats));
+	memset(&s_netPerf, 0, sizeof(s_netPerf));
 }
 
 UnsignedInt ConnectionManager::getNotReadyMask(UnsignedInt frame) {
@@ -3316,18 +3341,31 @@ void ConnectionManager::emitNetStats(UnsignedInt frame, Int runAhead, Int frameR
 		len += snprintf(on + len, sizeof(on) - len, "%s%d:%u", len ? " " : "", i, m_netStats.stallOn[i]);
 	}
 
-	// peers=[slot:reportedms ...] only the packet router knows these.
-	char peers[128];
+	// peers=[slot:reportedms/fps ...] only the packet router knows these. The
+	// lowest fps, the router's own included, is the speed the whole game runs at
+	// (getMinimumFps), so this names the PC that is holding everyone back.
+	char peers[192];
 	len = 0;
 	peers[0] = 0;
 	if (m_localSlot == m_packetRouterSlot) {
-		for (i = 0; (i < MAX_SLOTS) && (len < (Int)sizeof(peers) - 12); ++i) {
-			if ((i == (Int)m_localSlot) || !isPlayerConnected(i)) {
+		for (i = 0; (i < MAX_SLOTS) && (len < (Int)sizeof(peers) - 20); ++i) {
+			if ((i != (Int)m_localSlot) && !isPlayerConnected(i)) {
 				continue;
 			}
-			len += snprintf(peers + len, sizeof(peers) - len, "%s%d:%d", len ? " " : "", i, (Int)(m_latencyAverages[i] * 1000.0f));
+			len += snprintf(peers + len, sizeof(peers) - len, "%s%d:%d/%d", len ? " " : "", i,
+				(Int)(m_latencyAverages[i] * 1000.0f), m_fpsAverages[i]);
 		}
 	}
+
+	// client=avg/maxms logic=avg/maxms: where this PC's frame time went.
+	// objs: object count, the usual reason logic time grows late in a game.
+	char perf[96];
+	snprintf(perf, sizeof(perf), " client=%u.%u/max%u logic=%u.%u/max%u objs=%u",
+		s_netPerf.clientN ? (s_netPerf.clientMs * 10 / s_netPerf.clientN) / 10 : 0,
+		s_netPerf.clientN ? (s_netPerf.clientMs * 10 / s_netPerf.clientN) % 10 : 0, s_netPerf.clientMax,
+		s_netPerf.logicN ? (s_netPerf.logicMs * 10 / s_netPerf.logicN) / 10 : 0,
+		s_netPerf.logicN ? (s_netPerf.logicMs * 10 / s_netPerf.logicN) % 10 : 0, s_netPerf.logicMax,
+		TheGameLogic ? TheGameLogic->getObjectCount() : 0);
 
 	// rwait=mask@frame: the router's last word on whom it was waiting for, if
 	// it said anything in the last two seconds (guests only).
@@ -3338,7 +3376,7 @@ void ConnectionManager::emitNetStats(UnsignedInt frame, Int runAhead, Int frameR
 		snprintf(rwait, sizeof(rwait), " rwait=0x%02x@%u", m_routerWaitMask, m_routerWaitFrame);
 	}
 
-	ReleaseLog("NETSTAT frame=%u ra=%d fps=%d router=%d lat=%d/%d links=[%s] stall=%u/%ums/max%u on=[%s] hitch=%u/max%u rreq=%u/%u peers=[%s]%s",
+	ReleaseLog("NETSTAT frame=%u ra=%d fps=%d router=%d lat=%d/%d links=[%s] stall=%u/%ums/max%u on=[%s] hitch=%u/max%u rreq=%u/%u peers=[%s]%s%s",
 		frame, runAhead, frameRate, (Int)m_packetRouterSlot,
 		(Int)(m_frameMetrics.getAverageLatency() * 1000.0f),
 		(Int)(getReportedRunAheadLatency() * 1000.0f),
@@ -3347,6 +3385,6 @@ void ConnectionManager::emitNetStats(UnsignedInt frame, Int runAhead, Int frameR
 		on,
 		m_netStats.hitchCount, m_netStats.hitchMaxMs,
 		m_netStats.resendReqTx, m_netStats.resendReqRx,
-		peers, rwait);
+		peers, rwait, perf);
 	resetNetStats();
 }

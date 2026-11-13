@@ -1327,6 +1327,10 @@ void NetworkMesh::Tick()
 				const int ping = bHaveStatus ? status.m_nPing : -1;
 				const float quality = bHaveStatus ? status.m_flConnectionQualityLocal : -1.0f;
 				const int pending = bHaveStatus ? (status.m_cbPendingReliable + status.m_cbPendingUnreliable) : -1;
+				// Upload rate and how long a new message would wait to go out: a router whose
+				// uplink is the bottleneck shows queue time climbing on every link at once.
+				const int outKBps = bHaveStatus ? (int)(status.m_flOutBytesPerSec / 1024.0f) : -1;
+				const int queueMs = bHaveStatus ? (int)(status.m_usecQueueTime / 1000) : -1;
 				if (relayed != conn.m_lastLoggedRelayed)
 				{
 					ReleaseLog("GO route: user %lld %s ping=%dms quality=%.2f%s",
@@ -1336,9 +1340,9 @@ void NetworkMesh::Tick()
 				}
 				if (bSummary)
 				{
-					char tmp[96];
-					snprintf(tmp, sizeof(tmp), "%s%lld:%s/%dms/q%.2f/pend%d", strSummary.empty() ? "" : " ",
-						(long long)kvPair.first, relayed ? "R" : "D", ping, quality, pending);
+					char tmp[128];
+					snprintf(tmp, sizeof(tmp), "%s%lld:%s/%dms/q%.2f/pend%d/out%dk/qt%dms", strSummary.empty() ? "" : " ",
+						(long long)kvPair.first, relayed ? "R" : "D", ping, quality, pending, outKBps, queueMs);
 					strSummary += tmp;
 				}
 			}
