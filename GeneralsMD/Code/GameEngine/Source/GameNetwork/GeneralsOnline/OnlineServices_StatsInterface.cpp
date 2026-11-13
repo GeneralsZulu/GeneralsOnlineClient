@@ -82,6 +82,12 @@ void NGMP_OnlineServices_StatsInterface::GetGlobalStats(std::function<void(Globa
 		});
 }
 
+std::string NGMP_OnlineServices_StatsInterface::GetNetForm(int64_t userID) const
+{
+	auto it = m_netForm.find(userID);
+	return it != m_netForm.end() ? it->second : std::string();
+}
+
 void NGMP_OnlineServices_StatsInterface::findPlayerStatsByID(int64_t userID, std::function<void(bool, PSPlayerStats)> cb, EStatsRequestPolicy requestPolicy)
 {
 	// TODO_NGMP: this could take a while...
@@ -191,6 +197,15 @@ void NGMP_OnlineServices_StatsInterface::findPlayerStatsByID(int64_t userID, std
 							PROCESS_JSON_STANDARD_RESULT(builtSCUD);
 							PROCESS_JSON_STANDARD_RESULT(lastLadderPort);
 							PROCESS_JSON_STANDARD_RESULT(lastLadderHost);
+
+							if (jsonObject.contains("netform") && jsonObject["netform"].is_string())
+							{
+								m_netForm[userID] = jsonObject["netform"].get<std::string>();
+							}
+							else
+							{
+								m_netForm.erase(userID);
+							}
 
 							if (stats.id != userID)
 							{

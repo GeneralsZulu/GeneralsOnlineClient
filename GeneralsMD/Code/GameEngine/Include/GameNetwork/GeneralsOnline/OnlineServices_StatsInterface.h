@@ -479,6 +479,10 @@ public:
 
 	void UpdateMyStats(const PSPlayerStats& stats);
 
+	// The player's network and PC form (last 5 games) as the service's JSON, from the
+	// last PlayerStats reply for them; empty when the service had none.
+	std::string GetNetForm(int64_t userID) const;
+
 	void CommitMyOutcome(ScoreKeeper* pScoreKeeper, bool bWon);
 
 private:
@@ -501,6 +505,7 @@ private:
 
 private:
 	std::unordered_map<int64_t, PlayerStatsCacheEntry> m_playerStatsCache;
+	std::unordered_map<int64_t, std::string> m_netForm;
 	uint64_t m_nextStatsCacheRevision = 0;
 	uint64_t m_nextStatsUpdateRevision = 0;
 	static constexpr std::chrono::minutes STATS_CACHE_TTL{ 10 };

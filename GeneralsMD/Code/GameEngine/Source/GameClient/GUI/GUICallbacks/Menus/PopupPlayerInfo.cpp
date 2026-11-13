@@ -63,6 +63,7 @@
 #include "../ngmp_interfaces.h"
 #include "../ngmp_include.h"
 #include "../OnlineServices_Init.h"
+#include "GameNetwork/GeneralsOnline/json.hpp"
 
 
 // PRIVATE DATA ///////////////////////////////////////////////////////////////////////////////////
@@ -73,6 +74,7 @@ static NameKeyType buttonCloseID = NAMEKEY_INVALID;
 static NameKeyType buttonBuddiesID = NAMEKEY_INVALID;
 //static NameKeyType buttonOptionsID = NAMEKEY_INVALID;
 static NameKeyType buttonSetLocaleID = NAMEKEY_INVALID;
+static NameKeyType buttonNetFormID = NAMEKEY_INVALID;
 static NameKeyType buttonDeleteAccountID = NAMEKEY_INVALID;
 static NameKeyType checkBoxAsianFontID = NAMEKEY_INVALID;
 static NameKeyType checkBoxNonAsianFontID = NAMEKEY_INVALID;
@@ -311,6 +313,227 @@ void SetLookAtPlayer(int64_t id, AsciiString nick)
 //	BATTLE_HONOR_SOLO_GLA_S			= 0x0800000,
 //	BATTLE_HONOR_SOLO_GLA_G			= 0x1000000,
 
+// Network and PC form over the last 5 games: cncstats netmetrics computes it,
+// the service hands it over with the PlayerStats reply (see GetNetForm).
+// The badges sit in the Battle Honors list, tagged with the honor bit no stock
+// honor uses, so the honors tooltip can tell them apart.
+enum { NETFORM_BADGE = 0x04000000 };
+static const char *const s_netBadges[][2] = {
+	{ "link", "Link" }, { "nolag", "NoLag" }, { "comms", "Comms" }, { "machine", "Machine" }, { "improved", "Improved" } };
+
+struct NetFormMetric
+{
+	const char *key;
+	const char *section;
+	const char *label;
+	const WideChar *labelDefault;
+	const char *tip;
+};
+static const NetFormMetric s_netMetrics[] = {
+	{ "ping", "net", "GUI:NetFormPing", L"Ping", "TOOLTIP:NetFormPing" },
+	{ "direct", "net", "GUI:NetFormDirect", L"Direct links", "TOOLTIP:NetFormDirect" },
+	{ "lagcaused", "net", "GUI:NetFormLagCaused", L"Lag caused", "TOOLTIP:NetFormLagCaused" },
+	{ "fps", "pc", "GUI:NetFormFps", L"Game speed", "TOOLTIP:NetFormFps" },
+	{ "heldback", "pc", "GUI:NetFormHeldBack", L"Slowest PC", "TOOLTIP:NetFormHeldBack" },
+	{ "drawms", "pc", "GUI:NetFormDrawMs", L"Drawing", "TOOLTIP:NetFormDrawMs" },
+	{ "simms", "pc", "GUI:NetFormSimMs", L"Simulation", "TOOLTIP:NetFormSimMs" },
+};
+
+static nlohmann::json netFormFor(int64_t userID)
+{
+	NGMP_OnlineServices_StatsInterface* pStats = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_StatsInterface>();
+	std::string form = pStats ? pStats->GetNetForm(userID) : std::string();
+	nlohmann::json j = form.empty() ? nlohmann::json() : nlohmann::json::parse(form, nullptr, false);
+	return j.is_object() ? j : nlohmann::json();
+}
+
+static UnicodeString netFormValue(const char *key, double v)
+{
+	UnicodeString s;
+	if (!strcmp(key, "ping"))
+		s.format(L"%d ms", (Int)(v + 0.5));
+	else if (!strcmp(key, "direct") || !strcmp(key, "heldback"))
+		s.format(L"%d%%", (Int)(v * 100 + 0.5));
+	else if (!strcmp(key, "lagcaused"))
+		s.format(L"%.1f s", v);
+	else if (!strcmp(key, "fps"))
+		s.format(L"%d fps", (Int)(v + 0.5));
+	else
+		s.format(L"%.1f ms", v);
+	return s;
+}
+
+static GameWindow *nfFind(const char *name)
+{
+	if (!parent)
+		return NULL;
+	AsciiString full;
+	full.format("PopupPlayerInfo.wnd:%s", name);
+	return TheWindowManager->winGetWindowFromId(parent, NAMEKEY(full));
+}
+
+static void nfText(const AsciiString &name, const UnicodeString &text, Color color)
+{
+	GameWindow *w = nfFind(name.str());
+	if (w)
+	{
+		w->winSetEnabledTextColors(color, GameMakeColor(0, 0, 0, 255));
+		GadgetStaticTextSetText(w, text);
+	}
+}
+
+static void nfImage(const AsciiString &name, const char *image)
+{
+	GameWindow *w = nfFind(name.str());
+	const Image *img = image ? TheMappedImageCollection->findImageByName(image) : NULL;
+	if (w)
+	{
+		if (img)
+			w->winSetEnabledImage(0, img);
+		w->winHide(img == NULL);
+	}
+}
+
+// The NETWORK FORM view of the profile popup: one row per metric (value, the
+// last 5 games as dots, a tier chip, the trend on the 5 games before) and the
+// badges with their names. Rows are named NFRow<metric index>... in the layout.
+static void populateNetFormPanel(int64_t userID)
+{
+	static const char *const chipImage[] = { "ZuluChipTop", "ZuluChipSolid", "ZuluChipRough", "ZuluChipNone" };
+	static const char *const dotImage[] = { "ZuluDotTop", "ZuluDotSolid", "ZuluDotRough", "ZuluDotNone" };
+	static const char *const tierKey[] = { "GUI:NetFormTierTop", "GUI:NetFormTierSolid", "GUI:NetFormTierRough", "GUI:NetFormTierNone" };
+	static const WideChar *const tierDefault[] = { L"TOP TIER", L"SOLID", L"ROUGH PATCH", L"NOT YET" };
+	static const Color chipText[] = { GameMakeColor(156, 203, 255, 255), GameMakeColor(210, 219, 236, 255),
+		GameMakeColor(255, 207, 122, 255), GameMakeColor(150, 158, 175, 255) };
+	static const Color white = GameMakeColor(240, 244, 250, 255);
+	static const Color muted = GameMakeColor(169, 184, 210, 255);
+	static const Color better = GameMakeColor(110, 175, 255, 255);
+	static const Color worse = GameMakeColor(245, 165, 36, 255);
+
+	nlohmann::json form = netFormFor(userID);
+	AsciiString n;
+	for (Int m = 0; m < (Int)ARRAY_SIZE(s_netMetrics); ++m)
+	{
+		const NetFormMetric &metric = s_netMetrics[m];
+		const nlohmann::json *entry = nullptr;
+		if (form.contains(metric.section) && form[metric.section].is_array())
+		{
+			for (const auto &e : form[metric.section])
+			{
+				if (e.is_object() && e.value("k", "") == metric.key && e.contains("v") && e.at("v").is_number())
+					entry = &e;
+			}
+		}
+
+		n.format("NFRow%dLabel", m);
+		nfText(n, TheGameText->FETCH_OR_SUBSTITUTE(metric.label, metric.labelDefault), white);
+		if (GameWindow *w = nfFind(n.str()))
+			w->winSetTooltip(TheGameText->FETCH_OR_SUBSTITUTE(metric.tip, metric.labelDefault));
+
+		Int tier = entry ? entry->value("t", -1) : -1;
+		if (tier < 0 || tier > 2)
+			tier = 3;
+		n.format("NFRow%dValue", m);
+		nfText(n, entry ? netFormValue(metric.key, entry->at("v").get<double>()) : UnicodeString(L"--"), white);
+		n.format("NFRow%dChip", m);
+		nfImage(n, chipImage[tier]);
+		n.format("NFRow%dChipText", m);
+		nfText(n, TheGameText->FETCH_OR_SUBSTITUTE(tierKey[tier], tierDefault[tier]), chipText[tier]);
+
+		std::string dots = (entry && entry->contains("d") && entry->at("d").is_string()) ? entry->at("d").get<std::string>() : std::string();
+		for (Int d = 0; d < 5; ++d)
+		{
+			n.format("NFRow%dDot%d", m, d);
+			const Int g = (d < (Int)dots.size() && dots[d] >= '0' && dots[d] <= '2') ? dots[d] - '0' : 3;
+			nfImage(n, d < (Int)dots.size() ? dotImage[g] : NULL);
+		}
+
+		UnicodeString trend;
+		Color trendColor = muted;
+		if (!entry)
+		{
+			trend = TheGameText->FETCH_OR_SUBSTITUTE("GUI:NetFormNotEnough", L"Not enough games yet");
+		}
+		else if (entry->contains("tr") && entry->at("tr").is_number_integer())
+		{
+			const Int tr = entry->at("tr").get<Int>();
+			trend = tr > 0 ? TheGameText->FETCH_OR_SUBSTITUTE("GUI:NetFormImproving", L"Improving")
+				: tr < 0 ? TheGameText->FETCH_OR_SUBSTITUTE("GUI:NetFormSlipping", L"Slipping")
+				: TheGameText->FETCH_OR_SUBSTITUTE("GUI:NetFormSteady", L"Steady");
+			trendColor = tr > 0 ? better : tr < 0 ? worse : muted;
+			if (entry->contains("p") && entry->at("p").is_number())
+			{
+				trend.concat(L", ");
+				trend.concat(TheGameText->FETCH_OR_SUBSTITUTE("GUI:NetFormWas", L"was"));
+				trend.concat(L" ");
+				trend.concat(netFormValue(metric.key, entry->at("p").get<double>()));
+			}
+		}
+		n.format("NFRow%dTrend", m);
+		nfText(n, trend, trendColor);
+	}
+
+	Int shown = 0;
+	if (form.contains("badges") && form["badges"].is_array())
+	{
+		for (const auto &earned : form["badges"])
+		{
+			for (Int b = 0; b < (Int)ARRAY_SIZE(s_netBadges) && shown < 5; ++b)
+			{
+				if (!earned.is_string() || earned.get<std::string>() != s_netBadges[b][0])
+					continue;
+				AsciiString image, key, tip;
+				image.format("ZuluBadge%s", s_netBadges[b][1]);
+				key.format("GUI:ZuluBadge%s", s_netBadges[b][1]);
+				tip.format("TOOLTIP:ZuluBadge%s", s_netBadges[b][1]);
+				n.format("NFBadge%d", shown);
+				nfImage(n, image.str());
+				if (GameWindow *w = nfFind(n.str()))
+					w->winSetTooltip(TheGameText->FETCH_OR_SUBSTITUTE(tip.str(), L"Network badge"));
+				n.format("NFBadgeName%d", shown);
+				nfText(n, TheGameText->FETCH_OR_SUBSTITUTE(key.str(), L"Badge"), GameMakeColor(255, 230, 160, 255));
+				if (GameWindow *w = nfFind(n.str()))
+					w->winHide(FALSE);
+				++shown;
+			}
+		}
+	}
+	for (Int b = shown; b < 5; ++b)
+	{
+		n.format("NFBadge%d", b);
+		nfImage(n, NULL);
+		n.format("NFBadgeName%d", b);
+		if (GameWindow *w = nfFind(n.str()))
+			w->winHide(TRUE);
+	}
+	if (GameWindow *w = nfFind("NFNoBadges"))
+		w->winHide(shown > 0);
+}
+
+// Persona view (stock) or the network form view, swapped by ButtonNetForm.
+static Bool s_netFormShown = FALSE;
+static void showNetForm(Bool show)
+{
+	s_netFormShown = show;
+	static const char *const persona[] = { "PlayerInfoParent", "ListboxInfo", "StaticTextBattleHonors" };
+	for (Int i = 0; i < (Int)ARRAY_SIZE(persona); ++i)
+	{
+		if (GameWindow *w = nfFind(persona[i]))
+			w->winHide(show);
+	}
+	static const char *const form[] = { "NetFormParent", "NFFootnote" };
+	for (Int i = 0; i < (Int)ARRAY_SIZE(form); ++i)
+	{
+		if (GameWindow *w = nfFind(form[i]))
+			w->winHide(!show);
+	}
+	if (GameWindow *w = nfFind("ButtonNetForm"))
+		w->winSetText(show ? TheGameText->FETCH_OR_SUBSTITUTE("GUI:NetFormPersona", L"PERSONA")
+			: TheGameText->FETCH_OR_SUBSTITUTE("GUI:NetFormButton", L"NETWORK FORM"));
+}
+
+static void insertNetFormBadges(GameWindow *list, int64_t userID, Int &row, Int &column);
+
 void BattleHonorTooltip(GameWindow *window,
 												WinInstanceData *instData,
 												UnsignedInt mouse)
@@ -336,6 +559,17 @@ void BattleHonorTooltip(GameWindow *window,
 		return;
 	}
 	Real tooltipWidth = 1.5f;
+	if (BitIsSet(battleHonor, NETFORM_BADGE))
+	{
+		Int badge = battleHonor & 0xff;
+		if (badge >= 0 && badge < (Int)ARRAY_SIZE(s_netBadges))
+		{
+			AsciiString key;
+			key.format("TOOLTIP:ZuluBadge%s", s_netBadges[badge][1]);
+			TheMouse->setCursorTooltip(TheGameText->FETCH_OR_SUBSTITUTE(key.str(), L"Network badge"), -1, NULL, tooltipWidth);
+		}
+		return;
+	}
 	if (BitIsSet(battleHonor, BATTLE_HONOR_NOT_GAINED))
 	{
 		if(BitIsSet(battleHonor, BATTLE_HONOR_LOYALTY_USA))
@@ -751,6 +985,29 @@ static void populateBattleHonors(const PSPlayerStats& stats, Int battleHonors, I
 		InsertBattleHonor(list, TheMappedImageCollection->findImageByName("OfficersClub"), TRUE,
 			BATTLE_HONOR_OFFICERSCLUB, row, column);
 	}
+
+	insertNetFormBadges(list, stats.id, row, column);
+}
+
+static void insertNetFormBadges(GameWindow *list, int64_t userID, Int &row, Int &column)
+{
+	nlohmann::json form = netFormFor(userID);
+	if (!form.contains("badges") || !form["badges"].is_array())
+		return;
+	for (const auto &earned : form["badges"])
+	{
+		for (Int b = 0; b < (Int)ARRAY_SIZE(s_netBadges); ++b)
+		{
+			if (earned.is_string() && earned.get<std::string>() == s_netBadges[b][0])
+			{
+				AsciiString image;
+				image.format("ZuluBadge%s", s_netBadges[b][1]);
+				const Image *img = TheMappedImageCollection->findImageByName(image);
+				if (img)
+					InsertBattleHonor(list, img, TRUE, NETFORM_BADGE | b, row, column);
+			}
+		}
+	}
 }
 
 Int GetFavoriteSide( const PSPlayerStats& stats )
@@ -1158,6 +1415,11 @@ void PopulatePlayerInfoWindows( AsciiString parentWindowName )
 			{
 				populateBattleHonors(stats, stats.battleHonors, stats.gamesInRowWithLastGeneral, stats.lastGeneral, stats.challengeMedals, win);
 			}
+
+			if (parentWindowName == "PopupPlayerInfo.wnd")
+			{
+				populateNetFormPanel(stats.id);
+			}
 		}, EStatsRequestPolicy::BYPASS_CACHE_FORCE_REQUEST);
 }
 
@@ -1337,6 +1599,7 @@ void GameSpyPlayerInfoOverlayInit( WindowLayout *layout, void *userData )
 	listboxInfoID = TheNameKeyGenerator->nameToKey( "PopupPlayerInfo.wnd:ListboxInfo" );
 	//buttonOptionsID = TheNameKeyGenerator->nameToKey( "PopupPlayerInfo.wnd:ButtonOptions" );
 	buttonSetLocaleID = TheNameKeyGenerator->nameToKey( "PopupPlayerInfo.wnd:ButtonSetLocale" );
+	buttonNetFormID = TheNameKeyGenerator->nameToKey( "PopupPlayerInfo.wnd:ButtonNetForm" );
 	buttonDeleteAccountID = TheNameKeyGenerator->nameToKey( "PopupPlayerInfo.wnd:ButtonDeleteAccount" );
 	checkBoxAsianFontID = TheNameKeyGenerator->nameToKey( "PopupPlayerInfo.wnd:CheckBoxAsianText" );
 	checkBoxNonAsianFontID = TheNameKeyGenerator->nameToKey( "PopupPlayerInfo.wnd:CheckBoxNonAsianText" );
@@ -1362,6 +1625,7 @@ void GameSpyPlayerInfoOverlayInit( WindowLayout *layout, void *userData )
 	//GadgetListBoxAddEntryText(listboxInfo, L"Working", GameSpyColor[GSCOLOR_DEFAULT], -1);
 
 	raiseMessageBox = true;
+	showNetForm(FALSE);
 	PopulatePlayerInfoWindows("PopupPlayerInfo.wnd");
 
 	// we're on the myinfo screen
@@ -1537,6 +1801,10 @@ WindowMsgHandledType GameSpyPlayerInfoOverlaySystem( GameWindow *window, Unsigne
 //					GameSpyCloseOverlay( GSOVERLAY_PLAYERINFO );
 //					GameSpyOpenOverlay( GSOVERLAY_OPTIONS );
 //				}
+				else if (controlID == buttonNetFormID)
+				{
+					showNetForm(!s_netFormShown);
+				}
 				else if (controlID == buttonSetLocaleID)
 				{
 					RefreshGameListBoxes();
