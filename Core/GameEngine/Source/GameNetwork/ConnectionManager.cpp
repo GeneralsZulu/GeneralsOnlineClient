@@ -284,6 +284,9 @@ ConnectionManager::ConnectionManager()
 	m_localUser = newInstance(User);
 }
 
+static Int s_preferredRouterSlot = -1;
+void NetSetPreferredRouterSlot(Int slot) { s_preferredRouterSlot = slot; }
+
 /**
  * Initialize the connection manager and any subsystems.
  */
@@ -2543,6 +2546,21 @@ void ConnectionManager::parseUserList(const GameInfo *game)
 #ifdef MEMORYPOOL_DEBUG
 	TheMemoryPoolFactory->debugSetInitFillerIndex(m_localSlot);
 #endif
+
+	// Move the preferred router to the front, keeping the others' order so every
+	// client still agrees on who takes over when the router leaves.
+	Int routerIndex;
+	for (routerIndex = 1; routerIndex < numUsers; ++routerIndex) {
+		if (m_packetRouterFallback[routerIndex] == s_preferredRouterSlot) {
+			for (Int j = routerIndex; j > 0; --j) {
+				m_packetRouterFallback[j] = m_packetRouterFallback[j - 1];
+			}
+			m_packetRouterFallback[0] = s_preferredRouterSlot;
+			break;
+		}
+	}
+	ReleaseLog("NETROUTER slot=%d preferred=%d humans=%d", numUsers > 0 ? m_packetRouterFallback[0] : -1, s_preferredRouterSlot, numUsers);
+	s_preferredRouterSlot = -1;
 
 	// Set the packet router slot to the first player (packet router fallback[0])
 	// This fixes the issue where m_packetRouterSlot was hardcoded to 0 and never updated
