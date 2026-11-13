@@ -130,7 +130,7 @@ static NameKeyType buttonRandomizeID = NAMEKEY_INVALID;
 static NameKeyType buttonEmoteID = NAMEKEY_INVALID;
 static NameKeyType buttonSelectMapID = NAMEKEY_INVALID;
 static NameKeyType buttonMapVoteID = NAMEKEY_INVALID;
-// TheSuperHackers @feature bill-rich 11/10/2026 Resume-from-replay button, back on the layout: the host arms or cancels, guests see the state.
+// Resume-from-replay button, back on the layout: the host arms or cancels, guests see the state.
 static NameKeyType buttonResumeFromReplayID = NAMEKEY_INVALID;
 static NameKeyType checkboxLimitSuperweaponsID = NAMEKEY_INVALID;
 static NameKeyType checkboxEnforceRandomID = NAMEKEY_INVALID;
@@ -142,7 +142,7 @@ static GameWindow *parentLanGameOptions = nullptr;
 static GameWindow *buttonBack = nullptr;
 static GameWindow *buttonStart = nullptr;
 static GameWindow *buttonRandomize = nullptr;
-// TheSuperHackers @feature bill-rich 15/09/2026 How many times the host pressed Randomize in this
+// How many times the host pressed Randomize in this
 // lobby; announced with every roll so re-rolling is visible to everyone present.
 static Int s_randomizeCount = 0;
 static GameWindow *buttonSelectMap = nullptr;
@@ -311,7 +311,7 @@ void StartPressed()
 		return;
 	}
 
-	// TheSuperHackers @feature bill-rich 15/09/2026 An armed resume-from-replay only works if the lobby still matches the recording.
+	// An armed resume-from-replay only works if the lobby still matches the recording.
 	if (TheLAN->AmIHost() && myGame->isResumeArmed() && !lanArmedResumeStillMatches(myGame))
 	{
 		return;
@@ -791,7 +791,7 @@ void lanUpdateSlotList()
 //-------------------------------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
-// TheSuperHackers @feature bill-rich 15/09/2026 Resume-from-replay arming (host only).
+// Resume-from-replay arming (host only).
 //
 // /resume copies the host's last recording to Resume.rep (ResumeFromReplay::prepareHostSource),
 // aligns the lobby with it (slot order, factions, colors, start spots, teams, map, seed,
@@ -1565,7 +1565,7 @@ static void handleMapVoteClick()
 	AsciiString mapKey;
 	const MapMetaData *md = FindMapByDisplayName(res.chosenMap, &mapKey);
 
-	// TheSuperHackers @feature bill-rich 02/10/2026 Don't have it? Fetch it. radarvan
+	// Don't have it? Fetch it. radarvan
 	// returns the picked map's CRC (chosen_map_crc) and the cncstats map store is
 	// keyed by CRC, so that is everything the download needs -- it used to also
 	// insist on a map_filename the server has never sent, which left this branch
@@ -1771,7 +1771,7 @@ WindowMsgHandledType LanGameOptionsMenuSystem( GameWindow *window, UnsignedInt m
 				}
 				else if ( controlID == buttonResumeFromReplayID )
 				{
-					// TheSuperHackers @feature bill-rich 11/10/2026 Same as /resume and /resume off.
+					// Same as /resume and /resume off.
 					if (TheLAN->AmIHost())
 					{
 						if (TheLAN->GetMyGame() && TheLAN->GetMyGame()->isResumeArmed())
@@ -1810,7 +1810,7 @@ WindowMsgHandledType LanGameOptionsMenuSystem( GameWindow *window, UnsignedInt m
 				}
 				else if ( controlID == buttonRandomizeID )
 				{
-					// TheSuperHackers @feature bill-rich 15/09/2026 host-only Randomize: resolve the random slots,
+					// Host-only Randomize: resolve the random slots,
 					// broadcast the new options and tell the room it happened.
 					if (TheLAN->AmIHost())
 					{
@@ -1962,10 +1962,10 @@ WindowMsgHandledType LanGameOptionsMenuSystem( GameWindow *window, UnsignedInt m
 					txtInput.trim();
 					// Echo the user's input to the chat window
 					if (!txtInput.isEmpty())
-						// TheSuperHackers @feature bill-rich 15/09/2026 "/resume" arms resume-from-replay, "/resume off" disarms
+						// "/resume" arms resume-from-replay, "/resume off" disarms
 						if (txtInput.compareNoCase(L"/nettest") == 0)
 						{
-							// TheSuperHackers @feature bill-rich 11/10/2026 Network self-test, results uploaded.
+							// Network self-test, results uploaded.
 							lanLocalSystemChat(NetSelfTest_Start("chat command", TRUE));
 						}
 						else if (_wcsnicmp(txtInput.str(), L"/intel", 6) == 0 &&

@@ -2495,7 +2495,7 @@ void GameLogic::tryStartNewGame( Bool loadingSaveGame )
 		// normally. The headless-replay path is driven separately by
 		// ReplaySimulation, which calls Begin/Collect/Export itself; that path
 		// runs in GAME_REPLAY mode so this hook stays inactive.
-		// TheSuperHackers @feature bill-rich 11/10/2026 The match header and the
+		// The match header and the
 		// roster in the release log. "Factions got screwed up" and "the resume
 		// did not restore the slots" are only answerable with the slot table
 		// every client thought it was starting with.
@@ -2867,7 +2867,7 @@ void GameLogic::processCommandList(CommandList* list)
 		logicMessageDispatcher(msg, NULL);
 	}
 
-	// TheSuperHackers @feature bill-rich 15/09/2026 Skip CRC validation while in resume-from-replay
+	// Skip CRC validation while in resume-from-replay
 	// catchup (the CRC messages of that window come out of the resume source, not from the
 	// live peers) and for one run-ahead after the handoff, until the first set the peers
 	// exchanged live can have arrived.
@@ -4082,7 +4082,7 @@ void GameLogic::update()
 
 	PROFILER_PLOT("LogicFrame", static_cast<int64_t>(now));
 
-	// TheSuperHackers @feature bill-rich 15/09/2026 Live observing: while the recorder is waiting for more
+	// Live observing: while the recorder is waiting for more
 	// bytes from the stream, pump only the recorder this tick. Everything below has
 	// side effects on RNG and object state, and running it again on the same frame
 	// would advance local state past the streamer's and desync the viewer. Never let

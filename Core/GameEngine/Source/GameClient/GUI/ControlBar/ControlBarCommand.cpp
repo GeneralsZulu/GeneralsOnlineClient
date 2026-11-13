@@ -636,7 +636,7 @@ void ControlBar::populateBuildQueue( Object *producer )
 			//GadgetButtonSetHiliteImage( m_queueData[ windowIndex ].control, image );
 
 			//Show the veterancy rank of the object being constructed in the queue.
-			// TheSuperHackers @feature bill-rich 15/09/2026 computed for the producer's owner so viewers see the owner's ranks
+			// Computed for the producer's owner so viewers see the owner's ranks
 			const Image *image = calculateVeterancyOverlayForThing( production->getProductionObject(), producer->getControllingPlayer() );
 			GadgetButtonDrawOverlayImage( m_queueData[ windowIndex ].control, image );
 			//

@@ -51,7 +51,7 @@ private:
 	// Track which incoming buffer slots are occupied (handles zero-length packets)
 	bool m_inBufferOccupied[MAX_MESSAGES];
 
-	// TheSuperHackers @bugfix bill-rich 16/10/2026 Packets that arrive while
+	// Packets that arrive while
 	// every m_inBuffer slot is still unread. The buffer is MAX_MESSAGES (256)
 	// deep and drained once per engine tick, but a single doRecv can pull up to
 	// 255 messages per peer out of the socket library, and after a resume

@@ -78,11 +78,11 @@ enum class ELobbyUpdateField
 	MAX_CAMERA_HEIGHT = 17,
 	JOINABILITY = 18,
 	HOST_ACTION_BULK_SLOT_UPDATE = 19,
-	HOST_ACTION_ARM_RESUME = 20,            // TheSuperHackers @feature bill-rich 15/09/2026 resume-from-replay arming (see ResumeFromReplay)
-	LOCAL_PLAYER_HAS_RESUME_REPLAY = 21,    // TheSuperHackers @feature bill-rich 24/09/2026 this member holds a usable copy of the resume source
-	LOBBY_ENFORCE_RANDOM = 22,              // TheSuperHackers @feature bill-rich 27/09/2026 lock every slot to a random faction and team
-	HOST_ACTION_ALIGN_SLOTS = 23,           // TheSuperHackers @feature bill-rich 11/10/2026 resume-from-replay: the whole slot table at once
-	LOBBY_FFA_MODE = 24                     // TheSuperHackers @feature bill-rich 02/11/2026 hide who is who from the players (see GameInfo::isSlotAnonymous)
+	HOST_ACTION_ARM_RESUME = 20,            // Resume-from-replay arming (see ResumeFromReplay)
+	LOCAL_PLAYER_HAS_RESUME_REPLAY = 21,    // This member holds a usable copy of the resume source
+	LOBBY_ENFORCE_RANDOM = 22,              // Lock every slot to a random faction and team
+	HOST_ACTION_ALIGN_SLOTS = 23,           // Resume-from-replay: the whole slot table at once
+	LOBBY_FFA_MODE = 24                     // Hide who is who from the players (see GameInfo::isSlotAnonymous)
 };
 
 std::string Base64Encode(const std::vector<uint8_t>& data);
@@ -154,7 +154,7 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_Map(UnicodeString st
 	j["map_path"] = local_to_utf8(sanitizedMapPath.str());
 	j["map_official"] = bIsOfficial;
 	j["max_players"] = newMaxPlayers;
-	// TheSuperHackers @feature bill-rich 02/10/2026 So a member without this map can
+	// So a member without this map can
 	// fetch exactly this map from the cncstats store, which is keyed by CRC.
 	j["map_crc"] = mapCRC;
 	std::string strPostData = j.dump();
@@ -262,7 +262,7 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_StartingCash(Unsigne
 
 void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_HasMap()
 {
-	// TheSuperHackers @feature bill-rich 02/10/2026 Having a map of that name is not
+	// Having a map of that name is not
 	// the same as having the host's map: a differently-built copy of the same name used
 	// to report "yes" and then the match either refused to start or started wrong.
 	// When the host sends a CRC (map_crc != 0) the local copy has to match it.
@@ -608,7 +608,7 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_ForceReady()
 
 void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_BulkSlotUpdate(const std::vector<RandomSlotAssignment>& changes, std::function<void(bool bSuccess)> onDone)
 {
-	// TheSuperHackers @feature bill-rich 15/09/2026 Randomize: one host action for all rolled slots.
+	// Randomize: one host action for all rolled slots.
 	// reset autostart if host changes anything (because ready flag will reset too)
 #if !defined(GENERALS_ONLINE_DISABLE_AUTO_ACCEPT)
 	ClearAutoReadyCountdown();
@@ -663,7 +663,7 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_BulkSlotUpdate(const
 		});
 }
 
-// TheSuperHackers @feature bill-rich 11/10/2026 Resume-from-replay: the whole slot table in one host action.
+// Resume-from-replay: the whole slot table in one host action.
 // The service rebuilds its member table from this (humans moved, AI and empty slots re-created) or refuses
 // the lot with a reason; nothing is half-applied. The next lobby push shows the result everywhere.
 void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_AlignSlots(const std::vector<LobbySlotSpec>& slots, std::function<void(bool bSuccess, const std::string& error)> onDone)
@@ -723,7 +723,7 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_AlignSlots(const std
 		});
 }
 
-// TheSuperHackers @feature bill-rich 15/09/2026 Resume-from-replay: arm (handoff 0 disarms) the resume source
+// Resume-from-replay: arm (handoff 0 disarms) the resume source
 // the host uploaded. The service stores the handoff frame on the lobby and takes the replay's seed
 // as the lobby seed, so the next start replays that file in lockstep before live control resumes.
 // The caller announces the arm only from the success callback: the service refuses an arm without
@@ -773,7 +773,7 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_ArmResume(uint32_t h
 		});
 }
 
-// TheSuperHackers @feature bill-rich 24/09/2026 Whether this member holds a usable copy of the resume source;
+// Whether this member holds a usable copy of the resume source;
 // the host's start is refused until every human does (the way has_map gates the map).
 void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_HasResumeReplay(bool bHasResumeReplay)
 {
@@ -794,7 +794,7 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_HasResumeReplay(bool
 		});
 }
 
-// TheSuperHackers @feature bill-rich 24/09/2026 Host: push the resume source to the service in chunks (the
+// Host: push the resume source to the service in chunks (the
 // service keeps it in memory with the lobby). The first chunk (offset 0) replaces whatever the lobby held.
 void NGMP_OnlineServices_LobbyInterface::UploadResumeReplay(const AsciiString& path, std::function<void(bool bSuccess)> onComplete)
 {
@@ -865,7 +865,7 @@ void NGMP_OnlineServices_LobbyInterface::SendResumeReplayChunk(int64_t lobbyID, 
 		});
 }
 
-// TheSuperHackers @feature bill-rich 24/09/2026 Guest: pull the resume source back from the service into the
+// Guest: pull the resume source back from the service into the
 // replay directory, in the chunks the service serves.
 void NGMP_OnlineServices_LobbyInterface::DownloadResumeReplay(const AsciiString& path, std::function<void(bool bSuccess)> onComplete)
 {
@@ -1353,7 +1353,7 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 						lobbyEntryIter["MaxPlayers"].get_to(lobbyEntry.max_players);
 						lobbyEntryIter["IsVanillaTeamsOnly"].get_to(lobbyEntry.vanilla_teams);
 						lobbyEntryIter["RNGSeed"].get_to(lobbyEntry.rng_seed);
-						// TheSuperHackers @feature bill-rich 15/09/2026 resume-from-replay arming; optional so older services still parse
+						// Resume-from-replay arming; optional so older services still parse
 						if (lobbyEntryIter.contains("ResumeHandoffFrame"))
 							lobbyEntryIter["ResumeHandoffFrame"].get_to(lobbyEntry.resume_handoff_frame);
 						if (lobbyEntryIter.contains("ResumeReplayGeneration"))
@@ -1450,7 +1450,7 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 								memberEntryIter["Team"].get_to(memberEntry.team);
 								memberEntryIter["StartingPosition"].get_to(memberEntry.startpos);
 								memberEntryIter["HasMap"].get_to(memberEntry.has_map);
-								if (memberEntryIter.contains("HasResumeReplay")) // TheSuperHackers @feature bill-rich 24/09/2026 optional, see UpdateCurrentLobby_HasResumeReplay
+								if (memberEntryIter.contains("HasResumeReplay")) // Optional, see UpdateCurrentLobby_HasResumeReplay
 									memberEntryIter["HasResumeReplay"].get_to(memberEntry.has_resume_replay);
 								memberEntryIter["SlotState"].get_to(memberEntry.m_SlotState);
 								memberEntryIter["SlotIndex"].get_to(memberEntry.m_SlotIndex);
@@ -2109,7 +2109,7 @@ void NGMP_OnlineServices_LobbyInterface::OnJoinedOrCreatedLobby(bool bAlreadyUpd
 	AnticheatPlugInterface::BeginSession();
 	NetworkLog(ELogVerbosity::LOG_RELEASE, "[AC] Begin Session End");
 
-	// TheSuperHackers @info bill-rich 26/09/2026 Breadcrumbs through the lobby
+	// Breadcrumbs through the lobby
 	// entry path. A freeze here leaves no crash dump and no other trace, so the
 	// release log has to say which of these calls it was inside.
 	// join the network mesh too

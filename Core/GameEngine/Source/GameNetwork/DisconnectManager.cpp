@@ -99,7 +99,7 @@ void DisconnectManager::update(ConnectionManager *conMgr) {
 		m_lastFrameTime = timeGetTime();
 	}
 
-	// TheSuperHackers @feature bill-rich 15/09/2026 The resume-from-replay freeze deliberately holds the
+	// The resume-from-replay freeze deliberately holds the
 	// logic frame for a countdown; that is not a stalled peer.
 	if (TheRecorder && TheRecorder->isResumeFreezeActive()) {
 		m_lastFrameTime = timeGetTime();
@@ -234,7 +234,7 @@ void DisconnectManager::updateDisconnectStatus(ConnectionManager *conMgr) {
 				if ((newTime < 0) || (isPlayerVotedOut(slot, conMgr) == TRUE)) {
 					newTime = 0;
 					DEBUG_LOG(("DisconnectManager::updateDisconnectStatus - player %d(translated slot %d) has been voted out or timed out", i, slot));
-					// TheSuperHackers @feature bill-rich 11/10/2026 Once per (slot, frame): this branch
+					// Once per (slot, frame): this branch
 					// runs every update until the drop goes through, and the reason (vote vs timeout)
 					// plus the two gates below are exactly what the "who dropped whom" question needs.
 					{

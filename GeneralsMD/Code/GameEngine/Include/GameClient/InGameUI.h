@@ -939,7 +939,7 @@ protected:
 	};
 
 	//
-	// TheSuperHackers @feature bill-rich 15/09/2026 Cached "hunted" state (player can no longer rebuild),
+	// Cached "hunted" state (player can no longer rebuild),
 	// one entry per player index. Recomputed once a second rather than per frame
 	// because the check walks every object a player owns. Only maintained for
 	// viewer-only clients: for anyone still playing it would leak that an opponent

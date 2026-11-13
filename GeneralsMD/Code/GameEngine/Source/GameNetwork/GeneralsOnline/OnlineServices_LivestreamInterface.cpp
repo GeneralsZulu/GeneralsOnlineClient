@@ -16,7 +16,7 @@
 **	along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-// TheSuperHackers @feature bill-rich 24/09/2026 Live spectating transport: streams the
+// Live spectating transport: streams the
 // host's replay recording to the service and pulls it back for observers. See the header.
 
 #include "GameNetwork/GeneralsOnline/json.hpp"

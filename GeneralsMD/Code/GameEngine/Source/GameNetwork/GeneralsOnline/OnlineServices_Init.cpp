@@ -845,7 +845,7 @@ void NGMP_OnlineServicesManager::LaunchPatcher()
 }
 
 #if defined(ZULU_GO_SELFHOST_BASE)
-// TheSuperHackers @bugfix bill-rich 04/10/2026 Update Zulu GO, not the client
+// Update Zulu GO, not the client
 // it is installed beside.
 //
 // LaunchPatcher above runs the public service's patcher with
@@ -1006,7 +1006,7 @@ void NGMP_OnlineServicesManager::Init()
     std::string strPlugin = NGMP_OnlineServicesManager::Settings.GetAnticheatPlugin();
 
 #if defined(ZULU_GO_SELFHOST_BASE)
-	// TheSuperHackers @bugfix bill-rich 26/09/2026 The anticheat plugin belongs
+	// The anticheat plugin belongs
 	// to the public service and answers to it. A self hosted build shares the
 	// settings file with the public client, so the plugin name is already set
 	// on any machine that plays there, and loading it here points it at a
@@ -1188,7 +1188,7 @@ void NGMP_OnlineServicesManager::Tick()
 	NetworkMeshLibrary::Tick();
 }
 
-// TheSuperHackers @bugfix bill-rich 16/10/2026 Crash reports go to our own
+// Crash reports go to our own
 // receiver. The public client's DSN pointed every Zulu GO crash at the
 // GeneralsOnline team's Sentry project under their own release tag, so the
 // three 2026-10-14 match-start deaths were captured and we could not see them.
@@ -1230,7 +1230,7 @@ static sentry_value_t ZuluSentryOnCrash(const sentry_ucontext_t* uctx, sentry_va
 	return event;
 }
 
-// TheSuperHackers @bugfix bill-rich 18/10/2026 The crash reporter only sees SEH
+// The crash reporter only sees SEH
 // exceptions. On this CRT, abort(), std::terminate (an uncaught C++ exception,
 // a noexcept violation), a CRT invalid-parameter report and a pure virtual call
 // all end in __fastfail, which kills the process without ever running the

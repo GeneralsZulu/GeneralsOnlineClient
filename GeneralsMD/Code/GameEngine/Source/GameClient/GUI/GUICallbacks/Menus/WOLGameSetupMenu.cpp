@@ -175,11 +175,11 @@ static NameKeyType buttonStartID = NAMEKEY_INVALID;
 static NameKeyType buttonEmoteID = NAMEKEY_INVALID;
 static NameKeyType buttonSelectMapID = NAMEKEY_INVALID;
 static NameKeyType buttonRandomizeID = NAMEKEY_INVALID;
-// TheSuperHackers @feature bill-rich 02/10/2026 Radarvan Pick, the LAN lobby's map
+// Radarvan Pick, the LAN lobby's map
 // vote button, now on this screen too: host-only, asks radarvan for a map that
 // suits the roster, and applies it the way Select Map does.
 static NameKeyType buttonMapVoteID = NAMEKEY_INVALID;
-// TheSuperHackers @feature bill-rich 11/10/2026 Resume-from-replay button (host arms or cancels; guests see the state).
+// Resume-from-replay button (host arms or cancels; guests see the state).
 static NameKeyType buttonResumeID = NAMEKEY_INVALID;
 static NameKeyType windowMapID = NAMEKEY_INVALID;
 
@@ -190,7 +190,7 @@ static bool s_matchStartCountdownWasRunning = false;
 static NameKeyType windowMapSelectMapID = NAMEKEY_INVALID;
 static NameKeyType checkBoxUseStatsID = NAMEKEY_INVALID;
 static NameKeyType checkBoxLimitSuperweaponsID = NAMEKEY_INVALID;
-// TheSuperHackers @feature bill-rich 27/09/2026 enforce-random, host controlled:
+// Enforce-random, host controlled:
 // while it is set the service refuses any concrete faction or team, and every
 // player's two dropdowns are locked (see EnableAcceptControls). The Randomize
 // button still resolves the randoms, because it sends a bulk slot update.
@@ -207,10 +207,10 @@ static GameWindow *buttonSelectMap = NULL;
 static GameWindow *buttonRandomize = NULL;
 static GameWindow *buttonMapVote = NULL;
 static GameWindow *buttonResume = NULL;
-// TheSuperHackers @feature bill-rich 15/09/2026 How many times the host pressed Randomize in this
+// How many times the host pressed Randomize in this
 // lobby; announced with every roll so re-rolling is visible to everyone present.
 static Int s_randomizeCount = 0;
-// TheSuperHackers @feature bill-rich 24/09/2026 The lobby remembers a faction and colour as the player's
+// The lobby remembers a faction and colour as the player's
 // preference only when the player picked them here. A value that arrived from the service, because
 // the host pressed Randomize or moved this slot, is not a choice and must not be stored.
 // s_applyingLobbyUpdate marks the repaint that a service push drives: it fires the same combo
@@ -1005,7 +1005,7 @@ static Bool wolArmedResumeStillMatches(NGMPGame *game);
 static void wolCheckResumeArmChange();
 static void StartPressed()
 {
-	// TheSuperHackers @feature bill-rich 15/09/2026 An armed resume-from-replay only works if the lobby still
+	// An armed resume-from-replay only works if the lobby still
 	// matches the recording and every human holds the resume source.
 	{
 		NGMP_OnlineServices_LobbyInterface* pResumeLobby = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
@@ -1375,7 +1375,7 @@ void WOLDisplayGameOptions()
   //If our display does not match the current state of game settings, update the checkbox.
   Bool isUsingStats = TheGameSpyInfo->getCurrentStagingRoom()->getUseStats() ? TRUE : FALSE;
 #endif
-  // TheSuperHackers @feature bill-rich 02/10/2026 Record Stats is gone from the
+  // Record Stats is gone from the
   // shipped layout (every match reports to radarvan, so it switched nothing a
   // player can see), which frees its slot in the options row for Radarvan Pick.
   // Every use stays guarded so an older .wnd that still has the box keeps working.
@@ -1639,7 +1639,7 @@ void WOLDisplaySlotList(void)
 /** Initialize the Gadgets Options Menu */
 //-------------------------------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
-// TheSuperHackers @feature bill-rich 15/09/2026 Resume-from-replay arming for online lobbies (host only).
+// Resume-from-replay arming for online lobbies (host only).
 //
 // Same contract as the LAN lobby (LanGameOptionsMenu.cpp): /resume copies the host's last
 // recording to Resume.rep and aligns the lobby with it. Online the file is uploaded to the
@@ -1877,7 +1877,7 @@ static void handleOnlineMapVoteClick()
 	game->resetAccepted();
 	game->resetStartSpots();
 
-	// TheSuperHackers @feature bill-rich 02/10/2026 Push the .map + sidecars to the
+	// Push the .map + sidecars to the
 	// cncstats store so a lobby member who does not have this map can pull it over
 	// HTTP. No-ops when the URLs are unset or the store already holds this CRC; the
 	// sidecar helpers skip whatever is not on disk here. Runs after setMap, which is
@@ -1935,7 +1935,7 @@ static Bool wolArmedResumeStillMatches(NGMPGame *game)
 }
 
 // -----------------------------------------------------------------------------
-// TheSuperHackers @feature bill-rich 11/10/2026 The arm is a chain of service
+// The arm is a chain of service
 // requests, each started from the previous one's completion: the map, the
 // starting cash and the superweapon limit (only those that differ from the
 // recording), then the whole slot table in one piece, then the upload and the
@@ -2803,7 +2803,7 @@ void WOLGameSetupMenuInit( WindowLayout *layout, void *userData )
 		{
 			WOLDisplaySlotList();
 			WOLDisplayGameOptions();
-			wolCheckResumeArmChange(); // TheSuperHackers @feature bill-rich 24/09/2026 resume-from-replay arm arrived or left
+			wolCheckResumeArmChange(); // Resume-from-replay arm arrived or left
 		});
 
 	pLobbyInterface->RegisterForGameStartPacket([]()
@@ -3591,13 +3591,13 @@ Bool handleGameSetupSlashCommands(UnicodeString uText)
 #if defined(GENERALS_ONLINE)
 	else if (token == "nettest")
 	{
-		// TheSuperHackers @feature bill-rich 11/10/2026 Network self-test, results uploaded.
+		// Network self-test, results uploaded.
 		wolLocalSystemChat(NetSelfTest_Start("chat command", TRUE));
 		return TRUE; // was a slash command
 	}
 	else if (token == "resume")
 	{
-		// TheSuperHackers @feature bill-rich 15/09/2026 resume-from-replay arming lives behind a chat command so no layout change is needed
+		// Resume-from-replay arming lives behind a chat command so no layout change is needed
 		AsciiString arg;
 		remainder.nextToken(&arg);
 		arg.toLower();
@@ -4135,14 +4135,14 @@ WindowMsgHandledType WOLGameSetupMenuSystem( GameWindow *window, UnsignedInt msg
 				}
 				else if ( controlID == buttonResumeID )
 				{
-					// TheSuperHackers @feature bill-rich 11/10/2026 Same as /resume and /resume off.
+					// Same as /resume and /resume off.
 					NGMP_OnlineServices_LobbyInterface* pResumeLobby = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
 					NGMPGame *resumeGame = pResumeLobby ? pResumeLobby->GetCurrentGame() : nullptr;
 					wolTryArmResumeFromReplay(resumeGame != nullptr && resumeGame->isResumeArmed());
 				}
 				else if ( controlID == buttonRandomizeID )
 				{
-					// TheSuperHackers @feature bill-rich 15/09/2026 host-only Randomize. The lobby service owns the
+					// Host-only Randomize. The lobby service owns the
 					// slots, so the roll is computed on a scratch copy, only the slots it changed are sent, and
 					// the room is told once the service has accepted them; the next lobby push shows the result.
 					NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();

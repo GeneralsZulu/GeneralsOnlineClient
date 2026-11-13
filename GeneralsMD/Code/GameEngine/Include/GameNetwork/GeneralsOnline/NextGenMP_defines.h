@@ -146,7 +146,7 @@ static int FRAME_GROUPING_CAP = 64;
 
 #define GENERALS_ONLINE_DISABLE_STD_FROM_CHARS_PARSING 1
 
-// TheSuperHackers @feature bill-rich 24/09/2026 Don't upload the finished
+// Don't upload the finished
 // replay to GeneralsOnline's S3 bucket; this fork ships it to radarvan instead
 // (RecorderClass::stopRecording -> StartMatchTelemetryUpload). Sending the same
 // .rep to both is pure duplication: the GO service does not need the file for

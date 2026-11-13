@@ -42,7 +42,7 @@ public:
 	void reset(); ///< Move the frame timing anchor to now and predict the next update time from the target frame rate. Call after a long blocking operation so its duration does not leak into the next frame delta.
 
 	void setFramesPerSecondLimit( Int fps ); ///< Set the update fps limit.
-	void setUncappedForCatchup( Bool uncapped ) { m_uncappedForCatchup = uncapped; } ///< TheSuperHackers @feature bill-rich 15/09/2026 A live observer draining its snapshot ignores the render cap.
+	void setUncappedForCatchup( Bool uncapped ) { m_uncappedForCatchup = uncapped; } ///< A live observer draining its snapshot ignores the render cap.
 	Int  getFramesPerSecondLimit() const; ///< Get the update fps limit.
 	void enableFramesPerSecondLimit( Bool enable ); ///< Enable or disable the update fps limit.
 	Bool isFramesPerSecondLimitEnabled() const; ///< Returns whether the fps limit is enabled here.

@@ -71,7 +71,7 @@ protected:
 	NetCommandRef *m_prev;
 	UnsignedByte m_relay; ///< Need this in the command reference since the relay value will be different depending on where this particular reference is being sent.
 	time_t m_timeLastSent;
-	// TheSuperHackers @feature bill-rich 24/09/2026 -1 until the first send. RTT
+	// -1 until the first send. RTT
 	// samples are measured from here, so a command that was retried can never
 	// shrink the estimate that decides when to retry.
 	time_t m_timeFirstSent;

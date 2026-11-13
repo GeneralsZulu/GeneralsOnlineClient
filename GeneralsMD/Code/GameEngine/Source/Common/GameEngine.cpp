@@ -1009,7 +1009,7 @@ Bool GameEngine::canUpdateRegularGameLogic(UnsignedInt logicTimeQueryFlags)
 			|| (TheRecorder && TheRecorder->isResumeCatchupMode()));
 #endif
 
-	// TheSuperHackers @feature bill-rich 15/09/2026 A live observer draining its snapshot, and a
+	// A live observer draining its snapshot, and a
 	// resume-from-replay catchup before its lead-in, both run one logic frame per render frame;
 	// neither may be throttled to realtime by the logic time scale.
 	const Bool inLiveObserverCatchup = TheRecorder && TheRecorder->isLiveObserverCatchup();
@@ -1091,7 +1091,7 @@ Bool GameEngine::canRunLogicCatchupTick(UnsignedInt logicTimeQueryFlags)
 extern NGMPGame* TheNGMPGame;
 #endif
 
-// TheSuperHackers @feature bill-rich 15/09/2026 Wall-clock cadence of the render passes during
+// Wall-clock cadence of the render passes during
 // resume-from-replay catchup (about 30 fps), see GameEngine::update.
 static constexpr const UnsignedInt CATCHUP_RENDER_INTERVAL_MS = 33;
 
@@ -1117,7 +1117,7 @@ void GameEngine::update()
 			TheRecorder->playbackFileLiveObserver(liveFile);
 		}
 
-		// TheSuperHackers @feature bill-rich 15/09/2026 During resume-from-replay catchup, render on a
+		// During resume-from-replay catchup, render on a
 		// wall-clock cadence rather than once per logic frame: logic is fast-forwarding
 		// at many times realtime, so drawing every logic frame would burn the CPU on
 		// frames no one can perceive, while drawing at ~30 fps keeps the catchup
@@ -1125,7 +1125,7 @@ void GameEngine::update()
 		// ConnectionManager::updateRunAhead) and FrameMetrics stops sampling display
 		// FPS during catchup, which is what makes it safe to throttle here. The lead-in
 		// renders every frame for a realtime preview before control is handed back.
-		// TheSuperHackers @bugfix bill-rich 02/10/2026 A live observer draining its
+		// A live observer draining its
 		// backlog gets the same treatment. It used to render every logic frame, which
 		// pins catchup at one logic frame per rendered frame: on a vsynced 60 Hz
 		// display that is 2x realtime at best, so joining a match ten minutes in meant

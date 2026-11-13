@@ -70,7 +70,7 @@ static Bool hasValidTransferFileExtension(const AsciiString& filePath)
 		"wak",
 		"tga",
 		"txt",
-		"rep" // TheSuperHackers @feature bill-rich 24/09/2026 the resume-from-replay source (see ResumeFromReplay)
+		"rep" // The resume-from-replay source (see ResumeFromReplay)
 	};
 
 	const char* fileExt = strrchr(filePath.str(), '.');
@@ -1628,7 +1628,7 @@ void ConnectionManager::updateRunAhead(Int oldRunAhead, Int frameRate, Bool didS
 
 			newRunAhead = clamp<Int>(minRunAheadForClamp, newRunAhead, MAX_FRAMES_AHEAD / 2);
 
-			// TheSuperHackers @feature bill-rich 15/09/2026 During resume-from-replay catchup Network::update()
+			// During resume-from-replay catchup Network::update()
 			// drops the realtime frame gate, so the only thing bounding how fast we
 			// replay is lockstep: a frame advances once every peer's commands for it have
 			// arrived. Throughput is (frames in flight) / (packet send interval), and
@@ -1647,7 +1647,7 @@ void ConnectionManager::updateRunAhead(Int oldRunAhead, Int frameRate, Bool didS
 				m_lastSentRunAhead = 0;
 				m_runAheadLowerTicks = 0;
 			} else if (!NET_LEGACY_TIMING) {
-				// TheSuperHackers @feature bill-rich 24/09/2026 Hysteresis: go up at once,
+				// Hysteresis: go up at once,
 				// come down only after the lower value has held for NET_RUNAHEAD_DECAY_TICKS
 				// metrics ticks, then all the way to it. Without this a link that hovers
 				// around a frame boundary flips the whole game's window every metrics tick;
@@ -1957,7 +1957,7 @@ void ConnectionManager::initTransport() {
 
 	delete m_transport;
 
-	// TheSuperHackers @feature bill-rich 01/10/2026 Online and LAN run different
+	// Online and LAN run different
 	// transports under the same lockstep code: the GeneralsOnline mesh delivers
 	// reliably and in order, UDPTransport does not. Say which one we got, because
 	// a stall means very different things on each and the logs are otherwise
@@ -2110,7 +2110,7 @@ Bool ConnectionManager::allCommandsReady(UnsignedInt frame, Bool justTesting /* 
 			if (frameRetVal == FRAMEDATA_NOTREADY) {
 				retval = FALSE;
 			} else if (frameRetVal == FRAMEDATA_RESEND) {
-				// TheSuperHackers @bugfix bill-rich 18/10/2026 Wipe only the slot whose
+				// Wipe only the slot whose
 				// data disagreed with its announced count (FrameData::allCommandsReady
 				// already cleared its own list) and ask that player for it again. The
 				// retail loop below this cleared the frame for EVERY remote slot, which
@@ -2171,7 +2171,7 @@ NetCommandList *ConnectionManager::getFrameCommandList(UnsignedInt frame)
 }
 
 /**
- * TheSuperHackers @feature bill-rich 24/09/2026 The latency this machine reports
+ * The latency this machine reports
  * into the run-ahead negotiation.
  *
  * Run-ahead used to be sized from the MEAN round-trip latency, which is blind to
@@ -2211,7 +2211,7 @@ Bool ConnectionManager::isMeshJitterSlackActive() {
 }
 
 void ConnectionManager::setFrameGrouping(time_t frameGrouping) {
-	// TheSuperHackers @feature bill-rich 24/09/2026 Remember the negotiated send
+	// Remember the negotiated send
 	// interval: FrameMetrics needs it to tell jitter from packet batching.
 	m_frameGroupingMs = (Int)frameGrouping;
 
@@ -2323,7 +2323,7 @@ PlayerLeaveCode ConnectionManager::disconnectPlayer(Int slot) {
 		m_connections[slot] = nullptr;
 	}
 
-	// TheSuperHackers @feature bill-rich 24/09/2026 Forget the departed peer's
+	// Forget the departed peer's
 	// telemetry too, so NETSTAT stops naming a slot nobody is waiting on any more.
 	// The rest of this player's state that feeds the lockstep (m_latencyAverages,
 	// m_fpsAverages) is already gated on the connection being live.
@@ -3013,7 +3013,7 @@ void ConnectionManager::notifyOthersOfNewFrame(UnsignedInt frame) {
 }
 
 void ConnectionManager::sendFrameDataToPlayer(UnsignedInt playerID, UnsignedInt startingFrame) {
-	// TheSuperHackers @bugfix bill-rich 24/09/2026 Serve the current frame too.
+	// Serve the current frame too.
 	// The loop stopped one short of it, which is exactly the frame a resend
 	// request asks for: allCommandsReady wipes the inconsistent frame on the
 	// requester and then asks us for it, so the answer was an empty one and
@@ -3049,7 +3049,7 @@ void ConnectionManager::sendFrameDataToPlayer(UnsignedInt playerID, UnsignedInt 
 }
 
 void ConnectionManager::sendSingleFrameToPlayer(UnsignedInt playerID, UnsignedInt frame) {
-	// TheSuperHackers @bugfix bill-rich 24/09/2026 Compare signed. getFrame() is
+	// Compare signed. getFrame() is
 	// UnsignedInt and FRAMES_TO_KEEP is 65, so for the first 65 frames of a match
 	// the subtraction wrapped to nearly 2^32 and every frame looked "too far in
 	// the past": every resend and every disconnect-screen re-serve was refused, so
@@ -3065,7 +3065,7 @@ void ConnectionManager::sendSingleFrameToPlayer(UnsignedInt playerID, UnsignedIn
 	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("ConnectionManager::sendFrameDataToPlayer - sending data for frame %d", frame));
 	for (Int i = 0; i < MAX_SLOTS; ++i) {
 		if ((m_frameData[i] != nullptr) && (i != playerID)) { // no need to send his own commands to him.
-			// TheSuperHackers @bugfix bill-rich 24/09/2026 A frame whose command count
+			// A frame whose command count
 			// we have not been told yet reads back as -1 (FrameData's "unknown"), and
 			// serving that as a count would poison the requester's frame data for good.
 			// Frames inside the run-ahead window can legitimately be in that state, so
@@ -3073,7 +3073,7 @@ void ConnectionManager::sendSingleFrameToPlayer(UnsignedInt playerID, UnsignedIn
 			if (m_frameData[i]->getFrameCommandCount(frame) == (UnsignedInt)-1) {
 				continue;
 			}
-			// TheSuperHackers @bugfix bill-rich 18/10/2026 Never serve our OWN frames
+			// Never serve our OWN frames
 			// above the last one processFrameTick announced. The -1 guard above only
 			// covers remote slots: the local FrameDataManager keeps its frame command
 			// count equal to the commands it holds at all times, so a run-ahead frame
@@ -3129,7 +3129,7 @@ UnsignedInt ConnectionManager::getNextPacketRouterSlot(UnsignedInt playerID) {
 }
 
 /**
- * TheSuperHackers @bugfix bill-rich 01/10/2026 Ask for frame data that never
+ * Ask for frame data that never
  * arrived.
  *
  * requestFrameDataResend only ever fired for FRAMEDATA_RESEND, a frame whose
@@ -3213,7 +3213,7 @@ void ConnectionManager::requestFrameDataResend(Int playerID, UnsignedInt frame, 
 }
 
 // -----------------------------------------------------------------------------
-// TheSuperHackers @feature bill-rich 24/09/2026 Lockstep health telemetry.
+// Lockstep health telemetry.
 //
 // Nothing in the lockstep layer wrote to ReleaseLog before this, so a match that
 // "felt choppy" left no trace: no stall, no retry, no run-ahead change. One

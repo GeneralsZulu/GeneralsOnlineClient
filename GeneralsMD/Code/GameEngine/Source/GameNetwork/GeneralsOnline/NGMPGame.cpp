@@ -85,7 +85,7 @@ void NGMPGame::SyncWithLobby(LobbyEntry& lobby)
 	// is it official?
 
 
-	// TheSuperHackers @feature bill-rich 02/10/2026 Prefer the CRC the host sent over
+	// Prefer the CRC the host sent over
 	// the one our own copy happens to have. Two things turn on it: a member whose copy
 	// of this map is a different build no longer claims to have it (setMapCRC compares
 	// the two and sets availability itself), and a member who does not have the map at
@@ -132,7 +132,7 @@ void NGMPGame::SyncWithLobby(LobbyEntry& lobby)
 	// rng seed
 	setSeed(lobby.rng_seed);
 
-	// TheSuperHackers @feature bill-rich 15/09/2026 resume-from-replay arming (see ResumeFromReplay)
+	// Resume-from-replay arming (see ResumeFromReplay)
 	setResumeHandoffFrame(lobby.resume_handoff_frame);
 
 	// observers
@@ -544,7 +544,7 @@ void NGMPGame::launchGame(void)
 		return;
 	}
 
-	// TheSuperHackers @feature bill-rich 24/09/2026 An armed resume-from-replay needs this client's copy
+	// An armed resume-from-replay needs this client's copy
 	// of the resume source to match the lobby; when it does not, back out the same way as for a
 	// missing map rather than start a fresh match that would desync everyone.
 	UnicodeString resumeWhy;

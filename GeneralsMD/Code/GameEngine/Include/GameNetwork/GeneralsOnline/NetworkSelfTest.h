@@ -18,7 +18,6 @@
 
 // NetworkSelfTest.h
 // -----------------------------------------------------------------------------
-// TheSuperHackers @feature bill-rich 11/10/2026
 //
 // Client-side network diagnostics for the GeneralsOnline port, and the
 // "ship the logs now" path for failures that never reach the end-of-match

@@ -65,7 +65,7 @@ static NameKeyType radioButtonUserMapsID = NAMEKEY_INVALID;
 extern WindowLayout *WOLMapSelectLayout;			///< Map selection overlay
 static GameWindow *mapList = nullptr;
 
-// TheSuperHackers @feature bill-rich 27/09/2026 Search box and player-count
+// Search box and player-count
 // dropdown, the same pair the LAN map select has had. The online list is the
 // longer of the two -- every official map plus everything the map downloader
 // has ever dropped in -- so scrolling it blind was the worse of the two.
@@ -109,7 +109,7 @@ static GameWindow *winMapWindow = nullptr;
 #include "GameNetwork/GeneralsOnline/NGMPGame.h"
 extern NGMPGame* TheNGMPGame;
 
-// TheSuperHackers @feature bill-rich 02/10/2026 One list, like the LAN screen:
+// One list, like the LAN screen:
 // official and user maps together, searched together. The screen used to show one
 // side of the System/User split at a time, which made a search miss any map on the
 // other side -- and the split only ever existed to express "a stats match is
@@ -160,7 +160,7 @@ static const char *gadgetsToHide[] =
 	"ButtonStart",
 	"StaticTextMapPreview",
 
-	// TheSuperHackers @bugfix bill-rich 27/09/2026 The panel grew downward to
+	// The panel grew downward to
 	// hold the search row, so it now covers the lobby's options row; and
 	// Randomize moved into the bottom button row, where it used to be Start
 	// alone. Both would otherwise show through the panel and still take clicks.
@@ -620,7 +620,7 @@ WindowMsgHandledType WOLMapSelectMenuSystem( GameWindow *window, UnsignedInt msg
 					TheNGMPGame->resetAccepted();
 					TheNGMPGame->resetStartSpots();
 
-					// TheSuperHackers @feature bill-rich 02/10/2026 Push the .map + sidecars
+					// Push the .map + sidecars
 					// to the cncstats store so a lobby member who does not have this map can
 					// pull it over HTTP instead of waiting for the P2P transfer at launch
 					// (which only covers user maps). No-ops when the URLs are unset or the

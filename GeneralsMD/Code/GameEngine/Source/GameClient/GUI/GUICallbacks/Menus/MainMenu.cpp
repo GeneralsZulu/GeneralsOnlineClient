@@ -793,7 +793,7 @@ void MainMenuUpdate( WindowLayout *layout, void *userData )
 	{
 		return;
 	}
-	// TheSuperHackers @feature bill-rich 11/10/2026 A crash in the previous
+	// A crash in the previous
 	// session is reported from here, once the login has had a chance to give
 	// the report a name.
 	NetDiag_CheckForCrashOnLaunch();

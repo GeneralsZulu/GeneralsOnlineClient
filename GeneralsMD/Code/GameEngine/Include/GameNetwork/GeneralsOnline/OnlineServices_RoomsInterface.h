@@ -216,7 +216,7 @@ public:
 		InvokeRosterNeedsRefreshCallback();
 	}
 
-	// TheSuperHackers @bugfix bill-rich 26/09/2026 Call the roster callback with
+	// Call the roster callback with
 	// the lock released, so a redraw that comes back into this interface cannot
 	// deadlock on this non-recursive mutex.
 	void InvokeRosterNeedsRefreshCallback()

@@ -146,7 +146,7 @@ void FrameMetrics::doPerFrameMetrics(UnsignedInt frame) {
 	// Do the measurement of the fps.
 	time_t curTime = timeGetTime();
 	if ((curTime - m_lastFpsTimeThing) >= 1000) {
-		// TheSuperHackers @feature bill-rich 15/09/2026 This history is the input to
+		// This history is the input to
 		// ConnectionManager::updateRunAhead, i.e. how this machine tells the rest of
 		// the game how fast it can run. During resume-from-replay catchup the renderer
 		// is deliberately throttled while logic fast-forwards, so display FPS measures
@@ -279,7 +279,7 @@ Real FrameMetrics::getAverageLatency() {
 	return m_averageLatency;
 }
 
-// TheSuperHackers @feature bill-rich 24/09/2026 Percentile of the latency
+// Percentile of the latency
 // history, in seconds. The history is small (m_networkLatencyHistoryLength),
 // so a copy and a sort on a metrics tick is cheap; the scratch buffer is a
 // member so it does not reallocate every time.
@@ -313,7 +313,7 @@ Real FrameMetrics::getLatencyPercentile(Int pct) {
 }
 
 /**
- * TheSuperHackers @feature bill-rich 24/09/2026 The mean is blind to jitter: a
+ * The mean is blind to jitter: a
  * link that averages 80ms but spikes to 300ms every few seconds gets a window
  * sized for 80ms and stalls on every spike. So add the spread between the mean
  * and a high percentile of the history.

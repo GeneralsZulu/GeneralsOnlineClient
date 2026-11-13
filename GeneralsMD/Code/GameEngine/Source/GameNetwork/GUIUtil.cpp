@@ -494,7 +494,7 @@ void PopulatePlayerTemplateComboBox(Int comboBox, GameWindow *comboArray[], Game
 // Declared in GUIUtil.h as Color (a signed Int) so every caller agrees on the
 // type; GameMakeColor already produces a Color.
 //
-// TheSuperHackers @bugfix bill-rich 02/10/2026 These are Zulu 1.6.x's four team
+// These are Zulu 1.6.x's four team
 // colors, not GO's. Players read a lobby by team color, so a port that quietly
 // renumbered them (GO had Red/Green/Blue/Yellow) made every screenshot and every
 // "I'm on yellow" disagree with what Zulu players already know.
@@ -725,7 +725,7 @@ void UpdateSlotList( GameInfo *myGame, GameWindow *comboPlayer[],
 							break;
 						}
 					}
-					// TheSuperHackers @bugfix bill-rich 24/09/2026 A slot whose colour combo is disabled (every
+					// A slot whose colour combo is disabled (every
 					// remote slot, on the host) is skipped by the populate above, so a colour it has not
 					// listed before is missing and the cell keeps showing whatever it showed last. Rebuild
 					// it once and look again, rather than leaving the host's lobby disagreeing with the

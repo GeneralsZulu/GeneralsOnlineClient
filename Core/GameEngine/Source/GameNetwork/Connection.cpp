@@ -304,7 +304,7 @@ UnsignedInt Connection::doSend() {
 			time_t timeLastSent = msg->getTimeLastSent();
 			const Bool neverSent = (timeLastSent == -1);
 
-			// TheSuperHackers @feature bill-rich 24/09/2026 The retry interval is per
+			// The retry interval is per
 			// command now: the adaptive RTT estimate for most of them, zero (i.e. every
 			// packet) for frame info that is still ahead of the simulation.
 			const time_t interval = retryIntervalFor(msg);
@@ -403,7 +403,7 @@ NetCommandRef * Connection::processAck(UnsignedShort commandID, UnsignedByte ori
 
 	Int index = temp->getCommand()->getID() % CONNECTION_LATENCY_HISTORY_LENGTH;
 	m_averageLatency -= ((Real)(m_latencies[index])) / CONNECTION_LATENCY_HISTORY_LENGTH;
-	// TheSuperHackers @feature bill-rich 24/09/2026 Measure from the FIRST send. With
+	// Measure from the FIRST send. With
 	// frame info repeated in every packet most commands go out more than once; timing
 	// from the last copy would produce tiny samples whenever the original's ack was
 	// simply still in flight, and the estimate would spiral down into ever more resends.
@@ -441,7 +441,7 @@ time_t Connection::retryIntervalFor(const NetCommandRef *msg) const {
 	if (NET_LEGACY_TIMING) {
 		return m_retryTime;
 	}
-	// TheSuperHackers @bugfix bill-rich 18/10/2026 On the GeneralsOnline mesh the
+	// On the GeneralsOnline mesh the
 	// transport is already reliable and ordered, so a command handed to it WILL
 	// arrive; an unacked command there means the peer is slow, not that a packet
 	// was lost. Running the adaptive timer (~150-250 ms) against that turned the
