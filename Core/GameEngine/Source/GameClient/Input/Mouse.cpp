@@ -1247,7 +1247,7 @@ void Mouse::drawTooltip()
 		}
 		if( yPos + height + 4 > m_maxY ) // +4 for spill
 		{
-			// TheSuperHackers @bugfix bill-rich 17/10/2026 Flip above the cursor
+			// Flip above the cursor
 			// only when the tooltip fits there. A tooltip taller than the room
 			// above the cursor used to go off the top of the screen (the online
 			// lobby player tooltip did, while it carried the whole connection

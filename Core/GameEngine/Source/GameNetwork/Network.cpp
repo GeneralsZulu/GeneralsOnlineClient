@@ -226,7 +226,7 @@ protected:
 	Bool m_frameDataReady;																		///< Is the frame data for the next frame ready to be executed by TheGameLogic?
 	Bool m_isStalling;
 
-	// TheSuperHackers @feature bill-rich 24/09/2026 Telemetry bookkeeping, see
+	// Telemetry bookkeeping, see
 	// ConnectionManager::emitNetStats.
 	UnsignedInt m_lastUpdateMs;				///< Wall clock of the previous in-game update() (0 = none); a big gap is a hitch.
 	UnsignedInt m_stallStartMs;				///< When the current wait for frame data became late (0 = not stalling).
@@ -504,7 +504,7 @@ void Network::attachTransport(Transport* transport) {
 }
 
 Bool Network::isMessageTypeWithinNetworkRange(GameMessage::Type type) {
-	// TheSuperHackers @feature bill-rich 15/09/2026 During resume-from-replay catchup every peer injects
+	// During resume-from-replay catchup every peer injects
 	// the same commands from its own copy of the replay, so re-broadcasting them
 	// would double them on the receiver. Treat everything as non-transfer so it flows
 	// through processCommand instead, which also drives the per-frame tick forward.
@@ -518,7 +518,7 @@ Bool Network::isMessageTypeWithinNetworkRange(GameMessage::Type type) {
  * Take commands from TheCommandList and give them to the connection manager for transport.
  */
 void Network::GetCommandsFromCommandList() {
-	// TheSuperHackers @feature bill-rich 24/09/2026 During resume-from-replay catchup the local CRCs
+	// During resume-from-replay catchup the local CRCs
 	// are not exchanged (every peer is replaying the source's recorded CRC messages instead),
 	// and leaving one in TheCommandList would have it execute a frame later on its own: on
 	// the handoff frame that is a lone CRC with validation back on, a false "Not enough CRCs".
@@ -722,7 +722,7 @@ void Network::processFrameSynchronizedNetCommand(NetCommandRef* msg) {
 }
 
 void Network::processRunAheadCommand(NetRunAheadCommandMsg* msg) {
-	// TheSuperHackers @feature bill-rich 24/09/2026 A run-ahead change is the one
+	// A run-ahead change is the one
 	// lockstep event a player actually feels, so put it in the release log.
 	if ((m_runAhead != msg->getRunAhead()) || (m_frameRate != msg->getFrameRate())) {
 		const UnsignedInt now = timeGetTime();
@@ -751,7 +751,7 @@ void Network::processRunAheadCommand(NetRunAheadCommandMsg* msg) {
 	}
 #endif
 
-	// TheSuperHackers @feature bill-rich 24/09/2026 Cap the packet send interval.
+	// Cap the packet send interval.
 	// It is derived from run-ahead, which makes it both the floor on how fast a
 	// lost packet can be repeated and a feedback path into the latency samples
 	// that size run-ahead in the first place. See NetworkUtil.cpp.
@@ -811,7 +811,7 @@ void Network::update()
 
 	GetCommandsFromCommandList(); // Remove commands from TheCommandList and send them to the connection manager.
 
-	// TheSuperHackers @feature bill-rich 24/09/2026 A gap between consecutive
+	// A gap between consecutive
 	// updates means the main thread was not turning at all (a blocking call, a
 	// frozen machine); while the sim merely waits on a peer, update() keeps being
 	// called every loop. Separating the two is what tells "his link" from "his box".
@@ -844,7 +844,7 @@ void Network::update()
 		endOfGameCheck();
 	}
 
-	// TheSuperHackers @feature bill-rich 15/09/2026 Resume-from-replay: the freeze after the handoff holds
+	// Resume-from-replay: the freeze after the handoff holds
 	// the simulation on this frame for a wall-clock countdown while the network keeps
 	// pumping, and catchup before it skips the realtime timing gate (timeForNewFrame) so
 	// frames advance as fast as lockstep allows; the lead-in (last seconds before the
@@ -876,7 +876,7 @@ void Network::update()
 			m_stallMask = m_conMgr->getNotReadyMask(TheGameLogic->getFrame());
 		}
 
-		// TheSuperHackers @bugfix bill-rich 01/10/2026 Once we have been sitting on
+		// Once we have been sitting on
 		// this frame long enough that something is genuinely missing rather than
 		// merely late, go and ask for it. Nothing used to: a frame that never
 		// arrived was recovered only by the disconnect screen, 20 seconds later.

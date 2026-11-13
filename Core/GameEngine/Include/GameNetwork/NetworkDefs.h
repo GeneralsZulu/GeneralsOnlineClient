@@ -43,7 +43,7 @@ static Int MIN_RUNAHEAD = 6;
 static constexpr const Int MIN_RUNAHEAD = 4;
 #endif
 
-// TheSuperHackers @feature bill-rich 15/09/2026 Resume-from-replay catchup pins the run-ahead and the
+// Resume-from-replay catchup pins the run-ahead and the
 // logic frame rate that ConnectionManager::updateRunAhead negotiates, so every
 // peer derives the same short packet send interval while fast-forwarding.
 static constexpr const Int CATCHUP_RUNAHEAD = 32;
@@ -54,7 +54,7 @@ static constexpr const Int CATCHUP_FRAME_RATE = 1000;
 static constexpr const Int FRAME_DATA_LENGTH = (MAX_FRAMES_AHEAD + 1) * 2;
 static constexpr const Int FRAMES_TO_KEEP = (MAX_FRAMES_AHEAD / 2) + 1;
 
-// TheSuperHackers @feature bill-rich 24/09/2026 Lockstep resilience tuning.
+// Lockstep resilience tuning.
 // One player on a lossy or jittery link used to drag a whole game down, because
 // every command that needs an ack was retried on a fixed 2s timer and run-ahead
 // was sized from mean latency alone. The rationale for each value lives beside
@@ -89,7 +89,7 @@ static constexpr const Int NET_RUNAHEAD_LAT_PERCENTILE = 95;
 static constexpr const Int NET_RUNAHEAD_JITTER_CAP_MS = 250;
 static constexpr const Int NET_RUNAHEAD_DECAY_TICKS = 6;
 
-// TheSuperHackers @bugfix bill-rich 01/10/2026 How long the simulation may sit
+// How long the simulation may sit
 // on a frame before we ask for the frame data that never arrived, and how often
 // to repeat that ask while still waiting. Both want to be well inside the
 // disconnect screen's own recovery, which does not re-serve anything until
@@ -250,7 +250,7 @@ enum NetCommandType CPP_11(: Int) {
 	NETCOMMANDTYPE_DISCONNECTSCREENOFF,
 	NETCOMMANDTYPE_DISCONNECTEND,
 
-	// TheSuperHackers @feature bill-rich 16/10/2026 Sent by the packet router
+	// Sent by the packet router
 	// while it is stalled: the frame it is on and the slots it is waiting for.
 	// Everything a guest receives comes through the router, so when the router
 	// itself is stuck every guest sees "frame data missing from the router" and

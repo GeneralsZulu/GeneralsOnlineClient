@@ -155,15 +155,15 @@ public:
 	Int getAverageFPS();
 	Int getSlotAverageFPS(Int slot);
 
-	// TheSuperHackers @feature bill-rich 24/09/2026 Lockstep health telemetry
+	// Lockstep health telemetry
 	// (ReleaseLog NETSTAT / NETSTALL lines).
 	UnsignedInt getNotReadyMask(UnsignedInt frame);					///< Bit per slot whose frame data we are still waiting on.
 
-	// TheSuperHackers @bugfix bill-rich 01/10/2026 Ask for frame data that simply
+	// Ask for frame data that simply
 	// never turned up, rather than waiting for the disconnect screen to do it 20
 	// seconds later. Called from Network::update while the simulation is stalled.
 	void requestMissingFrameData(UnsignedInt frame);
-	// TheSuperHackers @feature bill-rich 16/10/2026 The packet router, while
+	// The packet router, while
 	// stalled, tells everyone which slot it is waiting on (NETCOMMANDTYPE_ROUTERWAIT),
 	// and a guest whose only missing slot is the router charges the stall to
 	// that slot instead. Telemetry only: the disconnect vote is untouched.
@@ -216,7 +216,7 @@ private:
 
 	void requestFrameDataResend(Int playerID, UnsignedInt frame, const char *reason); ///< request of this player that he send the specified frame's data.
 
-	// TheSuperHackers @feature bill-rich 24/09/2026 The latency this machine
+	// The latency this machine
 	// reports for run-ahead sizing: jitter aware unless something else is already
 	// accounting for jitter. See the definition.
 	Real getReportedRunAheadLatency();
@@ -255,14 +255,14 @@ private:
 	UnsignedInt m_smallestPacketArrivalCushion;
 	Bool m_didSelfSlug;
 
-	// TheSuperHackers @feature bill-rich 24/09/2026 Run-ahead hysteresis (packet
+	// Run-ahead hysteresis (packet
 	// router only): the last value we sent, and how many consecutive metrics ticks
 	// have wanted something lower.
 	Int m_lastSentRunAhead;
 	Int m_runAheadLowerTicks;
 	Int m_frameGroupingMs;		///< Current packet send interval (before the router's halving), for jitter sizing.
 
-	// TheSuperHackers @feature bill-rich 24/09/2026 Counters behind the NETSTAT
+	// Counters behind the NETSTAT
 	// line, reset every time one is emitted.
 	struct NetStats
 	{

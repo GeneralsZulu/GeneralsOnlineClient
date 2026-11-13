@@ -112,7 +112,7 @@ static NameKeyType buttonBackID = NAMEKEY_INVALID;
 static NameKeyType buttonHostID = NAMEKEY_INVALID;
 static NameKeyType buttonRefreshID = NAMEKEY_INVALID;
 static NameKeyType buttonJoinID = NAMEKEY_INVALID;
-// TheSuperHackers @feature bill-rich 24/09/2026 "Live" toggles the game list between lobbies and matches in
+// "Live" toggles the game list between lobbies and matches in
 // progress that are being streamed for spectating; Join then watches the selected one.
 static NameKeyType buttonLiveGamesID = NAMEKEY_INVALID;
 static GameWindow *buttonLiveGames = nullptr;
@@ -203,7 +203,7 @@ Bool handleLobbySlashCommands(UnicodeString uText, Bool *wasRateLimited)
 
 	if (token == "nettest")
 	{
-		// TheSuperHackers @feature bill-rich 11/10/2026 Network self-test, results uploaded.
+		// Network self-test, results uploaded.
 		UnicodeString s = NetSelfTest_Start("chat command", TRUE);
 		GadgetListBoxAddEntryText(listboxLobbyChat, s, GameSpyColor[GSCOLOR_DEFAULT], -1, -1);
 		return TRUE; // was a slash command
@@ -306,7 +306,7 @@ Bool handleLobbySlashCommands(UnicodeString uText, Bool *wasRateLimited)
 	}
 	else if (token == "watch")
 	{
-		// TheSuperHackers @feature bill-rich 24/09/2026 /watch lists the matches being streamed for live
+		// /watch lists the matches being streamed for live
 		// spectating; /watch <number> pulls that stream and plays it as it grows, behind the
 		// service's broadcast delay. Matches in progress are not in the lobby list, so this
 		// is the observer's entry point until the browser grows a Watch button.
@@ -1638,7 +1638,7 @@ static void shutdownComplete( WindowLayout *layout )
 //-------------------------------------------------------------------------------------------------
 void WOLLobbyMenuShutdown( WindowLayout *layout, void *userData )
 {
-	// TheSuperHackers @feature bill-rich 24/09/2026 a live-stream watch that has not started playing yet is
+	// A live-stream watch that has not started playing yet is
 	// tied to this screen; leaving it (Back, hosting a game) drops the watch so playback cannot
 	// tear down whatever screen the user moved to.
 	{
@@ -1782,7 +1782,7 @@ static const char* getMessageString(Int t)
 /** refreshGameList
 		The Bool is used to force refresh if the refresh button was hit.*/
 //-------------------------------------------------------------------------------------------------
-// TheSuperHackers @feature bill-rich 24/09/2026 Fill the game list with the matches being streamed for
+// Fill the game list with the matches being streamed for
 // spectating. Item data is the row's index into the livestream interface's last list, or -1
 // for an informational row so Join stays disabled on it.
 static void refreshLiveGamesList()

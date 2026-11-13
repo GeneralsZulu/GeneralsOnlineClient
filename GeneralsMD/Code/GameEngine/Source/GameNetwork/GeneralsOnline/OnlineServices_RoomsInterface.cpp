@@ -1093,7 +1093,7 @@ CURLcode WebSocket::RecvOne()
 											}
 										}
 
-										// TheSuperHackers @feature bill-rich 11/10/2026 What we are about to tell the
+										// What we are about to tell the
 										// service, per peer, in the uploadable log; and the self-test when we are
 										// the one who cannot reach somebody.
 										{
@@ -1814,7 +1814,7 @@ void WebSocket::Tick()
                         if (m_bReconnecting)
                         {
                             NetworkLog(ELogVerbosity::LOG_RELEASE, "[WebSocket] Re-Connected");
-                            // TheSuperHackers @bugfix bill-rich 12/10/2026 Lobby pushes sent while the
+                            // Lobby pushes sent while the
                             // socket was down are gone for good, and a guest that missed one sits on a
                             // stale slot table (and never sees a resume arm). Re-pull the lobby now.
                             // (A fresh session restores its state in RestoreSessionState instead.)

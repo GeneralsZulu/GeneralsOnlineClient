@@ -412,7 +412,7 @@ void PopupHostGameInit( WindowLayout *layout, void *userData )
 	checkBoxAllowObservers->winSetPosition(xStats, yObs);
 	checkBoxAllowObservers->winHide(false);
 
-	// TheSuperHackers @feature bill-rich 02/10/2026 Record Stats is not a choice in
+	// Record Stats is not a choice in
 	// this client: every match is reported to radarvan regardless, so the box
 	// offered a switch over nothing the player can see. Hidden rather than deleted
 	// because PopupHostGame.wnd is a retail layout this build does not ship, and

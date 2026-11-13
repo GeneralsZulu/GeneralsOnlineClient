@@ -325,7 +325,7 @@ UnicodeString Version::getUnicodeProductTitle() const
 UnicodeString Version::getUnicodeProductVersion() const
 {
 #if defined(ZULU_GO_SELFHOST_BASE)
-	// TheSuperHackers @bugfix bill-rich 27/09/2026 Nothing here. This build's
+	// Nothing here. This build's
 	// version is major.minor.buildNum, which every caller of this already
 	// appends; GENERALS_ONLINE_VERSION_STRING is the public client's own build
 	// code, unrelated to the version on our installer, and printing it beside

@@ -3317,7 +3317,7 @@ Coord2D InGameUI::getScrollAmount()
 	//-------------------------------------------------------------------------------------------------
 void InGameUI::setGUICommand(const CommandButton* command)
 {
-	// TheSuperHackers @feature bill-rich 15/09/2026 resume-from-replay catchup: no GUI commands until control is handed back
+	// Resume-from-replay catchup: no GUI commands until control is handed back
 	if (TheRecorder->getMode() == RECORDERMODETYPE_PLAYBACK || TheRecorder->isResumeInputBlocked())
 		return;
 
@@ -6547,7 +6547,7 @@ void InGameUI::notifySpecialPowerUsed(Player* player, const SpecialPowerTemplate
 
 
 //-----------------------------------------------------------------------------
-// TheSuperHackers @feature bill-rich 15/09/2026 "Hunted" detection for viewers: a player is hunted
+// "Hunted" detection for viewers: a player is hunted
 // once they have lost the ability to rebuild: no dozer/worker unit alive, and no
 // completed structure whose command set can produce one (command centers for
 // every faction, plus the GLA supply stash). Capability is checked from command
@@ -6656,7 +6656,7 @@ void InGameUI::drawObserverStats(Int & x, Int & y)
 	if (moneyWin && !moneyWin->winIsHidden())
 		return;
 
-	// TheSuperHackers @feature bill-rich 15/09/2026 The stats table sits on the bottom
+	// The stats table sits on the bottom
 	// edge, over the production queue row of the control bar. While the viewer has
 	// something selected the owner's control bar is what they asked to see, so the
 	// table steps aside; deselect (Esc) and it is back.

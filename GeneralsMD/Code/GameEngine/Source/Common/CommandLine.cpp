@@ -673,7 +673,7 @@ Int parseNetLegacy(char *args[], int num)
 	return 1;
 }
 
-// TheSuperHackers @feature bill-rich 15/09/2026 -liveReplay <file.rep>: watch a replay that is still being written to, as
+// -liveReplay <file.rep>: watch a replay that is still being written to, as
 // a live observer would. The file is opened from the Replays folder and played back
 // in RECORDERMODETYPE_LIVE_OBSERVER: end of file means wait for more bytes. Meant for
 // stream transports that append to a local file, and for testing that playback path.

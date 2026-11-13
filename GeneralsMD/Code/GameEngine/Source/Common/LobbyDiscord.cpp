@@ -37,7 +37,7 @@
 #include "GameNetwork/LANAPICallbacks.h"
 #include "DiscordWebhook.h"
 
-// TheSuperHackers @bugfix bill-rich 27/09/2026 vcpkg zlib 1.3.1's zconf.h redefines the engine's Byte
+// Vcpkg zlib 1.3.1's zconf.h redefines the engine's Byte
 // typedef; the same guard CompressionManager.cpp and StatsUploader.cpp use keeps it out.
 #define __MACTYPES__
 #include <zlib.h>

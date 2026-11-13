@@ -28,7 +28,7 @@ struct LobbyMemberEntry : public NetworkMemberBase
 	int team = -1;
 	int startpos = -1;
 	bool has_map = false;
-	bool has_resume_replay = false; // TheSuperHackers @feature bill-rich 24/09/2026 holds a usable copy of the resume-from-replay source
+	bool has_resume_replay = false; // Holds a usable copy of the resume-from-replay source
 
 	// 0xFFFF, not 999999: that literal does not fit a uint16_t and silently
 	// truncated to 16959, a plausible-looking index that made the
@@ -62,7 +62,7 @@ struct LobbyEntry
 	std::string map_name;
 	std::string map_path;
 	bool map_official = false;
-	// TheSuperHackers @feature bill-rich 02/10/2026 CRC of the lobby's map as the host
+	// CRC of the lobby's map as the host
 	// computed it, so a member who does not have the map can pull exactly that map
 	// from the cncstats store (which is keyed by CRC). 0 when the host's client is old
 	// enough not to send it, which just means no download is attempted.
@@ -72,7 +72,7 @@ struct LobbyEntry
 	bool vanilla_teams = false;
 	uint32_t starting_cash = 0;
 	bool limit_superweapons = false;
-	// TheSuperHackers @feature bill-rich 27/09/2026 enforce-random lobby rule: every
+	// Enforce-random lobby rule: every
 	// occupied slot's faction and team stay Random until the host clears it. The
 	// Randomize roll still resolves them; see UpdateCurrentLobby_EnforceRandom.
 	bool enforce_random = false;
@@ -91,7 +91,7 @@ struct LobbyEntry
 
 	int rng_seed = -1;
 
-	// TheSuperHackers @feature bill-rich 15/09/2026 resume-from-replay arming (0 when not armed); see ResumeFromReplay.
+	// Resume-from-replay arming (0 when not armed); see ResumeFromReplay.
 	// The generation counts the service's arms, so a guest can tell a fresh upload from the one it already holds.
 	uint32_t resume_handoff_frame = 0;
 	uint32_t resume_replay_generation = 0;
@@ -105,7 +105,7 @@ struct LobbyEntry
 	int latency = 0;
 };
 
-// TheSuperHackers @feature bill-rich 11/10/2026 One slot of a HOST_ACTION_ALIGN_SLOTS request: what the
+// One slot of a HOST_ACTION_ALIGN_SLOTS request: what the
 // slot must hold once the service has applied the whole arrangement. A human is named by user id, an
 // AI by its difficulty state; open and closed slots carry nothing else.
 struct LobbySlotSpec
@@ -247,7 +247,7 @@ public:
 	
 
 	// updates
-	// TheSuperHackers @feature bill-rich 11/10/2026 The three settings a resume has to align carry an optional
+	// The three settings a resume has to align carry an optional
 	// completion callback, so the arm can run them one after another and only then send the arm.
 	void UpdateCurrentLobby_Map(UnicodeString strMap, AsciiString strMapPath, bool bIsOfficial, int newMaxPlayers, uint32_t mapCRC = 0, std::function<void(bool bSuccess)> onDone = nullptr);
 	void UpdateCurrentLobby_LimitSuperweapons(bool bLimitSuperweapons, std::function<void(bool bSuccess)> onDone = nullptr);
@@ -268,15 +268,15 @@ public:
 	void UpdateCurrentLobby_AITeam(int slot, int team);
 	void UpdateCurrentLobby_AIStartPos(int slot, int startpos);
 
-	// TheSuperHackers @feature bill-rich 15/09/2026 Randomize: send the slots a roll changed (only the fields it
+	// Randomize: send the slots a roll changed (only the fields it
 	// changed, with the occupant's user id so the service can skip a slot that changed hands) and report the outcome.
 	void UpdateCurrentLobby_BulkSlotUpdate(const std::vector<RandomSlotAssignment>& changes, std::function<void(bool bSuccess)> onDone);
 
-	// TheSuperHackers @feature bill-rich 11/10/2026 Resume-from-replay: place every slot the way the recording
+	// Resume-from-replay: place every slot the way the recording
 	// had it, in one host action the service applies whole or not at all. On refusal `error` says why.
 	void UpdateCurrentLobby_AlignSlots(const std::vector<LobbySlotSpec>& slots, std::function<void(bool bSuccess, const std::string& error)> onDone);
 
-	// TheSuperHackers @feature bill-rich 15/09/2026 Resume-from-replay (see ResumeFromReplay). The host uploads
+	// Resume-from-replay (see ResumeFromReplay). The host uploads
 	// the resume source, then arms with the handoff frame and the replay's seed (handoff 0 disarms);
 	// guests download the source when the arm reaches them and flag themselves as holding it.
 	void UpdateCurrentLobby_ArmResume(uint32_t handoffFrame, int rngSeed, std::function<void(bool bSuccess)> onComplete);
@@ -526,7 +526,7 @@ public:
 		InvokeRosterNeedsRefreshCallback();
 	}
 
-	// TheSuperHackers @bugfix bill-rich 26/09/2026 Call the roster callback with
+	// Call the roster callback with
 	// the lock released. It redraws the lobby, and anything that redraw reaches
 	// which comes back into this interface, a screen teardown deregistering the
 	// callback above all, would deadlock on this non-recursive mutex and hang

@@ -207,7 +207,7 @@ void ControlBar::updateContextStructureInventory()
 	// we're visible, so there is something selected.  It is possible that we had a building
 	// selected that can be garrisoned, and while it was selected the enemy occupied it.
 	// in that case we want to unselect the building so that we can't see the contents.
-	// TheSuperHackers @feature bill-rich 15/09/2026 Observers / replay viewers are exempt:
+	// Observers / replay viewers are exempt:
 	// they're allowed to keep watching the garrison contents regardless of ownership.
 	Player *localPlayer = ThePlayerList->getLocalPlayer();
 	if( !rts::isViewerOnlyClient() &&

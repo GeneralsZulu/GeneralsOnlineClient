@@ -27,7 +27,7 @@
 
 #include "GameNetwork/networkutil.h"
 
-// TheSuperHackers @feature bill-rich 24/09/2026 Lockstep resilience.
+// Lockstep resilience.
 //
 // Every command that needs an ack used to be retried on a fixed 2s timer, so
 // one lost packet carrying frame data froze the whole lockstep game for up to

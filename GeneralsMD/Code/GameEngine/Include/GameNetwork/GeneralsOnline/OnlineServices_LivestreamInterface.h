@@ -16,7 +16,7 @@
 **	along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-// TheSuperHackers @feature bill-rich 24/09/2026 Live spectating of online matches in progress.
+// Live spectating of online matches in progress.
 // The lobby owner's client streams the bytes of its replay recording to the service as
 // the match runs; an observer lists the streams from the custom lobby (/watch), pulls
 // the bytes down behind the service's broadcast delay into a local replay file, and the

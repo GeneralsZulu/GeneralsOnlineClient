@@ -290,7 +290,7 @@ void W3DView::buildCameraPosition( Vector3& sourcePos, Vector3& targetPos )
 	// TheSuperHackers @info The default pitch affects the look-at distance to the target.
 	// This is strange math which would need special attention when changed.
 	sourcePos.Z = getCameraOffsetZ();
-	// TheSuperHackers @info bill-rich 25/09/2026 The pitch and yaw the view was
+	// The pitch and yaw the view was
 	// given are absolute in this client: InGameUI and the online game pass the
 	// GameData values straight in, and the rotations below subtract the
 	// defaults again. Taking the base offset from the same constants keeps the

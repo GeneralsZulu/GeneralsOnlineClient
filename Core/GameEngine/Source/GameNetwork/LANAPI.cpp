@@ -1625,7 +1625,7 @@ static UnsignedShort s_observeConnectPort     = 0;
 static Int           s_observeAttemptsLeft    = 0;
 static UnsignedInt   s_observeLastBytes       = 0;
 static UnsignedInt   s_observeLastProgressMs  = 0;
-// TheSuperHackers @bugfix bill-rich 02/10/2026 Stream-rate sampling, so the
+// Stream-rate sampling, so the
 // recorder can be told how far ahead the stream is (see updateObserver).
 static UnsignedInt   s_observeRateFirstMs     = 0;
 static UnsignedInt   s_observeRateFirstBytes  = 0;
@@ -1828,7 +1828,7 @@ void LANAPI::updateObserver()
 			s_observeLastProgressMs = timeGetTime();
 		}
 
-		// TheSuperHackers @bugfix bill-rich 02/10/2026 Tell the recorder how long the
+		// Tell the recorder how long the
 		// stream file already is. The live-observer catchup decides whether to run
 		// faster than realtime by comparing its read position against this length,
 		// and only the online livestream watcher was ever reporting it -- so on LAN

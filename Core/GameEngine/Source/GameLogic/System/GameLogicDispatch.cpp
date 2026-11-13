@@ -867,7 +867,7 @@ void GameLogic::logicMessageDispatcher( GameMessage *msg, void *userData )
 #endif
 
 	/**/ /// @todo: multiplayer semantics
-	// TheSuperHackers @feature bill-rich 15/09/2026 Mirror the observed player's selection only while the
+	// Mirror the observed player's selection only while the
 	// viewer's selection is empty or is still the one a previous mirror made. The viewer's
 	// own selection now brings up the owner's control bar, so it must not be hijacked by
 	// the recorded selection stream; a mirrored selection, on the other hand, must keep

@@ -20,7 +20,7 @@
 #include <steam/steamnetworkingsockets.h>
 #include "Common/ReleaseLog.h"
 
-// TheSuperHackers @feature bill-rich 11/10/2026 Mesh breadcrumbs for the uploadable
+// Mesh breadcrumbs for the uploadable
 // release log. The GeneralsOnline network log has the full detail; these are the
 // lines that answer "who could not reach whom, and was it direct or relayed".
 static const char* MeshStateName(EConnectionState st)
@@ -699,7 +699,7 @@ bool NetworkMeshLibrary::EnsureInitialized(int64_t userID)
 	}
 
 	SteamDatagramErrMsg errMsg;
-	// TheSuperHackers @info bill-rich 26/09/2026 Breadcrumbs around the socket library
+	// Breadcrumbs around the socket library
 	// calls: a client that freezes in them writes no crash dump.
 	NetworkLog(ELogVerbosity::LOG_RELEASE, "[Mesh] Starting the socket library");
 	if (!GameNetworkingSockets_Init(&identityLocal, errMsg))
@@ -711,7 +711,7 @@ bool NetworkMeshLibrary::EnsureInitialized(int64_t userID)
 
 	s_bInitialized = true;
 
-	// TheSuperHackers @bugfix bill-rich 18/10/2026 Per-connection send budget. The
+	// Per-connection send budget. The
 	// library defaults are SendRateMin = SendRateMax = 256 KB/s with a 512 KB send
 	// buffer; the Oct 17 8-player game hit both on every guest's link to the
 	// packet router and SendMessageToConnection failed 6.5k times with
@@ -725,7 +725,7 @@ bool NetworkMeshLibrary::EnsureInitialized(int64_t userID)
 	// Every STUN entry must resolve to a distinct address, or the native ICE client retries
 	// duplicates forever.
 #if defined(ZULU_GO_SELFHOST_BASE)
-	// TheSuperHackers @feature bill-rich 11/10/2026 The self-hosted service issues Cloudflare
+	// The self-hosted service issues Cloudflare
 	// Realtime TURN credentials, so STUN and TURN (NetworkMesh constructor) name Cloudflare.
 	SteamNetworkingUtils()->SetGlobalConfigValueString(k_ESteamNetworkingConfig_P2P_STUN_ServerList, "stun:stun.cloudflare.com:3478,stun:stun.l.google.com:19302");
 #else
@@ -811,7 +811,7 @@ NetworkMesh::NetworkMesh()
 	// comma-separated; no "?transport=udp" suffix, the native ICE client takes everything after
 	// the host as the port
 #if defined(ZULU_GO_SELFHOST_BASE)
-	// TheSuperHackers @feature bill-rich 11/10/2026 The self-hosted service issues
+	// The self-hosted service issues
 	// Cloudflare Realtime TURN credentials (TURNCredentialManager), so the relay
 	// list must name Cloudflare's servers: a credential from our key is rejected by
 	// GeneralsOnline's own relay. Two UDP entries (3478, and 443 for networks that
@@ -1299,7 +1299,7 @@ void NetworkMesh::Tick()
 		conn.UpdateLatencyHistogram();
 	}
 
-	// TheSuperHackers @feature bill-rich 16/10/2026 Route telemetry. The flags
+	// Route telemetry. The flags
 	// line at connect time is the route then; ICE can move a link between a
 	// relay and a direct path afterwards, and nothing said so. Every 5 s each
 	// live link is probed; a change of route is logged at once, and every 30 s
@@ -1522,7 +1522,7 @@ int PlayerConnection::SendGamePacket(void* pBuffer, uint32_t totalDataSize)
 	EResult r = SteamNetworkingSockets()->SendMessageToConnection(
 		m_hSteamConnection, vecData.data(), vecData.size(), sendFlags, nullptr);
 
-	// TheSuperHackers @bugfix bill-rich 18/10/2026 The return contract was broken
+	// The return contract was broken
 	// both ways: a successful send fell through to k_EResultFail, and a failed one
 	// returned the positive EResult, which NextGenTransport::doSend reads as
 	// success (>= 0) and so dropped the packet instead of holding it for a retry.
@@ -1721,7 +1721,7 @@ int PlayerConnection::Recv(SteamNetworkingMessage_t** pMsg)
 	}
 	else if (!m_bRecvInvalidLogged)
 	{
-		// TheSuperHackers @bugfix bill-rich 18/10/2026 Once per dead link, not once
+		// Once per dead link, not once
 		// per tick: a lobby connection that has gone away is polled every frame
 		// and this line ran to 115k copies per player on Oct 17.
 		NetworkLog(ELogVerbosity::LOG_RELEASE, "[DISC] Recv Failed 1 from user %lld (connection invalid; repeats suppressed until it is valid again)", m_userID);

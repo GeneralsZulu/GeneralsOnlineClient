@@ -112,7 +112,7 @@ Bool FramePacer::isActualFramesPerSecondLimitEnabled() const
 #endif
 	}
 
-	// TheSuperHackers @feature bill-rich 15/09/2026 A live observer draining its snapshot, and a
+	// A live observer draining its snapshot, and a
 	// resume-from-replay catchup before its lead-in, both run one logic frame per render frame
 	// as fast as they can; the render cap gets out of the way for either.
 	if (m_uncappedForCatchup)

@@ -1457,7 +1457,6 @@ void ControlBar::update()
 			populateObserverInfoWindow();
 
 		//
-		// TheSuperHackers @feature bill-rich 15/09/2026
 		// viewer-only clients (replay playback and observers) run the
 		// regular context-sensitive UI for the current selection so they see
 		// exactly what the owning player would see: command buttons with real
@@ -1849,7 +1848,7 @@ void ControlBar::evaluateContextUI()
 	//we don't show any GUI commands for them!!!
 	//This is used when we select enemy objects or objects on another team.
 	//@todo we may want to show their portrait
-	// TheSuperHackers @feature bill-rich 15/09/2026 Observers / replay viewers always fall
+	// Observers / replay viewers always fall
 	// through to the regular evaluation below so they can see production queues
 	// and garrison contents.
 	if( !TheInGameUI->areSelectedObjectsControllable() && !rts::isViewerOnlyClient() )
@@ -2010,7 +2009,7 @@ void ControlBar::evaluateContextUI()
 				switchToContext( CB_CONTEXT_COMMAND, drawToEvaluateFor );
 
 			}
-			// TheSuperHackers @bugfix bill-rich 15/09/2026 viewer-only clients can reach here for objects
+			// Viewer-only clients can reach here for objects
 			// owned by anyone, including neutral players without a player template
 			else if (obj->getControllingPlayer()
 				&& obj->getControllingPlayer()->getPlayerTemplate()

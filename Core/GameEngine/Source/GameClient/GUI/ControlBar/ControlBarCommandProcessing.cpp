@@ -123,7 +123,6 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 																							GadgetGameMessage gadgetMessage )
 {
 	//
-	// TheSuperHackers @feature bill-rich 15/09/2026
 	// observers and replay viewers see the owning player's UI but must never
 	// issue commands, and a resume-from-replay catchup is inert until control
 	// is handed back. Every context-sensitive button funnels through here

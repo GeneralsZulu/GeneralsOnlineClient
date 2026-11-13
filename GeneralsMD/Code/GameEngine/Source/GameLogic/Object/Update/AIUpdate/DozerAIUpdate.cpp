@@ -481,7 +481,7 @@ StateReturnType DozerActionDoActionState::update()
 	if( goalObject == nullptr )
 	{
 #if !RETAIL_COMPATIBLE_CRC
-		// TheSuperHackers @bugfix bill-rich 06/07/2026 Clear the pending task when the build/repair
+		// Clear the pending task when the build/repair
 		// target is gone (e.g. the building was cancelled mid-construction). Otherwise the dozer holds
 		// a stale DOZER_TASK_BUILD, which grays out the build menu until the dozer next re-enters the
 		// build state, and that transition only happens once it goes idle. Mirrors the repair branch below.

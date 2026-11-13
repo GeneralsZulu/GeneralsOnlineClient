@@ -942,7 +942,7 @@ Int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 			*pEnd = 0;
 		}
 
-		// TheSuperHackers @feature bill-rich 25/09/2026 A build installed in a
+		// A build installed in a
 		// subfolder of the game, so it cannot disturb the files of another
 		// client, still has to run with the game folder as its working
 		// directory: that is where the engine looks for the retail archives.
@@ -1042,7 +1042,7 @@ Int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
         // TODO_NGMP: Better solution
 #if defined(GENERALS_ONLINE)
-        // TheSuperHackers @bugfix bill-rich 27/09/2026 The build number is the
+        // The build number is the
         // one from the version this build ships as, not GENERALS_ONLINE_VERSION.
         // That constant is the service's contract number, it is 1 and stays 1,
         // and putting it here made every build report "<major>.<minor>.1" to the

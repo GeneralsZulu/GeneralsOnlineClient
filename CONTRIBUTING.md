@@ -63,38 +63,7 @@ Bad:
 
 User facing changes need to be accompanied by comment(s) where the change is made. Maintenance related changes, such as compilation fixes, typically do not need commenting, unless the next reader can benefit from a special explanation. The comment can be put at the begin of the changed file, class, function or block. It must be clear from the change description what has changed.
 
-The expected comment format is
-
-```
-// TheSuperHackers @keyword author DD/MM/YYYY A meaningful description for this change.
-```
-
-The `TheSuperHackers` word and `@keyword` are mandatory. `author` and date can be omitted when preferred.
-
-| Keyword          | Use-case                                                    |
-|------------------|-------------------------------------------------------------|
-| @bugfix          | Fixes a bug                                                 |
-| @fix             | Fixes something, but is not a user facing bug               |
-| @build           | Addresses a compile warning or error                        |
-| @feature         | Adds something new                                          |
-| @performance     | Improves performance                                        |
-| @refactor        | Moves or rewrites code, but does not change the behaviour   |
-| @tweak           | Changes values or settings                                  |
-| @info            | Writes useful information for the next reader               |
-| @todo            | Adds a note for something left to do if really necessary    |
-
-Block comment sample
-
-```
-    // TheSuperHackers @bugfix JAJames 17/03/2025 Fix uninitialized memory access and add more Windows versions.
-    memset(&os_info,0,sizeof(os_info));
-```
-
-Optionally, the pull request number can be appended to the comment. This can only be done after the pull request has been created.
-
-```
-// TheSuperHackers @bugfix JAJames 17/03/2025 Fix uninitialized memory access and add more Windows versions. (#123)
-```
+Zulu GO does not use the `// TheSuperHackers @keyword author DD/MM/YYYY` tags from the TheSuperHackers repository. Write a plain comment that says why the change was made. Tags already in code inherited from upstream stay as they are, so merges from upstream stay clean.
 
 ### Pull request documentation
 

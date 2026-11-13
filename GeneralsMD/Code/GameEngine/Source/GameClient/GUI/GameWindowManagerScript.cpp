@@ -258,7 +258,7 @@ static void readUntilSemicolon( File *fp, char *buffer, int maxBufLen )
 	while( i < maxBufLen )
 	{
 
-		// TheSuperHackers @bugfix bill-rich 26/09/2026 Stop at the end of the
+		// Stop at the end of the
 		// file. A failed read leaves the byte as it was, so a layout whose last
 		// field never reaches its semicolon used to sit here reading nothing
 		// forever: with the stale byte a space and nothing written yet, the
@@ -609,7 +609,7 @@ static Bool parseFont( const char *token, WinInstanceData *instData,
 	Int fontSize;
 	Int fontBold;
 
-	// TheSuperHackers @bugfix bill-rich 26/09/2026 Bounded search, and it has to
+	// Bounded search, and it has to
 	// run before strtok: strtok writes a terminator over the first separator, so
 	// a search afterwards would only ever see the label. The old code walked
 	// through that terminator, and off the end of the buffer when the value
@@ -662,7 +662,7 @@ static Bool parseName( const char *token, WinInstanceData *instData,
 	const char *stringSeps = "\"";
 
 	// scan to the first " mark
-	// TheSuperHackers @bugfix bill-rich 26/09/2026 Bounded search. This used to
+	// Bounded search. This used to
 	// walk past the end of the buffer when the value carried no quote, which a
 	// layout that ends early can now produce.
 	ptr = strchr( buffer, '"' );
@@ -722,7 +722,7 @@ static Bool parseSystemCallback( const char *token, WinInstanceData *instData,
 	const char *stringSeps = "\"";
 
 	// scan to the first " mark
-	// TheSuperHackers @bugfix bill-rich 26/09/2026 Bounded search. This used to
+	// Bounded search. This used to
 	// walk past the end of the buffer when the value carried no quote, which a
 	// layout that ends early can now produce.
 	ptr = strchr( buffer, '"' );
@@ -754,7 +754,7 @@ static Bool parseInputCallback( const char *token, WinInstanceData *instData,
 	const char *stringSeps = "\"";
 
 	// scan to the first " mark
-	// TheSuperHackers @bugfix bill-rich 26/09/2026 Bounded search. This used to
+	// Bounded search. This used to
 	// walk past the end of the buffer when the value carried no quote, which a
 	// layout that ends early can now produce.
 	ptr = strchr( buffer, '"' );
@@ -786,7 +786,7 @@ static Bool parseTooltipCallback( const char *token, WinInstanceData *instData,
 	const char *stringSeps = "\"";
 
 	// scan to the first " mark
-	// TheSuperHackers @bugfix bill-rich 26/09/2026 Bounded search. This used to
+	// Bounded search. This used to
 	// walk past the end of the buffer when the value carried no quote, which a
 	// layout that ends early can now produce.
 	ptr = strchr( buffer, '"' );
@@ -818,7 +818,7 @@ static Bool parseDrawCallback( const char *token, WinInstanceData *instData,
 	const char *stringSeps = "\"";
 
 	// scan to the first " mark
-	// TheSuperHackers @bugfix bill-rich 26/09/2026 Bounded search. This used to
+	// Bounded search. This used to
 	// walk past the end of the buffer when the value carried no quote, which a
 	// layout that ends early can now produce.
 	ptr = strchr( buffer, '"' );
@@ -850,7 +850,7 @@ static Bool parseHeaderTemplate( const char *token, WinInstanceData *instData,
 	const char *stringSeps = "\"";
 
 	// scan to the first " mark
-	// TheSuperHackers @bugfix bill-rich 26/09/2026 Bounded search. This used to
+	// Bounded search. This used to
 	// walk past the end of the buffer when the value carried no quote, which a
 	// layout that ends early can now produce.
 	ptr = strchr( buffer, '"' );
@@ -2448,7 +2448,7 @@ static GameWindow *parseWindow( File *inFile, char *buffer )
 	while( TRUE )
 	{
 
-		// TheSuperHackers @bugfix bill-rich 26/09/2026 Stop at the end of the
+		// Stop at the end of the
 		// data. scanString clears the string and returns FALSE there, and the
 		// loop used to ignore that: an empty token matches no field and no
 		// keyword, so a layout that ends early spun here forever, freezing the
@@ -2661,7 +2661,7 @@ Bool parseLayoutBlock( File *inFile, char *buffer, UnsignedInt version, WindowLa
 	while( TRUE )
 	{
 
-		// TheSuperHackers @bugfix bill-rich 26/09/2026 As above: end of data is
+		// As above: end of data is
 		// a broken layout, not something to spin on.
 		// get next token
 		if (inFile->scanString(asciitoken) == FALSE) {
@@ -2954,7 +2954,7 @@ GameWindow *GameWindowManager::winCreateFromScript( AsciiString filenameString,
       // Parse window descriptions until the last END is read
       window = parseWindow( inFile, buffer );
 
-			// TheSuperHackers @bugfix bill-rich 26/09/2026 A window that failed to
+			// A window that failed to
 			// parse used to be stored in the layout's list anyway, so every later
 			// walk of that list met a null. Stop reading the file instead: the
 			// caller already treats an empty result as a failed layout.

@@ -958,7 +958,7 @@ void StartPatchCheck()
 					else*/ if (mustDownloadPatch)
 					{
 #if defined(ZULU_GO_SELFHOST_BASE)
-						// TheSuperHackers @bugfix bill-rich 04/10/2026 Zulu GO
+						// Zulu GO
 						// updates itself, and only itself. The patcher flow
 						// below belongs to the public service: it runs that
 						// service's patcher against the current working

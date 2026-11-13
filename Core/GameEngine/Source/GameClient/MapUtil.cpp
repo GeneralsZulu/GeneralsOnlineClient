@@ -1032,7 +1032,7 @@ void MapCache::updateCache()
 	// they read as 0-byte files (not "missing"), so we'd otherwise skip the
 	// rebuild and miss new fields like garrisonablePosition.
 	Bool stdCacheRebuilt = FALSE;
-	// TheSuperHackers @bugfix bill-rich 24/09/2026 Keep this a local decision. It used to raise
+	// Keep this a local decision. It used to raise
 	// TheGlobalData->m_buildMapCache, which is the command line's "build the cache and exit"
 	// mode: GameEngine::init() reads that flag right after this call and quits, so a first
 	// launch with no cache built one and then closed the game with no message at all.

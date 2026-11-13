@@ -718,7 +718,7 @@ void Shell::doPush(AsciiString layoutFile)
 	newScreen = TheWindowManager->winCreateLayout(layoutFile);
 	DEBUG_ASSERTCRASH(newScreen != NULL, ("Shell unable to load pending push layout"));
 
-	// TheSuperHackers @bugfix bill-rich 26/09/2026 A layout that fails to load
+	// A layout that fails to load
 	// used to take the game down here, on the next line and again in runInit.
 	// Say which file it was and leave the current screen up: the player gets a
 	// menu that does not open rather than a client that dies.

@@ -52,7 +52,7 @@ public:
 
 	virtual Bool allowBroadcasts(Bool val) = 0;
 
-	// TheSuperHackers @feature bill-rich 18/10/2026 Whether this transport already
+	// Whether this transport already
 	// guarantees delivery and order (the GeneralsOnline mesh does, UDP does not).
 	// The lockstep layer tunes its own retries off this; see
 	// Connection::retryIntervalFor.

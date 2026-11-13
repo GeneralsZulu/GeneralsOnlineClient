@@ -48,7 +48,7 @@ public:
 	void addCushion(Int cushion);
 
 	Real getAverageLatency();
-	// TheSuperHackers @feature bill-rich 24/09/2026 Latency to size run-ahead from:
+	// Latency to size run-ahead from:
 	// the mean plus whatever jitter packet batching does not explain, capped. In
 	// seconds, like getAverageLatency.
 	Real getRunAheadLatency(Real batchSec);
@@ -84,7 +84,7 @@ protected:
 	int oldestLatencyInMap = -1;
 #endif
 
-	// TheSuperHackers @feature bill-rich 24/09/2026 Sort scratch for
+	// Sort scratch for
 	// getLatencyPercentile, kept as a member so the percentile does not allocate
 	// on every metrics tick.
 	std::vector<Real> m_latencyScratch;

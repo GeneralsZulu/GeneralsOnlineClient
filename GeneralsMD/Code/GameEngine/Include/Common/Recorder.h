@@ -149,7 +149,7 @@ public:
 	RecorderModeType getMode();												///< Returns the current operating mode.
 	Bool isPlaybackMode() const { return m_mode == RECORDERMODETYPE_PLAYBACK || m_mode == RECORDERMODETYPE_SIMULATION_PLAYBACK || m_mode == RECORDERMODETYPE_LIVE_OBSERVER; }
 
-	// TheSuperHackers @feature bill-rich 15/09/2026 Live observing: play back a replay file that a stream
+	// Live observing: play back a replay file that a stream
 	// (any transport) keeps appending to while the match is still running. Identical
 	// to PLAYBACK except that end of file means "wait for more bytes", the initial
 	// snapshot is drained at a boosted frame rate, torn records are re-read once the
@@ -164,7 +164,7 @@ public:
 	Bool playbackFileLiveObserver(AsciiString filename); ///< playbackFile() that then flips the mode to LIVE_OBSERVER
 	void setLiveObserverBoost(Bool boost); ///< run the logic uncapped (draining a backlog) or at the user's rate
 
-	// TheSuperHackers @feature bill-rich 15/09/2026 Resume-from-replay.
+	// Resume-from-replay.
 	//
 	// The lobby's start path validates this client's copy of the resume source (Resume.rep,
 	// see ResumeFromReplay) and arms the recorder. On the next MSG_NEW_GAME a brand new
