@@ -711,6 +711,10 @@ define go_stage_payload
 		[ -e "$$built" ] || { echo "ERROR: $$built missing -- did the build run?"; exit 1; }; \
 		cmp -s "$$built" "$$staged" || { echo "ERROR: $$staged is not the DLL this build produced ($$built); that is how 2.1.0/2.1.1 shipped a stale copy"; exit 1; }; \
 	done
+	@# Windows Smart App Control blocks an unsigned DLL with no reputation
+	@# (libssl-3.dll, 11/13), so sign our builds of them. After the stale
+	@# DLL check above, and before the VC runtime, which Microsoft signs.
+	$(SIGN) "$(1)"/*.dll
 	$(GO_VCREDIST) "$(1)"
 	cp "$(GO_TMP_BIG)" "$(1)/$(GO_BIG_NAME)"
 	cp "$(GO_CACERT)" "$(1)/cacert.pem"
