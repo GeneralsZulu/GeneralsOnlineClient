@@ -14,6 +14,7 @@
 #include "Common/MultiplayerSettings.h"
 #include "Common/PlayerTemplate.h"
 #include "GameClient/View.h"
+#include "Common/StatsUploader.h"
 #include "../NextGenMP_defines.h"
 
 NGMPGameSlot::NGMPGameSlot()
@@ -571,6 +572,12 @@ void NGMPGame::launchGame(void)
         1.0f,
 		false);
 
+
+	// Radarvan "battlefield intel" for the load screen, as the LAN start does
+	// (GameSpyLoadScreen polls for it). Non-blocking: the requests run on a
+	// worker, and a free-for-all or unteamed lobby just clears the state. Past
+	// the resume check above, so a launch that bails never starts one.
+	RadarvanIntelStartForGame(this);
 
 	// shutdown the top, but do not pop it off the stack
 //		TheShell->hideShell();
