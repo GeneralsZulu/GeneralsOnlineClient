@@ -42,7 +42,7 @@ class GameInfo;
 void ClearCommandPacket(UnsignedInt frame);										///< ClearCommandPacket clears the command packet at the start of the frame.
 CommandPacket *GetCommandPacket();											///< TheNetwork calls GetCommandPacket to get commands to send.
 
-// TheSuperHackers @feature bill-rich 12/11/2026 Per frame CPU time for the NETSTAT
+// Per frame CPU time for the NETSTAT
 // line, so a slow game can be pinned on drawing or on the simulation.
 void NetPerfNoteClient(UnsignedInt ms);
 void NetPerfNoteLogic(UnsignedInt ms);
