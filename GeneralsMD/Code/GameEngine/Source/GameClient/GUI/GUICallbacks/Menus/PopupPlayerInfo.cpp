@@ -320,6 +320,25 @@ void SetLookAtPlayer(int64_t id, AsciiString nick)
 enum { NETFORM_BADGE = 0x04000000 };
 static const char *const s_netBadges[][2] = {
 	{ "link", "Link" }, { "nolag", "NoLag" }, { "comms", "Comms" }, { "machine", "Machine" }, { "improved", "Improved" } };
+// Single holder honors from radarvan stats (cncstats honors.py), same order as
+// scripts/zulugo/make_honor_badges.py draws them into ZuluHonors.tga.
+static const char *const s_honors[][2] = {
+	{ "champ1v1", "Champ1v1" }, { "champ2v2", "Champ2v2" }, { "streak", "Streak" }, { "general", "General" },
+	{ "map", "Map" }, { "duelist", "Duelist" }, { "ironwill", "IronWill" }, { "closer", "Closer" },
+	{ "terrorist", "Terrorist" }, { "hero", "Hero" }, { "collector", "Collector" }, { "takeover", "Takeover" },
+	{ "oil", "Oil" }, { "firststrike", "FirstStrike" }, { "bigred", "BigRed" }, { "paladin", "Paladin" },
+	{ "scud", "Scud" }, { "nukecannon", "NukeCannon" }, { "plague", "Plague" }, { "holdline", "HoldLine" } };
+enum { HONOR_ID_BASE = 32 };	///< ids below are network badges, from here up honors (low byte of the honor item data)
+enum { NETFORM_SLOTS = 8 };	///< badge slots on the network form screen
+
+struct EarnedBadge
+{
+	Int id;
+	AsciiString image;
+	AsciiString nameKey;
+	AsciiString tipKey;
+	UnicodeString why;
+};
 
 struct NetFormMetric
 {
@@ -345,6 +364,64 @@ static nlohmann::json netFormFor(int64_t userID)
 	std::string form = pStats ? pStats->GetNetForm(userID) : std::string();
 	nlohmann::json j = form.empty() ? nlohmann::json() : nlohmann::json::parse(form, nullptr, false);
 	return j.is_object() ? j : nlohmann::json();
+}
+
+// Network badges first, then honors, in the order the service lists them.
+static std::vector<EarnedBadge> earnedBadges(const nlohmann::json &form)
+{
+	std::vector<EarnedBadge> out;
+	if (form.contains("badges") && form.at("badges").is_array())
+	{
+		for (const auto &earned : form.at("badges"))
+		{
+			for (Int b = 0; b < (Int)ARRAY_SIZE(s_netBadges); ++b)
+			{
+				if (earned.is_string() && earned.get<std::string>() == s_netBadges[b][0])
+				{
+					EarnedBadge e;
+					e.id = b;
+					e.image.format("ZuluBadge%s", s_netBadges[b][1]);
+					e.nameKey.format("GUI:ZuluBadge%s", s_netBadges[b][1]);
+					e.tipKey.format("TOOLTIP:ZuluBadge%s", s_netBadges[b][1]);
+					out.push_back(e);
+				}
+			}
+		}
+	}
+	if (form.contains("honors") && form.at("honors").is_array())
+	{
+		for (const auto &h : form.at("honors"))
+		{
+			const std::string k = h.is_object() ? h.value("k", "") : std::string();
+			for (Int i = 0; i < (Int)ARRAY_SIZE(s_honors); ++i)
+			{
+				if (k == s_honors[i][0])
+				{
+					EarnedBadge e;
+					e.id = HONOR_ID_BASE + i;
+					e.image.format("ZuluHonor%s", s_honors[i][1]);
+					e.nameKey.format("GUI:ZuluHonor%s", s_honors[i][1]);
+					e.tipKey.format("TOOLTIP:ZuluHonor%s", s_honors[i][1]);
+					if (h.contains("why") && h.at("why").is_string())
+						e.why = UnicodeString(from_utf8(h.at("why").get<std::string>()).c_str());
+					out.push_back(e);
+				}
+			}
+		}
+	}
+	return out;
+}
+
+static UnicodeString badgeTooltip(const EarnedBadge &e)
+{
+	UnicodeString tip = TheGameText->FETCH_OR_SUBSTITUTE(e.tipKey.str(), L"Badge");
+	if (!e.why.isEmpty())
+	{
+		tip.concat(L" (");
+		tip.concat(e.why);
+		tip.concat(L")");
+	}
+	return tip;
 }
 
 static UnicodeString netFormValue(const char *key, double v)
@@ -473,32 +550,21 @@ static void populateNetFormPanel(int64_t userID)
 		nfText(n, trend, trendColor);
 	}
 
+	const std::vector<EarnedBadge> earned = earnedBadges(form);
 	Int shown = 0;
-	if (form.contains("badges") && form["badges"].is_array())
+	for (; shown < (Int)earned.size() && shown < NETFORM_SLOTS; ++shown)
 	{
-		for (const auto &earned : form["badges"])
-		{
-			for (Int b = 0; b < (Int)ARRAY_SIZE(s_netBadges) && shown < 5; ++b)
-			{
-				if (!earned.is_string() || earned.get<std::string>() != s_netBadges[b][0])
-					continue;
-				AsciiString image, key, tip;
-				image.format("ZuluBadge%s", s_netBadges[b][1]);
-				key.format("GUI:ZuluBadge%s", s_netBadges[b][1]);
-				tip.format("TOOLTIP:ZuluBadge%s", s_netBadges[b][1]);
-				n.format("NFBadge%d", shown);
-				nfImage(n, image.str());
-				if (GameWindow *w = nfFind(n.str()))
-					w->winSetTooltip(TheGameText->FETCH_OR_SUBSTITUTE(tip.str(), L"Network badge"));
-				n.format("NFBadgeName%d", shown);
-				nfText(n, TheGameText->FETCH_OR_SUBSTITUTE(key.str(), L"Badge"), GameMakeColor(255, 230, 160, 255));
-				if (GameWindow *w = nfFind(n.str()))
-					w->winHide(FALSE);
-				++shown;
-			}
-		}
+		const EarnedBadge &e = earned[shown];
+		n.format("NFBadge%d", shown);
+		nfImage(n, e.image.str());
+		if (GameWindow *w = nfFind(n.str()))
+			w->winSetTooltip(badgeTooltip(e));
+		n.format("NFBadgeName%d", shown);
+		nfText(n, TheGameText->FETCH_OR_SUBSTITUTE(e.nameKey.str(), L"Badge"), GameMakeColor(255, 230, 160, 255));
+		if (GameWindow *w = nfFind(n.str()))
+			w->winHide(FALSE);
 	}
-	for (Int b = shown; b < 5; ++b)
+	for (Int b = shown; b < NETFORM_SLOTS; ++b)
 	{
 		n.format("NFBadge%d", b);
 		nfImage(n, NULL);
@@ -561,12 +627,11 @@ void BattleHonorTooltip(GameWindow *window,
 	Real tooltipWidth = 1.5f;
 	if (BitIsSet(battleHonor, NETFORM_BADGE))
 	{
-		Int badge = battleHonor & 0xff;
-		if (badge >= 0 && badge < (Int)ARRAY_SIZE(s_netBadges))
+		const std::vector<EarnedBadge> earned = earnedBadges(netFormFor(lookAtPlayerID));
+		for (size_t i = 0; i < earned.size(); ++i)
 		{
-			AsciiString key;
-			key.format("TOOLTIP:ZuluBadge%s", s_netBadges[badge][1]);
-			TheMouse->setCursorTooltip(TheGameText->FETCH_OR_SUBSTITUTE(key.str(), L"Network badge"), -1, NULL, tooltipWidth);
+			if (earned[i].id == (battleHonor & 0xff))
+				TheMouse->setCursorTooltip(badgeTooltip(earned[i]), -1, NULL, tooltipWidth);
 		}
 		return;
 	}
@@ -991,22 +1056,12 @@ static void populateBattleHonors(const PSPlayerStats& stats, Int battleHonors, I
 
 static void insertNetFormBadges(GameWindow *list, int64_t userID, Int &row, Int &column)
 {
-	nlohmann::json form = netFormFor(userID);
-	if (!form.contains("badges") || !form["badges"].is_array())
-		return;
-	for (const auto &earned : form["badges"])
+	const std::vector<EarnedBadge> earned = earnedBadges(netFormFor(userID));
+	for (size_t i = 0; i < earned.size(); ++i)
 	{
-		for (Int b = 0; b < (Int)ARRAY_SIZE(s_netBadges); ++b)
-		{
-			if (earned.is_string() && earned.get<std::string>() == s_netBadges[b][0])
-			{
-				AsciiString image;
-				image.format("ZuluBadge%s", s_netBadges[b][1]);
-				const Image *img = TheMappedImageCollection->findImageByName(image);
-				if (img)
-					InsertBattleHonor(list, img, TRUE, NETFORM_BADGE | b, row, column);
-			}
-		}
+		const Image *img = TheMappedImageCollection->findImageByName(earned[i].image);
+		if (img)
+			InsertBattleHonor(list, img, TRUE, NETFORM_BADGE | earned[i].id, row, column);
 	}
 }
 
