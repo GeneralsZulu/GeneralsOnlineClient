@@ -1643,12 +1643,22 @@ void PlayerConnection::UpdateLatencyHistogram()
 	// update latency history
 	int currLatency = GetLatency();
 #if defined(GENERALS_ONLINE_HIGH_FPS_SERVER)
-	const int connectionHistoryLength = histogram_duration / 16; // ~20 sec worth of frames at 60fps (default)
+	int connectionHistoryLength = histogram_duration / 16; // ~20 sec worth of frames at 60fps (default)
 #else
-	const int connectionHistoryLength = histogram_duration / 33; // ~20 sec worth of frames at 30fps (default)
+	int connectionHistoryLength = histogram_duration / 33; // ~20 sec worth of frames at 30fps (default)
 #endif
+	// The duration comes from the service config. Below one frame's worth the
+	// length is 0 and the size check below is always true, so the first tick
+	// erased begin() of an empty vector (undefined behaviour, a crash in
+	// practice). A negative value was the opposite problem: converted to
+	// size_t it never trims, and the history grew for the whole session.
+	if (connectionHistoryLength < 1)
+	{
+		connectionHistoryLength = 1;
+	}
+	const size_t maxHistory = static_cast<size_t>(connectionHistoryLength);
 
-	if (m_vecLatencyHistory.size() >= connectionHistoryLength)
+	while (m_vecLatencyHistory.size() >= maxHistory)
 	{
 		m_vecLatencyHistory.erase(m_vecLatencyHistory.begin());
 	}
@@ -1679,7 +1689,7 @@ void PlayerConnection::UpdateLatencyHistogram()
 
 			if (sample >= 0.0f)
 			{
-				if (m_vecQualityHistory.size() >= connectionHistoryLength)
+				while (m_vecQualityHistory.size() >= maxHistory)
 					m_vecQualityHistory.erase(m_vecQualityHistory.begin());
 				m_vecQualityHistory.push_back(sample);
 			}
