@@ -87,11 +87,11 @@ for i, (sec, m) in enumerate(rows):
         kids += clone(IMG, "NFRow%dDot%d" % (m, d), (x0 + 154 + 12 * d, y0 + 24, x0 + 163 + 12 * d, y0 + 33), image="ZuluDotNone")
     kids += clone(IMG, "NFRow%dChip" % m, (x0 + 228, y0 + 6, x0 + 330, y0 + 30), image="ZuluChipNone")
     kids += clone(TEXT, "NFRow%dChipText" % m, (x0 + 228, y0 + 6, x0 + 330, y0 + 30), text="", font=(10, 1), centered=1)
-kids += clone(TEXT, "NFHeadBadges", (57, 316, 752, 336), text="GUI:NetFormBadges", font=(14, 0))
-for b in range(5):
-    x0 = 57 + 140 * b
-    kids += clone(IMG, "NFBadge%d" % b, (x0 + 41, 338, x0 + 89, 386), image="ZuluBadgeLink")
-    kids += clone(TEXT, "NFBadgeName%d" % b, (x0, 388, x0 + 130, 406), text="", font=(10, 1), centered=1)
+kids += clone(TEXT, "NFHeadBadges", (57, 312, 752, 332), text="GUI:NetFormBadges", font=(14, 0))
+for b in range(8):  # NETFORM_SLOTS: network badges, then honors
+    x0 = 57 + 87 * b
+    kids += clone(IMG, "NFBadge%d" % b, (x0 + 21, 334, x0 + 65, 378), image="ZuluBadgeLink")
+    kids += clone(TEXT, "NFBadgeName%d" % b, (x0, 379, x0 + 86, 409), text="", font=(9, 1), centered=1)  # two lines
 kids += clone(TEXT, "NFNoBadges", (57, 350, 752, 370), text="GUI:NetFormNoBadges", font=(10, 0))
 # Outside the panel: the panel must end above the buttons or it eats their clicks.
 foot = clone(TEXT, "NFFootnote", (57, 412, 530, 456), text="TOOLTIP:NetForm", font=(9, 0), status="ENABLED+HIDDEN")

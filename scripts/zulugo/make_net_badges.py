@@ -16,8 +16,8 @@ N = SIZE * SS
 GOLD, GOLD_DK, GOLD_LT = (222, 178, 74), (128, 92, 28), (255, 230, 150)
 
 
-def medal(rim):
-    """Round steel medal with a coloured rim; returns image + draw."""
+def medal(rim, field=(22, 30, 46)):
+    """Round medal with a coloured rim and field; returns image + draw."""
     im = Image.new("RGBA", (N, N), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     c = N / 2
@@ -36,7 +36,7 @@ def medal(rim):
         d.ellipse((x - N * 0.018, y - N * 0.018, x + N * 0.018, y + N * 0.018), fill=(30, 30, 34, 160))
     # Dark field with a soft top highlight.
     fr = N * 0.40
-    d.ellipse((c - fr, c - fr, c + fr, c + fr), fill=(22, 30, 46, 255))
+    d.ellipse((c - fr, c - fr, c + fr, c + fr), fill=field + (255,))
     hl = Image.new("L", (N, N), 0)
     ImageDraw.Draw(hl).ellipse((c - fr * 0.9, c - fr * 0.95, c + fr * 0.9, c + fr * 0.1), fill=60)
     hl = hl.filter(ImageFilter.GaussianBlur(N * 0.04))

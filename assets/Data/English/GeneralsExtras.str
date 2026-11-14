@@ -236,11 +236,11 @@ GUI:NetFormPC
 END
 
 GUI:NetFormBadges
-"BADGES"
+"BADGES & HONORS"
 END
 
 GUI:NetFormNoBadges
-"No badges yet"
+"No badges or honors yet"
 END
 
 GUI:NetFormPing
@@ -377,4 +377,164 @@ END
 
 TOOLTIP:ZuluBadgeImproved
 "Most Improved: the biggest drop in lag caused, compared with the 5 games before."
+END
+
+GUI:ZuluHonorChamp1v1
+"1v1 Champion"
+END
+
+TOOLTIP:ZuluHonorChamp1v1
+"1v1 Champion: Won the last 1v1 tournament. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorChamp2v2
+"2v2 Champion"
+END
+
+TOOLTIP:ZuluHonorChamp2v2
+"2v2 Champion: Won the last 2v2 tournament. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorStreak
+"Hottest Streak"
+END
+
+TOOLTIP:ZuluHonorStreak
+"Hottest Streak: The longest current win streak among the regulars. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorGeneral
+"General Master"
+END
+
+TOOLTIP:ZuluHonorGeneral
+"General Master: The best win rate with one general, 10 or more games with it. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorMap
+"Map Master"
+END
+
+TOOLTIP:ZuluHonorMap
+"Map Master: The best win rate on one map, 6 or more games on it. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorDuelist
+"Duelist"
+END
+
+TOOLTIP:ZuluHonorDuelist
+"Duelist: The best 1v1 win rate, 10 or more 1v1s. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorIronWill
+"Iron Will"
+END
+
+TOOLTIP:ZuluHonorIronWill
+"Iron Will: The most wins in games that ran half again as long as usual. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorCloser
+"Fastest Closer"
+END
+
+TOOLTIP:ZuluHonorCloser
+"Fastest Closer: The most quick wins per game: wins in under 3/4 of the usual game length. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorTerrorist
+"Terrorist"
+END
+
+TOOLTIP:ZuluHonorTerrorist
+"Terrorist: The most destroyed by terrorists. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorHero
+"Hero of the Hour"
+END
+
+TOOLTIP:ZuluHonorHero
+"Hero of the Hour: The most destroyed per hero trained (Burton, Black Lotus, Jarmen Kell). Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorCollector
+"Collector"
+END
+
+TOOLTIP:ZuluHonorCollector
+"Collector: The most rare units built: Stealth Fighters, Marauders, Paladins, Bomb Trucks, Saboteurs, Microwave Tanks. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorTakeover
+"Hostile Takeover"
+END
+
+TOOLTIP:ZuluHonorTakeover
+"Hostile Takeover: The most enemy buildings captured per game. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorOil
+"Oil Baron"
+END
+
+TOOLTIP:ZuluHonorOil
+"Oil Baron: The most tech buildings captured per game. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorFirstStrike
+"First Strike"
+END
+
+TOOLTIP:ZuluHonorFirstStrike
+"First Strike: First blood in the most games. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorBigRed
+"Big Red Button"
+END
+
+TOOLTIP:ZuluHonorBigRed
+"Big Red Button: The most superweapon launches. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorPaladin
+"Paladin Knight"
+END
+
+TOOLTIP:ZuluHonorPaladin
+"Paladin Knight: The most destroyed with Paladin tanks per game. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorScud
+"Scud Commander"
+END
+
+TOOLTIP:ZuluHonorScud
+"Scud Commander: The most Scud Launchers built per game. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorNukeCannon
+"Nuke Cannoneer"
+END
+
+TOOLTIP:ZuluHonorNukeCannon
+"Nuke Cannoneer: The most Nuke Cannons built per game. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorPlague
+"Plague Bringer"
+END
+
+TOOLTIP:ZuluHonorPlague
+"Plague Bringer: The most anthrax kills per game. Last 90 days, players with 10 or more games."
+END
+
+GUI:ZuluHonorHoldLine
+"Hold the Line"
+END
+
+TOOLTIP:ZuluHonorHoldLine
+"Hold the Line: The most kills by base defenses per game. Last 90 days, players with 10 or more games."
 END
