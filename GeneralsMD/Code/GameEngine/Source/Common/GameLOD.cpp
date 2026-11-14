@@ -41,6 +41,9 @@
 #define DEFINE_PARTICLE_SYSTEM_NAMES
 #include "GameClient/ParticleSys.h"
 #include "GameLogic/GameLogic.h"
+#include "GameClient/Shell.h"
+#include "Common/Recorder.h"
+#include "Common/ReleaseLog.h"
 
 
 #define PROFILE_ERROR_LIMIT	0.94f	//fraction of profiled result needed to get a match.  Allows some room for error/fluctuation.
@@ -49,6 +52,13 @@
 extern Bool testMinimumRequirements(ChipsetType *videoChipType, CpuType *cpuType, Int *cpuFreq, MemValueType *numRAM, Real *intBenchIndex, Real *floatBenchIndex, Real *memBenchIndex);
 
 GameLODManager *TheGameLODManager=nullptr;
+
+#if defined(GENERALS_ONLINE_HIGH_FPS_SERVER)
+// Seconds of steady FPS before a reduced client gets its graphics settings back,
+// and the ceiling that wait backs off to when restoring them just drops it again.
+static constexpr const int QUALITY_RESTORE_STABLE_SECONDS = 15;
+static constexpr const int QUALITY_RESTORE_STABLE_SECONDS_MAX = 240;
+#endif
 
 static const FieldParse TheStaticGameLODFieldParseTable[] =
 {
@@ -236,6 +246,9 @@ GameLODManager::GameLODManager()
 	m_lowFPSSecondsCount = 0;
 	m_stableFPSSecondsCount = 0;
 	m_userMaxParticleCount = 0;
+	m_lastQualityCheckFrame = 0;
+	m_lastQualityRestoreFrame = 0;
+	m_stableSecondsRequired = QUALITY_RESTORE_STABLE_SECONDS;
 #endif
 
 	for (Int i=0; i<STATIC_GAME_LOD_CUSTOM; i++)
@@ -778,15 +791,34 @@ Bool GameLODManager::didMemPass()
 #if defined(GENERALS_ONLINE_HIGH_FPS_SERVER)
 void GameLODManager::updateGraphicsQualityState(float averageFPS)
 {
-	if (!TheGameLogic || (TheGameLogic->getFrame() % LOGICFRAMES_PER_SECOND) != 0)
+	if (!TheGameLogic)
 		return;
 
-	if (TheGameLogic->isInShellGame() || TheGameLogic->isInReplayGame() || (TheGameLogic->getFrame() < LOGICFRAMES_PER_SECOND))
+	// Only a live match is worth protecting, and only while the measured FPS means
+	// what it says: resume-from-replay and live-observer catchup throttle the
+	// renderer on purpose. The options menu reads and saves the very settings this
+	// overrides, so stand down (and hand the player's own values back) while it is up.
+	const Bool inCatchup = TheRecorder && (TheRecorder->isResumeCatchupMode() || TheRecorder->isLiveObserverCatchup());
+	const Bool optionsOpen = TheShell && TheShell->getOptionsLayout(FALSE) != nullptr;
+	if (!TheGameLogic->isInGame() || TheGameLogic->isInShellGame() || TheGameLogic->isInReplayGame()
+		|| inCatchup || optionsOpen || (TheGameLogic->getFrame() < LOGICFRAMES_PER_SECOND))
 	{
 		if (m_isQualityReduced)
 			restoreQualitySettings();
+		m_lowFPSSecondsCount = 0;
+		m_stableFPSSecondsCount = 0;
+		m_lastQualityRestoreFrame = 0;
+		m_stableSecondsRequired = QUALITY_RESTORE_STABLE_SECONDS;
 		return;
 	}
+
+	// Sample once per logic second. This is called once per rendered frame, and
+	// several of those can land on the same logic frame (render faster than logic,
+	// a lockstep stall, a pause), so each logic frame is only counted once.
+	const UnsignedInt frame = TheGameLogic->getFrame();
+	if ((frame % LOGICFRAMES_PER_SECOND) != 0 || frame == m_lastQualityCheckFrame)
+		return;
+	m_lastQualityCheckFrame = frame;
 
 	if (!m_isQualityReduced)
 	{
@@ -819,6 +851,17 @@ void GameLODManager::updateGraphicsQualityState(float averageFPS)
 		TheWritableGlobalData->m_useHeatEffects = false;
 		m_isQualityReduced = true;
 		m_lowFPSSecondsCount = 0;
+
+		// Falling straight back under the threshold after a restore means this machine
+		// cannot hold the full settings in this match. Wait longer before trying again,
+		// otherwise it dips every few seconds and drags the game speed with it.
+		const UnsignedInt relapseFrames = 2 * QUALITY_RESTORE_STABLE_SECONDS * LOGICFRAMES_PER_SECOND;
+		if (m_lastQualityRestoreFrame != 0 && (frame - m_lastQualityRestoreFrame) < relapseFrames)
+			m_stableSecondsRequired = min(m_stableSecondsRequired * 2, QUALITY_RESTORE_STABLE_SECONDS_MAX);
+		else
+			m_stableSecondsRequired = QUALITY_RESTORE_STABLE_SECONDS;
+
+		ReleaseLog("GameLOD: average FPS %.1f on frame %u, reducing graphics quality", averageFPS, frame);
 	}
 
 
@@ -831,22 +874,26 @@ void GameLODManager::updateGraphicsQualityState(float averageFPS)
 		if (targetCount < current)
 			TheWritableGlobalData->m_maxParticleCount = max(100, current + (int)((targetCount - current) * 0.5f));
 
-		if (!shouldReduceQuality && m_stableFPSSecondsCount > 15)
+		if (!shouldReduceQuality && m_stableFPSSecondsCount > m_stableSecondsRequired)
 		{
 			int newCount = current + (int)((m_userMaxParticleCount - current) * 0.3f);
 			if (newCount >= m_userMaxParticleCount || newCount == current)
+			{
 				restoreQualitySettings();
+				m_lastQualityRestoreFrame = frame;
+			}
 			else
 				TheWritableGlobalData->m_maxParticleCount = newCount;
-
-			DynamicGameLODLevel lod = TheGameLODManager->findDynamicLODLevel(averageFPS);
-			TheGameLODManager->setDynamicLODLevel(lod);
 		}
 	}
 }
 
 void GameLODManager::restoreQualitySettings()
 {
+	if (!m_isQualityReduced)
+		return;	// nothing captured to hand back
+
+	ReleaseLog("GameLOD: restoring graphics quality");
 	TheWritableGlobalData->m_useShadowVolumes = m_userShadowVolumesEnabled;
 	TheWritableGlobalData->m_useShadowDecals = m_userShadowDecalsEnabled;
 	TheWritableGlobalData->m_useHeatEffects = m_userHeatEffectsEnabled;
