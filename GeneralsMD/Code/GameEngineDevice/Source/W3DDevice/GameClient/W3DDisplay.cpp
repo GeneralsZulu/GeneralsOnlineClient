@@ -1862,6 +1862,15 @@ void W3DDisplay::draw()
 	W3D_UpdateScreenshotMessages();
 
 	updateAverageFPS();
+
+#if defined(GENERALS_ONLINE_HIGH_FPS_SERVER)
+	// A network game runs at the pace of its slowest renderer (FrameMetrics feeds
+	// this same average into ConnectionManager::updateRunAhead), so shed shadows,
+	// heat effects and particles here before this client slows the match for everyone.
+	if (TheGameLODManager)
+		TheGameLODManager->updateGraphicsQualityState(m_averageFPS);
+#endif
+
 	if (TheGlobalData->m_enableDynamicLOD && TheGameLogic->getShowDynamicLOD())
 	{
 		DynamicGameLODLevel lod=TheGameLODManager->findDynamicLODLevel(m_averageFPS);

@@ -985,6 +985,15 @@ void OptionsMenuInit( WindowLayout *layout, void *userData )
 	if (TheGameEngine->getQuitting())
 		return;
 	OptionsLayout = layout;
+
+#if defined(GENERALS_ONLINE_HIGH_FPS_SERVER)
+	// The controls below are filled from, and saved back to, the settings the
+	// automatic quality reduction overrides. Put the player's own values back
+	// first so a temporary reduction is never shown or written to Options.ini.
+	if (TheGameLODManager)
+		TheGameLODManager->restoreQualitySettings();
+#endif
+
 	if (!pref)
 	{
 		pref = NEW OptionPreferences;

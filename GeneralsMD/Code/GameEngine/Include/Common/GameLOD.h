@@ -239,6 +239,9 @@ protected:
 	int  m_stableFPSSecondsCount;
 	int  m_lowFPSSecondsCount;
 	int  m_userMaxParticleCount;
+	UnsignedInt m_lastQualityCheckFrame;	///< logic frame of the last FPS sample, so a frame is counted once
+	UnsignedInt m_lastQualityRestoreFrame;	///< logic frame the settings were last handed back in-game, 0 if never
+	int  m_stableSecondsRequired;	///< seconds of steady FPS needed before restoring; backs off on a relapse
 #endif
 };
 
