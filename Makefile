@@ -414,6 +414,8 @@ installer-release: $(INSTALLER_OUT) | $(TMP_DIR)
 #                                  dev channel
 #   make zulugo-exe                build just the shipping game exe
 #   make zulugo-exe-log            build it with DEBUG_LOGGING + DEBUG_CRASHING
+#   make zulugo-exe-opt            build it with RTS_BUILD_OPTION_OPTIMIZED
+#                                  (/GL + /LTCG); evaluation only, not shipped
 #   make zulugo-launcher           build just ZuluGOLauncher.exe
 #   make zulugo-launcher-dev       ... from the logging build directory
 #   make zulugo-modbig             just (re)pack assets/ into Zulu.modbig
@@ -456,8 +458,10 @@ GO_VERSION_BUILDNUM := $(or $(word 3,$(subst ., ,$(GO_APPVERSION))),0)
 GO_PRESET             := msvc-wine
 GO_BUILD_SUBDIR       ?= build/docker-$(GO_PRESET)
 GO_BUILD_SUBDIR_LOG   ?= build/docker-$(GO_PRESET)-log
+GO_BUILD_SUBDIR_OPT   ?= build/docker-$(GO_PRESET)-opt
 GO_DEPS_CACHE         ?= $(abspath $(GO_BUILD_SUBDIR)-deps)
 GO_DEPS_CACHE_LOG     ?= $(abspath $(GO_BUILD_SUBDIR_LOG)-deps)
+GO_DEPS_CACHE_OPT     ?= $(abspath $(GO_BUILD_SUBDIR_OPT)-deps)
 
 # The GeneralsOnline client target is still called z_generals; its output is
 # named GeneralsOnlineZH.exe and ships as ZuluGO.exe. z_go_launcher is the one
@@ -471,6 +475,7 @@ GO_LAUNCHER_NAME      := ZuluGOLauncher.exe
 GO_BIG_NAME           := Zulu.modbig
 GO_SOURCE_EXE          := $(GO_BUILD_SUBDIR)/GeneralsMD/GeneralsOnlineZH.exe
 GO_SOURCE_EXE_LOG      := $(GO_BUILD_SUBDIR_LOG)/GeneralsMD/GeneralsOnlineZH.exe
+GO_SOURCE_EXE_OPT      := $(GO_BUILD_SUBDIR_OPT)/GeneralsMD/GeneralsOnlineZH.exe
 GO_SOURCE_LAUNCHER     := $(GO_BUILD_SUBDIR)/launcher/$(GO_LAUNCHER_NAME)
 GO_SOURCE_LAUNCHER_LOG := $(GO_BUILD_SUBDIR_LOG)/launcher/$(GO_LAUNCHER_NAME)
 
@@ -545,7 +550,7 @@ GO_LATEST_PUBLIC_URL      = https://storage.googleapis.com/$(GCS_BUCKET)/latest-
 GO_SYMBOLS_GCS_URI        = gs://$(GCS_BUCKET)/symbols/zulugo/v$(GO_APPVERSION)
 
 .PHONY: zulugo-installer zulugo-installer-release zulugo-installer-dev \
-        zulugo-exe zulugo-exe-log zulugo-launcher zulugo-launcher-dev \
+        zulugo-exe zulugo-exe-log zulugo-exe-opt zulugo-launcher zulugo-launcher-dev \
         zulugo-modbig zulugo-payload zulugo-payload-dev clean-zulugo-installer
 
 # Target-specific variables, propagated down the prereq chain the same way the
@@ -654,6 +659,20 @@ mismatch-gate:
 zulugo-exe-log:
 	$(call go_build,$(GO_BUILD_SUBDIR_LOG),$(GO_DEPS_CACHE_LOG),"-DRTS_DEBUG_LOGGING=ON" "-DRTS_DEBUG_CRASHING=ON",$(GO_GAME_TARGET))
 	@echo "Zulu GO client (logging): $(GO_SOURCE_EXE_LOG)"
+
+# Whole-program optimized client, for measuring before it ships: the same
+# Release build with RTS_BUILD_OPTION_OPTIMIZED switched on, which adds
+# /GL + /LTCG, /Ob3, /Gw and /Ot (cmake/config-build.cmake). Floating point
+# stays /fp:precise. Nothing in the installer pipeline uses this exe; it gets
+# its own build directory for the sticky-cache reason given for the log build
+# above. Before it replaces zulugo-exe it has to pass the determinism checks:
+# headless playback of current-client replays (-headless -replay "*.rep")
+# with no CRC mismatch, and mismatch-gate with both an all-optimized pair and
+# an optimized client against a current one. mismatch-gate runs the lab
+# build (GATE_EXE), so that lab exe needs the same flag.
+zulugo-exe-opt:
+	$(call go_build,$(GO_BUILD_SUBDIR_OPT),$(GO_DEPS_CACHE_OPT),"-DRTS_BUILD_OPTION_OPTIMIZED=ON",$(GO_GAME_TARGET))
+	@echo "Zulu GO client (optimized): $(GO_SOURCE_EXE_OPT)"
 
 # Built in the same directory as the client it ships with, so the build
 # variant baked into the launcher (which picks latest-go.json vs
