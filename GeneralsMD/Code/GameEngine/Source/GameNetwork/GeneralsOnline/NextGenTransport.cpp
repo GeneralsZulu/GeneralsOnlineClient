@@ -427,6 +427,14 @@ Bool NextGenTransport::doRecv(void)
                             bRet = TRUE;
                         }
                     }
+                    else
+                    {
+                        // Neither channel this client knows: drop it, but give
+                        // the message back to GNS like every other path does.
+                        NetworkLog(ELogVerbosity::LOG_RELEASE, "[NET PACKET] Dropping packet on unknown channel %u (size %u) from user %lld", static_cast<unsigned>(netChannel), numBytesWithHeader, static_cast<long long>(kvPair.second.m_userID));
+                        msg->Release();
+                        continue;
+                    }
                 }
                 else
                 {
