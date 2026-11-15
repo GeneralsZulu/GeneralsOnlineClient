@@ -165,7 +165,7 @@ Bool NextGenTransport::doRecv(void)
                     // Must at least contain the header
                     if (numBytes < sizeof(TransportMessageHeader))
                     {
-                        NetworkLog(ELogVerbosity::LOG_RELEASE,
+                        NetworkLogRateLimited(17,
                             "Game Packet Recv: Dropping packet smaller than header (%u < %zu)",
                             numBytes, sizeof(TransportMessageHeader));
                         continue;
@@ -178,7 +178,7 @@ Bool NextGenTransport::doRecv(void)
 
                     if (numBytes > maxWireSize)
                     {
-                        NetworkLog(ELogVerbosity::LOG_RELEASE,
+                        NetworkLogRateLimited(18,
                             "Game Packet Recv: Dropping packet too large (%u > %u)",
                             numBytes, maxWireSize);
                         continue;
@@ -199,7 +199,7 @@ Bool NextGenTransport::doRecv(void)
                     // Sanity check payloadLen against local buffer size
                     if (payloadLen > sizeof(incomingMessage.data))
                     {
-                        NetworkLog(ELogVerbosity::LOG_RELEASE,
+                        NetworkLogRateLimited(19,
                             "Game Packet Recv: Dropping packet, payloadLen (%u) > incoming buffer (%zu)",
                             payloadLen, sizeof(incomingMessage.data));
                         continue;
@@ -239,7 +239,7 @@ Bool NextGenTransport::doRecv(void)
                         // Check if it's a CRC failure or magic number failure to help diagnose corruption
                         if (incomingMessage.header.magic != GENERALS_MAGIC_NUMBER)
                         {
-                            NetworkLog(ELogVerbosity::LOG_RELEASE,
+                            NetworkLogRateLimited(20,
                                 "Game Packet Recv: BAD MAGIC NUMBER - Expected 0x%04X, got 0x%04X from user %lld. "
                                 "Packet is corrupted or from wrong game version.",
                                 GENERALS_MAGIC_NUMBER, incomingMessage.header.magic,
@@ -247,7 +247,7 @@ Bool NextGenTransport::doRecv(void)
                         }
                         else
                         {
-                            NetworkLog(ELogVerbosity::LOG_RELEASE,
+                            NetworkLogRateLimited(21,
                                 "Game Packet Recv: CRC MISMATCH - Expected 0x%08X, got 0x%08X from user %lld. "
                                 "Packet is corrupted during transmission or has invalid payload length (%u).",
                                 incomingMessage.header.crc, 0, // We'd need to compute the CRC to compare
@@ -325,7 +325,7 @@ Bool NextGenTransport::doRecv(void)
                         // Must at least contain the header
                         if (vecPacketDataWithoutHeader.size() < sizeof(TransportMessageHeader))
                         {
-                            NetworkLog(ELogVerbosity::LOG_RELEASE,
+                            NetworkLogRateLimited(17,
                                 "Game Packet Recv: Dropping packet smaller than header (%u < %zu)",
                                 vecPacketDataWithoutHeader.size(), sizeof(TransportMessageHeader));
                             msg->Release();
@@ -339,7 +339,7 @@ Bool NextGenTransport::doRecv(void)
 
                         if (vecPacketDataWithoutHeader.size() > maxWireSize)
                         {
-                            NetworkLog(ELogVerbosity::LOG_RELEASE,
+                            NetworkLogRateLimited(18,
                                 "Game Packet Recv: Dropping packet too large (%u > %u)",
                                 vecPacketDataWithoutHeader.size(), maxWireSize);
                             msg->Release();
@@ -361,7 +361,7 @@ Bool NextGenTransport::doRecv(void)
                         // Sanity check payloadLen against local buffer size
                         if (payloadLen > sizeof(incomingMessage.data))
                         {
-                            NetworkLog(ELogVerbosity::LOG_RELEASE,
+                            NetworkLogRateLimited(19,
                                 "Game Packet Recv: Dropping packet, payloadLen (%u) > incoming buffer (%zu)",
                                 payloadLen, sizeof(incomingMessage.data));
                             msg->Release();
@@ -404,7 +404,7 @@ Bool NextGenTransport::doRecv(void)
                             // Check if it's a CRC failure or magic number failure to help diagnose corruption
                             if (incomingMessage.header.magic != GENERALS_MAGIC_NUMBER)
                             {
-                                NetworkLog(ELogVerbosity::LOG_RELEASE,
+                                NetworkLogRateLimited(20,
                                     "Game Packet Recv: BAD MAGIC NUMBER - Expected 0x%04X, got 0x%04X from user %lld. "
                                     "Packet is corrupted or from wrong game version.",
                                     GENERALS_MAGIC_NUMBER, incomingMessage.header.magic,
@@ -412,7 +412,7 @@ Bool NextGenTransport::doRecv(void)
                             }
                             else
                             {
-                                NetworkLog(ELogVerbosity::LOG_RELEASE,
+                                NetworkLogRateLimited(21,
                                     "Game Packet Recv: CRC MISMATCH - Expected 0x%08X, got 0x%08X from user %lld. "
                                     "Packet is corrupted during transmission or has invalid payload length (%u).",
                                     incomingMessage.header.crc, 0, // We'd need to compute the CRC to compare
@@ -436,7 +436,7 @@ Bool NextGenTransport::doRecv(void)
                 else
                 {
                     // Malformed packet - too small for header
-                    NetworkLog(ELogVerbosity::LOG_RELEASE, "[NET PACKET] Dropping malformed packet - size %u is less than header size 1 from user %lld", vecDataWithHeader.size(), static_cast<long long>(kvPair.second.m_userID));
+                    NetworkLogRateLimited(22, "[NET PACKET] Dropping malformed packet - size %u is less than header size 1 from user %lld", vecDataWithHeader.size(), static_cast<long long>(kvPair.second.m_userID));
                     msg->Release();
                     continue;
                 }

@@ -1247,6 +1247,7 @@ static void ZuluFatalRaise(const char* kind, const char* detail)
 	// No sentry calls here: a fatal on sentry's own thread would block on its
 	// scope lock. The FATAL line and the exception code carry the detail.
 	ReleaseLog("FATAL %s: %s", kind, detail != nullptr ? detail : "");
+	DiagnosticLogFlush(250); // best effort only; never wait indefinitely on storage
 	ULONG_PTR args[1] = { (ULONG_PTR)kind };
 	RaiseException(ZULU_FATAL_EXCEPTION_CODE, EXCEPTION_NONCONTINUABLE, 1, args);
 	// Only reached if something handled the exception; never fall back to the

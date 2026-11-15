@@ -23,6 +23,7 @@ set(GAMEENGINE_SRC
 #    Include/Common/CommandLine.h
     Include/Common/crc.h
     Include/Common/CRCDebug.h
+    Include/Common/AsyncDiagnosticLog.h
     Include/Common/ReleaseLog.h
 #    Include/Common/CriticalSection.h
 #    Include/Common/CustomMatchPreferences.h

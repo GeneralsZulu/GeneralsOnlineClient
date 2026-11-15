@@ -26,7 +26,7 @@
 // produces a small, uploadable log rather than the full debug firehose.
 //
 // Output goes to "ReleaseLog.txt" in the per-user data dir (same root as
-// Replays\), fflush'd after every line so the file survives a crash. It is
+// Replays\), written by a bounded background queue and flushed in batches. It is
 // picked up by the end-of-match telemetry upload alongside ObserverLog.txt.
 //
 // Modelled on LANObsLog (GameNetwork/LANObserverStream.h).
@@ -39,6 +39,18 @@
 // Emit one timestamped line (printf-style, trailing newline added). Safe to
 // call at any time; the log file is opened lazily on first use.
 void ReleaseLog(const char *fmt, ...);
+
+// Shared release/network writer. Channels 0/1 are ReleaseLog/GeneralsOnline.
+// No caller-side file operations. Verbose entries cannot consume the reserve.
+void DiagnosticLogSubmit(unsigned channel, const char* path, const char* previous,
+    const char* text, bool verbose = false, unsigned rateKey = 0);
+// For upload/startup/exit barriers and best-effort fatal handling, never the frame loop.
+// False on timeout;
+// callers proceed with the available tail. Does not force a physical disk commit.
+bool DiagnosticLogFlush(unsigned timeoutMs = 1000);
+// Shared rate keys: 1..16 for duplicate resend/slot+1; 17..32 for transport errors.
+// First occurrence is queued; repeats summarized every five seconds or at a barrier.
+void ReleaseLogRateLimited(unsigned key, const char* fmt, ...);
 
 // Path/name of the release log file, for the telemetry uploader. Never null.
 const char *ReleaseGetLogFileName();

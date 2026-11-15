@@ -539,6 +539,7 @@ static AsciiString cleanExitMarkerPath()
 
 void NetDiag_NoteCleanShutdown()
 {
+    DiagnosticLogFlush(); // bounded: an unresponsive drive must not hang exit
 	if (TheGlobalData == nullptr)
 		return;
 	FILE *f = fopen(cleanExitMarkerPath().str(), "w");
@@ -694,6 +695,7 @@ void NetDiag_CheckForCrashOnLaunch()
 		// exist; it happens on the first line written, which this is if nothing
 		// else has logged yet.
 		ReleaseLog("NETDIAG launch check");
+        DiagnosticLogFlush(); // complete lazy rotation before examining previous-session logs
 		// 2.1.0 and 2.1.1 shipped a stale GameNetworkingSockets.dll and no log line could tell.
 		logDllFingerprint("GameNetworkingSockets.dll");
 		logDllFingerprint("gamespy.dll");

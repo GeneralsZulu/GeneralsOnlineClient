@@ -256,7 +256,7 @@ static void httpPostBytesSeedStr(const AsciiString& url,
 	// Outcomes also go to the ReleaseLog so they survive on disk and ride up
 	// with the next match's log upload (stdout is lost on players' machines).
 	// Safe from the telemetry worker thread: the log file is already open by
-	// match end and ReleaseLog is a single append+flush per call.
+	// match end; the shared writer batches the queued release entries.
 	if (result)
 	{
 		DWORD statusCode = 0;
@@ -4102,6 +4102,7 @@ static unsigned __stdcall telemetryThreadProc(void *arg)
 
 void StartMatchTelemetryUpload(const MatchTelemetryUpload& p)
 {
+    DiagnosticLogFlush(); // snapshot the queued tail before reading log files
 	TelemetryJob *job = (TelemetryJob *)calloc(1, sizeof(TelemetryJob));
 	if (job == nullptr)
 		return;
@@ -4212,6 +4213,8 @@ void StartDiagnosticLogUpload(const AsciiString& logsUrl,
 {
 	if (logsUrl.isEmpty() || seedLabel.isEmpty() || logFilePaths.empty())
 		return;
+
+    DiagnosticLogFlush(); // bounded barrier before snapshotting current logs
 
 	TelemetryJob *job = (TelemetryJob *)calloc(1, sizeof(TelemetryJob));
 	if (job == nullptr)

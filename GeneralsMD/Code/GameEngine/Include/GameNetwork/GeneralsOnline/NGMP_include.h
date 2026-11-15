@@ -24,6 +24,8 @@ ELogVerbosity::LOG_RELEASE;
 #endif
 
 void NetworkLog(ELogVerbosity logVerbosity, const char* fmt, ...);
+// Shared writer rate keys 17..32 are reserved for transport error categories.
+void NetworkLogRateLimited(unsigned key, const char* fmt, ...);
 
 // On-disk paths of the GeneralsOnline network log for this session and for the
 // previous one (rotated on the first write of a session). Empty until the user

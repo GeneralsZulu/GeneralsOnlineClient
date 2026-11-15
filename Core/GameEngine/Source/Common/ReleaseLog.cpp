@@ -23,6 +23,7 @@
 #include "Common/ReleaseLog.h"
 
 #include "Common/GlobalData.h"
+#include "Common/AsyncDiagnosticLog.h"
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -40,16 +41,80 @@ static char s_releaseLogPath[512] = "";
 static char s_releaseLogPrevPath[512] = "";
 static char s_userDataDir[512] = "";
 
-// Background workers (the network self-test, the telemetry uploader) write
-// here too, so the lazy open and every write are serialized.
-// Recursive: the fatal hooks (OnlineServices_Init.cpp) log from inside a CRT
-// invalid-parameter report, which vfprintf can raise while this lock is held.
+// Protect path initialization only; no file operations take this lock.
 static std::recursive_mutex s_releaseLogMutex;
+
+// Paths are fixed on the producer; files are opened/rotated only by the worker.
+struct DiagnosticFiles {
+    std::mutex mutex;
+    std::string path[2], previous[2];
+    FILE* file[2] = {nullptr, nullptr};
+    bool attempted[2] = {false, false};
+};
+static DiagnosticFiles& diagnosticFiles()
+{
+    static DiagnosticFiles* files = new DiagnosticFiles;
+    return *files;
+}
+static AsyncDiagnosticLog& diagnosticWriter()
+{
+    // Process lifetime: do not join a potentially stuck disk operation during
+    // static destruction, or race late logging from other background workers.
+    // Orderly exit and upload paths use the bounded flush barrier below.
+    static AsyncDiagnosticLog* writer = new AsyncDiagnosticLog([](const AsyncDiagnosticLog::Batch& batch) {
+        DiagnosticFiles& files = diagnosticFiles();
+        bool touched[2] = {false, false};
+        for (const auto& entry : batch) {
+            const unsigned channel = entry.channel;
+            if (!files.attempted[channel]) {
+                std::string path, previous;
+                {
+                    std::lock_guard<std::mutex> lock(files.mutex);
+                    path = files.path[channel];
+                    previous = files.previous[channel];
+                }
+                if (path.empty()) continue;
+                files.attempted[channel] = true;
+                std::remove(previous.c_str());
+                std::rename(path.c_str(), previous.c_str());
+                files.file[channel] = std::fopen(path.c_str(), "w");
+            }
+            if (files.file[channel]) {
+                std::fwrite(entry.text.data(), 1, entry.text.size(), files.file[channel]);
+                touched[channel] = true;
+            }
+        }
+        for (unsigned channel = 0; channel < 2; ++channel)
+            if (touched[channel]) std::fflush(files.file[channel]);
+    });
+    return *writer;
+}
+
+void DiagnosticLogSubmit(unsigned channel, const char* path, const char* previous,
+    const char* text, bool verbose, unsigned rateKey)
+{
+    if (channel >= 2 || !path || !*path) return;
+    {
+        DiagnosticFiles& files = diagnosticFiles();
+        std::lock_guard<std::mutex> lock(files.mutex);
+        if (files.path[channel].empty()) {
+            files.path[channel] = path;
+            files.previous[channel] = previous;
+        }
+    }
+    diagnosticWriter().submit(channel, text, verbose, rateKey);
+}
+
+bool DiagnosticLogFlush(unsigned timeoutMs)
+{
+    return diagnosticWriter().flush(timeoutMs);
+}
 
 // Full path, resolved lazily because TheGlobalData doesn't exist during very
 // early startup. Returns NULL while the user data dir is still unknown.
 static const char *releaseLogPath()
 {
+	std::lock_guard<std::recursive_mutex> lock(s_releaseLogMutex);
 	if (s_releaseLogPath[0] != '\0')
 		return s_releaseLogPath;
 	if (TheGlobalData == NULL)
@@ -72,48 +137,49 @@ const char *ReleaseLogGetUserDataDir()
 	return (s_userDataDir[0] != '\0') ? s_userDataDir : NULL;
 }
 
-// Opened lazily on first write, truncating once per app session so a single
-// file accumulates every match played in that session. fflush after each line
-// so it survives a crash.
-static FILE *s_releaseLogFile = NULL;
-static Bool  s_releaseLogOpenFailed = FALSE;
-
-void ReleaseLog(const char *fmt, ...)
+static void releaseLogV(unsigned rateKey, const char* fmt, va_list ap)
 {
-	std::lock_guard<std::recursive_mutex> lock(s_releaseLogMutex);
-	if (s_releaseLogFile == NULL)
-	{
-		if (s_releaseLogOpenFailed)
-			return;
-		const char *path = releaseLogPath();
-		if (path == NULL)
-			return; // user data dir not known yet; try again on the next call
-		// Keep the previous session's log as ReleaseLog.prev.txt. It is what
-		// a crash or a "the game just froze, I restarted" report needs, and
-		// the end-of-match upload ships it once per session.
-		remove(s_releaseLogPrevPath);
-		rename(path, s_releaseLogPrevPath);
-		s_releaseLogFile = fopen(path, "w");
-		if (s_releaseLogFile == NULL)
-		{
-			// Don't retry every call if the file can't be opened.
-			s_releaseLogOpenFailed = TRUE;
-			return;
-		}
-	}
+    const char* path = releaseLogPath();
+    if (!path) return;
+    va_list copy;
+    va_copy(copy, ap);
+    const int length = vsnprintf(nullptr, 0, fmt, copy);
+    va_end(copy);
+    if (length < 0) return;
+    const size_t capacity = (static_cast<size_t>(length) < AsyncDiagnosticLog::MAX_MESSAGE_BYTES - 64)
+        ? static_cast<size_t>(length) : AsyncDiagnosticLog::MAX_MESSAGE_BYTES - 64;
+    std::vector<char> buffer(capacity + 1);
+    vsnprintf(buffer.data(), buffer.size(), fmt, ap);
+    time_t now = time(nullptr);
+    struct tm local = {};
+#ifdef _WIN32
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    char timestamp[32];
+    strftime(timestamp, sizeof(timestamp), "[%H:%M:%S] ", &local);
+    std::string text = timestamp;
+    text += buffer.data();
+    if (static_cast<size_t>(length) > capacity) text += " [log message truncated]";
+    text += '\n';
+    DiagnosticLogSubmit(0, path, s_releaseLogPrevPath, text.c_str(), false, rateKey);
+}
 
-	time_t now = time(NULL);
-	struct tm *lt = localtime(&now);
-	if (lt != NULL)
-		fprintf(s_releaseLogFile, "[%02d:%02d:%02d] ", lt->tm_hour, lt->tm_min, lt->tm_sec);
+void ReleaseLog(const char* fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    releaseLogV(0, fmt, ap);
+    va_end(ap);
+}
 
-	va_list ap;
-	va_start(ap, fmt);
-	vfprintf(s_releaseLogFile, fmt, ap);
-	va_end(ap);
-
-	fputc('\n', s_releaseLogFile);
-	fflush(s_releaseLogFile);
+void ReleaseLogRateLimited(unsigned key, const char* fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    releaseLogV(key, fmt, ap);
+    va_end(ap);
 }
 
 const char *ReleaseGetLogFileName()
@@ -201,8 +267,8 @@ void ReleaseLogRecordSubsystemCRC(UnsignedInt frame, const char *tag, UnsignedIn
 	++s_subRingCount;
 }
 
-// One write per section rather than one per record: up to 9216 locked
-// fprintf+fflush calls in a single frame was a visible hitch.
+// Queue one entry per section rather than thousands of separately formatted
+// records. Large diagnostic sections are bounded by MAX_MESSAGE_BYTES.
 void ReleaseLogDumpCRCHistory()
 {
 	// Overall CRC history, oldest first.

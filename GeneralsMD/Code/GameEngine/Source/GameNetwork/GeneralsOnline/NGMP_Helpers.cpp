@@ -1,4 +1,5 @@
 #include "GameNetwork/GeneralsOnline/NGMP_include.h"
+#include "Common/ReleaseLog.h"
 #include <chrono>
 #include <cstdio>
 #include <cwctype>
@@ -123,7 +124,7 @@ std::wstring NormalizeSingleLineText(const std::wstring& text)
 	return normalizedText;
 }
 
-void NetworkLog(ELogVerbosity logVerbosity, const char* fmt, ...)
+static void networkLogV(unsigned rateKey, ELogVerbosity logVerbosity, const char* fmt, va_list args)
 {
 	if (!NGMP_OnlineServicesManager::Settings.Debug_VerboseLogging())
 	{
@@ -137,9 +138,6 @@ void NetworkLog(ELogVerbosity logVerbosity, const char* fmt, ...)
 
 	if (m_strNetworkLogFileName.empty())
 	{
-		auto now = std::chrono::system_clock::now();
-		auto in_time_t = std::chrono::system_clock::to_time_t(now);
-
 #if defined(_DEBUG)
 		// for debug, put the user ID in the log name so we can easily track it (NOte that this does mean we dont get very early logging, pre login, but that's OK normally)
 
@@ -165,30 +163,7 @@ void NetworkLog(ELogVerbosity logVerbosity, const char* fmt, ...)
 			m_strNetworkLogPrevFileName.replace(dot, 4, ".prev.log");
 		else
 			m_strNetworkLogPrevFileName += ".prev";
-		std::remove(m_strNetworkLogPrevFileName.c_str());
-		std::rename(m_strNetworkLogFileName.c_str(), m_strNetworkLogPrevFileName.c_str());
-		/*
-			std::stringstream ss;
 
-#if defined(_DEBUG)
-		if (IsDebuggerPresent())
-		{
-			ss << std::put_time(std::localtime(&in_time_t),
-				"GeneralsOnline_Debugger_%Y-%m-%d-%H-%M-%S.log");
-		}
-		else
-		{
-			ss << std::put_time(std::localtime(&in_time_t),
-				"GeneralsOnline_%Y-%m-%d-%H-%M-%S.log");
-		}
-#else
-		ss << "GeneralsOnline.log";
-#endif
-*/
-		std::ofstream overwriteFile(m_strNetworkLogFileName);
-
-		// log start msg
-		overwriteFile << std::put_time(std::localtime(&in_time_t), "Log Started at %Y/%m/%d %H:%M") << std::endl;
 	}
 
 	auto const rawNow = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
@@ -198,26 +173,37 @@ void NetworkLog(ELogVerbosity logVerbosity, const char* fmt, ...)
 	strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S", &localNow);
 
 	char buffer[8192];
-	va_list args;
-	va_start(args, fmt);
 	vsnprintf(buffer, 8192, fmt, args);
 	buffer[8192 - 1] = 0;
-	va_end(args);
 
 	std::string strLogBuffer = std::format("[{}] {}", timebuf, buffer);
 
-	// TODO_NGMP: Keep open and flush regularly
-	std::ofstream logFile;
-	logFile.open(m_strNetworkLogFileName, std::ios_base::app);
-	logFile << strLogBuffer.c_str() << std::endl;
-	logFile.close();
+    strLogBuffer += '\n';
+    DiagnosticLogSubmit(1, m_strNetworkLogFileName.c_str(), m_strNetworkLogPrevFileName.c_str(),
+        strLogBuffer.c_str(), logVerbosity == ELogVerbosity::LOG_DEBUG, rateKey);
 
 #if defined(GENERALS_ONLINE_BRANCH_JMARSHALL)
-	DevConsole.AddLog(strLogBuffer.c_str());
+    DevConsole.AddLog(strLogBuffer.c_str());
 #endif
+    // Debugger output is intentionally omitted: synchronous per-packet output
+    // can stall producers even when the file writer is asynchronous.
 
-	OutputDebugString(strLogBuffer.c_str());
-	OutputDebugString("\n");
+}
+
+void NetworkLog(ELogVerbosity verbosity, const char* fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    networkLogV(0, verbosity, fmt, args);
+    va_end(args);
+}
+
+void NetworkLogRateLimited(unsigned key, const char* fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    networkLogV(key, ELogVerbosity::LOG_RELEASE, fmt, args);
+    va_end(args);
 }
 
 std::string Base64Encode(const std::vector<uint8_t>& data)

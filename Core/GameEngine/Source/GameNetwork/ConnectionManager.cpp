@@ -769,7 +769,7 @@ void ConnectionManager::processFrameResendRequest(NetFrameResendRequestCommandMs
 	const UnsignedInt now = timeGetTime();
 	if ((m_lastResendServeMs[playerID] != 0)
 			&& ((now - m_lastResendServeMs[playerID]) < (UnsignedInt)NET_RESEND_SERVE_MIN_MS)) {
-		ReleaseLog("NETRESEND not serving slot=%u again for frame %u: served %ums ago",
+		ReleaseLogRateLimited(playerID + 1, "NETRESEND not serving slot=%u again for frame %u: served %ums ago",
 			playerID, msg->getFrameToResend(), now - m_lastResendServeMs[playerID]);
 		return;
 	}
