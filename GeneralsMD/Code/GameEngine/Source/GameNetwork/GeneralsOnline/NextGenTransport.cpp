@@ -292,22 +292,27 @@ Bool NextGenTransport::doRecv(void)
                 // Read straight out of the GNS message: its buffer stays valid
                 // until msg->Release(), and every path below is done with it by
                 // then (the game path copies into incomingMessage first). This
-                // used to copy the packet into two heap vectors per message.
-                unsigned char* pDataWithHeader = static_cast<unsigned char*>(msg->GetData());
+                // used to copy every packet into two heap vectors; only the
+                // rare AC packet still gets one, below.
+                const unsigned char* pDataWithHeader = static_cast<const unsigned char*>(msg->GetData());
 
                 // all packets must have at least 1 byte to indicate channel
                 if (pDataWithHeader != nullptr && numBytesWithHeader >= sizeof(ENetworkChannel))
                 {
                     ENetworkChannel netChannel = (ENetworkChannel)pDataWithHeader[0];
 
-                    unsigned char* pPacketData = pDataWithHeader + sizeof(ENetworkChannel);
+                    const unsigned char* pPacketData = pDataWithHeader + sizeof(ENetworkChannel);
                     const uint32_t packetSize = numBytesWithHeader - static_cast<uint32_t>(sizeof(ENetworkChannel));
 
                     if (netChannel == ENetworkChannel::NETWORK_CHANNEL_AC)
                     {
                         NetworkLog(ELogVerbosity::LOG_RELEASE, "[AC PACKET] Received AC message of size %u from user %lld", packetSize, static_cast<long long>(kvPair.second.m_userID));
 
-                        AnticheatPlugInterface::AC_NetworkMessageArrived(kvPair.second.m_userID, pPacketData, packetSize);
+                        // The plugin takes a mutable buffer and GNS's is const,
+                        // so it gets its own copy. AC packets are rare; game
+                        // packets, below, are parsed in place.
+                        std::vector<byte> vecACPacket(pPacketData, pPacketData + packetSize);
+                        AnticheatPlugInterface::AC_NetworkMessageArrived(kvPair.second.m_userID, vecACPacket.data(), packetSize);
                         msg->Release();
                         continue;
                     }
