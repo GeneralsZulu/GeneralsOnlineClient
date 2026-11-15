@@ -11,6 +11,14 @@
 std::string m_strNetworkLogFileName;
 std::string m_strNetworkLogPrevFileName;
 std::mutex m_logMutex;
+// Held open for the whole session; reopening it per line cost a file open and
+// close on every network log call. Leaked on purpose so a log call made during
+// static destruction never writes through a destroyed stream.
+static std::ofstream& networkLogFile()
+{
+	static std::ofstream* file = new std::ofstream;
+	return *file;
+}
 
 const char* NetworkLogGetFileName()
 {
@@ -185,10 +193,10 @@ void NetworkLog(ELogVerbosity logVerbosity, const char* fmt, ...)
 		ss << "GeneralsOnline.log";
 #endif
 */
-		std::ofstream overwriteFile(m_strNetworkLogFileName);
+		networkLogFile().open(m_strNetworkLogFileName, std::ios_base::out | std::ios_base::trunc);
 
 		// log start msg
-		overwriteFile << std::put_time(std::localtime(&in_time_t), "Log Started at %Y/%m/%d %H:%M") << std::endl;
+		networkLogFile() << std::put_time(std::localtime(&in_time_t), "Log Started at %Y/%m/%d %H:%M") << std::endl;
 	}
 
 	auto const rawNow = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
@@ -206,11 +214,8 @@ void NetworkLog(ELogVerbosity logVerbosity, const char* fmt, ...)
 
 	std::string strLogBuffer = std::format("[{}] {}", timebuf, buffer);
 
-	// TODO_NGMP: Keep open and flush regularly
-	std::ofstream logFile;
-	logFile.open(m_strNetworkLogFileName, std::ios_base::app);
-	logFile << strLogBuffer.c_str() << std::endl;
-	logFile.close();
+	// endl flushes every line so the log survives a crash.
+	networkLogFile() << strLogBuffer << std::endl;
 
 #if defined(GENERALS_ONLINE_BRANCH_JMARSHALL)
 	DevConsole.AddLog(strLogBuffer.c_str());
