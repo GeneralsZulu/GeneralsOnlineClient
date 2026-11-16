@@ -68,6 +68,7 @@
 #include "Common/Xfer.h"
 #include "Common/XferCRC.h"
 #include "Common/GameLOD.h"
+#include "Common/AdaptiveQuality.h"
 #include "Common/Registry.h"
 #include "Common/GameCommon.h"	// FOR THE ALLOW_DEBUG_CHEATS_IN_RELEASE #define
 
@@ -1181,7 +1182,9 @@ void GameEngine::update()
 			else
 			{
 				const UnsignedInt clientStartMs = timeGetTime();
+				const long long aqClientStart = AdaptiveQuality::now();
 				TheGameClient->UPDATE();
+				AdaptiveQuality::get().addOwn(AdaptiveQuality::now() - aqClientStart);
 				NetPerfNoteClient(timeGetTime() - clientStartMs);
 			}
 			TheMessageStream->propagateMessages();
@@ -1215,6 +1218,7 @@ void GameEngine::update()
 		if (canUpdateGameLogic(FramePacer::IgnoreFrozenTime))
 		{
 			const UnsignedInt logicStartMs = timeGetTime();
+			const long long aqLogicStart = AdaptiveQuality::now();
 			TheGameLogic->UPDATE();
 			NetPerfNoteLogic(timeGetTime() - logicStartMs);
 
@@ -1242,6 +1246,11 @@ void GameEngine::update()
 				TheParticleSystemManager->update();
 				TheGameLogic->UPDATE();
 			}
+			AdaptiveQuality::get().addOwn(AdaptiveQuality::now() - aqLogicStart);
+		}
+		else if (TheNetwork != nullptr && TheNetwork->isStalling())
+		{
+			AdaptiveQuality::get().noteNetworkWait();
 		}
 	}
 }
@@ -1295,6 +1304,7 @@ void GameEngine::execute()
 #endif
 
 			{
+				AdaptiveQuality::get().frameBegin();
 				update();
 // 				try
 // 				{
@@ -1327,6 +1337,7 @@ void GameEngine::execute()
 			}
 
 			TheFramePacer->update();
+			AdaptiveQuality::get().frameEnd();
 		}
 
 #ifdef PERF_TIMERS
