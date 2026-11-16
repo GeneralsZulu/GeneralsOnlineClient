@@ -153,8 +153,6 @@ static Bool isOwnerAnonymous(const Player *player)
 	return TheGameInfo != nullptr && TheGameInfo->isSlotAnonymous(ThePlayerList->getSlotIndex(player->getPlayerIndex()));
 }
 
-GameWindow* m_replayWindow = nullptr;
-
 // ------------------------------------------------------------------------------------------------
 struct KindOfSelectionData
 {
@@ -268,38 +266,6 @@ static Bool similarUnitSelection(Drawable* test, void* userData)
 		}
 	}
 	return FALSE;
-}
-
-// ------------------------------------------------------------------------------------------------
-// ------------------------------------------------------------------------------------------------
-void showReplayControls()
-{
-	if (m_replayWindow)
-	{
-		Bool show = TheGameLogic->isInReplayGame();
-		m_replayWindow->winHide(!show);
-	}
-}
-
-// ------------------------------------------------------------------------------------------------
-// ------------------------------------------------------------------------------------------------
-void hideReplayControls()
-{
-	if (m_replayWindow)
-	{
-		m_replayWindow->winHide(TRUE);
-	}
-}
-
-// ------------------------------------------------------------------------------------------------
-// ------------------------------------------------------------------------------------------------
-void toggleReplayControls()
-{
-	if (m_replayWindow)
-	{
-		Bool show = TheGameLogic->isInReplayGame() && m_replayWindow->winIsHidden();
-		m_replayWindow->winHide(!show);
-	}
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1177,6 +1143,7 @@ InGameUI::InGameUI()
 #endif
 	}
 
+	m_controlBarWindow = nullptr;
 	m_replayWindow = nullptr;
 	m_messagesOn = TRUE;
 
@@ -1353,6 +1320,9 @@ InGameUI::~InGameUI()
 
 	// clean up obs overlay
 	cleanupObserverOverlay();
+
+	destroyReplayControl();
+	destroyControlBar();
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -4352,7 +4322,7 @@ void InGameUI::expireHint(HintType type, UnsignedInt hintIndex)
 void InGameUI::createControlBar()
 {
 
-	TheWindowManager->winCreateFromScript("ControlBar.wnd");
+	m_controlBarWindow = TheWindowManager->winCreateFromScript("ControlBar.wnd");
 	HideControlBar();
 	/*
 		// hide all windows created from this layout
@@ -4361,6 +4331,16 @@ void InGameUI::createControlBar()
 			window->winHide( TRUE );
 	*/
 
+}
+
+void InGameUI::destroyControlBar()
+{
+	if (m_controlBarWindow != nullptr)
+	{
+		TheWindowManager->winDestroy(m_controlBarWindow);
+		m_controlBarWindow = nullptr;
+		m_idleWorkerWin = nullptr; // This window belongs to the Control Bar and is implicitly deleted as well.
+	}
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -4378,6 +4358,41 @@ void InGameUI::createReplayControl()
 			window->winHide( TRUE );
 	*/
 
+}
+
+void InGameUI::destroyReplayControl()
+{
+	if (m_replayWindow != nullptr)
+	{
+		TheWindowManager->winDestroy(m_replayWindow);
+		m_replayWindow = nullptr;
+	}
+}
+
+void InGameUI::showReplayControls()
+{
+	if (m_replayWindow)
+	{
+		Bool show = TheGameLogic->isInReplayGame();
+		m_replayWindow->winHide(!show);
+	}
+}
+
+void InGameUI::hideReplayControls()
+{
+	if (m_replayWindow)
+	{
+		m_replayWindow->winHide(TRUE);
+	}
+}
+
+void InGameUI::toggleReplayControls()
+{
+	if (m_replayWindow)
+	{
+		Bool show = TheGameLogic->isInReplayGame() && m_replayWindow->winIsHidden();
+		m_replayWindow->winHide(!show);
+	}
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -6228,11 +6243,7 @@ void InGameUI::resetIdleWorker()
 
 void InGameUI::recreateControlBar()
 {
-	GameWindow* win = TheWindowManager->winGetWindowFromId(nullptr, TheNameKeyGenerator->nameToKey("ControlBar.wnd"));
-	deleteInstance(win);
-
-	m_idleWorkerWin = nullptr;
-
+	destroyControlBar();
 	createControlBar();
 
 	delete TheControlBar;
