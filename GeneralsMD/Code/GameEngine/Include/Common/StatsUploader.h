@@ -23,6 +23,8 @@
 
 #include <vector>
 
+class GameInfo;
+
 /// All inputs needed to ship one match's telemetry (stats JSON, replay,
 /// per-client logs, and map assets) at end-of-match. Every field is read on the
 /// calling (main) thread only; see StartMatchTelemetryUpload.
@@ -415,6 +417,16 @@ void RadarvanIntelStart(const AsciiString& predictUrl,
                         const AsciiString& mapName,
                         int localTeam,
                         const std::vector<MapSummaryPlayer>& players);
+
+/// Build the roster from a game that is about to start and call
+/// RadarvanIntelStart with the configured URLs (GlobalData m_predictUrl /
+/// m_teamStatsUrl / m_synergyUrl). Shared by the LAN and online start paths.
+///
+/// Needs a clean two-team game (or any two-player game, which is treated as a
+/// 1v1); a free-for-all or a lobby with unteamed slots just resets the intel
+/// state so the load screen shows its fallback. The two sides go out as teams
+/// 1 and 2 in ascending lobby-team order, whatever the lobby numbered them.
+void RadarvanIntelStartForGame(const GameInfo *game);
 
 /// Clear all intel state (no pending request, no result). Used to make sure a
 /// fresh game never shows a previous game's blurb.

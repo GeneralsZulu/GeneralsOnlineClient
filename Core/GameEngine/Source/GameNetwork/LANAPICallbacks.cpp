@@ -201,89 +201,6 @@ void LANAPI::OnHasMap( UnsignedInt playerIP, Bool status )
 // so the timer + start pair only fires one worker.
 static Bool s_lanIntelFired = FALSE;
 
-// Build the roster from the current game and fire the (non-blocking) radarvan
-// intel worker for the multiplayer load screen. Requires a clean two-team
-// game; anything else (free-for-all, unteamed slots) just resets the intel
-// state so the load screen shows the themed fallback instead.
-static void startLanBattlefieldIntel(GameInfo *game)
-{
-	if (game == nullptr)
-	{
-		RadarvanIntelReset();
-		return;
-	}
-
-	std::vector<MapSummaryPlayer> roster;
-	Int localTeam = 0;
-	Int localRosterIdx = -1;
-	Int localSlot = game->getLocalSlotNum();
-	Int i;
-	for (i = 0; i < MAX_SLOTS; ++i)
-	{
-		const GameSlot *slot = game->getConstSlot(i);
-		if (!slot || !slot->isOccupied())
-			continue;
-		if (slot->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
-			continue;
-		MapSummaryPlayer entry;
-		entry.name = RadarvanPlayerName(slot->getName(), slot->isAI());
-		if (entry.name.isEmpty())
-			continue;
-		entry.general = slot->getPlayerTemplate();
-		// predict wants 1-based teams (0 = no team). getTeamNumber() is 0-based
-		// with -1 = "no team", so a clean NvN maps to 1..N here.
-		entry.team = slot->getTeamNumber() + 1;
-		if (i == localSlot)
-			localRosterIdx = (Int)roster.size();
-		roster.push_back(entry);
-	}
-
-	// Require exactly two distinct teams, all teamed (no team-0 entries):
-	// predict only handles two-team matches, and synergy/team_stats are team
-	// concepts. Free-for-alls just get the fallback note.
-	Int teamValues[MAX_SLOTS];
-	Int distinct = 0;
-	Bool hasUnteamed = FALSE;
-	size_t r;
-	for (r = 0; r < roster.size(); ++r)
-	{
-		Int t = roster[r].team;
-		if (t <= 0) { hasUnteamed = TRUE; break; }
-		Bool seen = FALSE;
-		Int d;
-		for (d = 0; d < distinct; ++d)
-			if (teamValues[d] == t) { seen = TRUE; break; }
-		if (!seen && distinct < MAX_SLOTS)
-			teamValues[distinct++] = t;
-	}
-	// A 2-player game with no real teams is just a 1v1: synthesize opposing
-	// teams so predict/synergy have two sides to work with. (3+ unteamed
-	// players is a genuine free-for-all we can't forecast.)
-	if (roster.size() == 2 && (hasUnteamed || distinct != 2))
-	{
-		roster[0].team = 1;
-		roster[1].team = 2;
-		hasUnteamed = FALSE;
-		distinct = 2;
-	}
-
-	if (hasUnteamed || distinct != 2 || roster.size() < 2)
-	{
-		RadarvanIntelReset();
-		return;
-	}
-
-	localTeam = (localRosterIdx >= 0 && localRosterIdx < (Int)roster.size())
-		? roster[localRosterIdx].team : 0;
-
-	// The map as radarvan keys it (same as lobby "/intel" sends).
-	AsciiString mapName = RadarvanMapKey(game->getMap());
-
-	RadarvanIntelStart(TheGlobalData->m_predictUrl,
-	                   TheGlobalData->m_teamStatsUrl,
-	                   TheGlobalData->m_synergyUrl,
-	                   mapName, localTeam, roster);
-}
 #endif // RTS_ZEROHOUR
 
 void LANAPI::OnGameStartTimer( Int seconds )
@@ -301,7 +218,7 @@ void LANAPI::OnGameStartTimer( Int seconds )
 	// OnGameStart() doesn't start a second worker.
 	if (!s_lanIntelFired)
 	{
-		startLanBattlefieldIntel(m_currentGame);
+		RadarvanIntelStartForGame(m_currentGame);
 		s_lanIntelFired = TRUE;
 	}
 #endif
@@ -317,7 +234,7 @@ void LANAPI::OnGameStart()
 	// the intel fetch here if it hasn't run yet. Either way, clear the guard
 	// so the next game starts fresh.
 	if (!s_lanIntelFired)
-		startLanBattlefieldIntel(m_currentGame);
+		RadarvanIntelStartForGame(m_currentGame);
 	s_lanIntelFired = FALSE;
 #endif
 

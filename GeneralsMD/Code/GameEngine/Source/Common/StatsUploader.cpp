@@ -28,6 +28,7 @@
 #include "Common/version.h"
 #include "GameClient/MapUtil.h"
 #include "GameNetwork/FileTransfer.h"
+#include "GameNetwork/GameInfo.h"
 #include "ZuluClientKey.h"
 #include "CncStatsClientKey.h"
 #include "BuildVariant.h"
@@ -108,6 +109,40 @@ struct WinInetSession
 	HINTERNET hRequest;
 };
 
+// Bound every phase of a request. WinINet's own defaults run to tens of
+// seconds per phase and retry the connect several times, which is far too long
+// for the callers that still run on the main thread (map vote, team balance,
+// map match counts, the lobby map upload) and lets a dead server pin a worker.
+// openHttpRequest applies the defaults below to every request; a caller that
+// moves real payload (uploads, map downloads) widens them afterwards, and the
+// load-screen intel narrows them.
+//
+// Set on the session handle as well as the request: options on the session are
+// inherited by what is opened from it, and the connect happens below the
+// request handle.
+static const DWORD HTTP_TIMEOUT_CONNECT_MS = 5000;
+static const DWORD HTTP_TIMEOUT_SEND_MS    = 10000;
+static const DWORD HTTP_TIMEOUT_RECEIVE_MS = 15000;
+
+// Uploads and map downloads carry files rather than a small JSON body.
+static const DWORD HTTP_TIMEOUT_TRANSFER_MS = 30000;
+
+static void setHttpTimeouts(WinInetSession *s, DWORD connectMs, DWORD sendMs, DWORD receiveMs)
+{
+	HINTERNET handles[2];
+	handles[0] = s->hInternet;
+	handles[1] = s->hRequest;
+	int i;
+	for (i = 0; i < 2; ++i)
+	{
+		if (handles[i] == nullptr)
+			continue;
+		InternetSetOption(handles[i], INTERNET_OPTION_CONNECT_TIMEOUT, &connectMs, sizeof(connectMs));
+		InternetSetOption(handles[i], INTERNET_OPTION_SEND_TIMEOUT, &sendMs, sizeof(sendMs));
+		InternetSetOption(handles[i], INTERNET_OPTION_RECEIVE_TIMEOUT, &receiveMs, sizeof(receiveMs));
+	}
+}
+
 static bool openHttpRequest(const AsciiString& url,
                             const char *method,
                             const char *pathOverride,
@@ -155,6 +190,14 @@ static bool openHttpRequest(const AsciiString& url,
 		return false;
 	}
 
+	// Before the connect handle exists, so the connect itself is bounded. One
+	// attempt only: the default of five multiplies the connect timeout.
+	{
+		DWORD connectRetries = 1;
+		InternetSetOption(out->hInternet, INTERNET_OPTION_CONNECT_RETRIES, &connectRetries, sizeof(connectRetries));
+		setHttpTimeouts(out, HTTP_TIMEOUT_CONNECT_MS, HTTP_TIMEOUT_SEND_MS, HTTP_TIMEOUT_RECEIVE_MS);
+	}
+
 	out->hConnect = InternetConnectA(out->hInternet, hostBuf, port, nullptr, nullptr, INTERNET_SERVICE_HTTP, 0, 0);
 	if (out->hConnect == nullptr)
 	{
@@ -179,6 +222,7 @@ static bool openHttpRequest(const AsciiString& url,
 		out->hInternet = nullptr;
 		return false;
 	}
+	setHttpTimeouts(out, HTTP_TIMEOUT_CONNECT_MS, HTTP_TIMEOUT_SEND_MS, HTTP_TIMEOUT_RECEIVE_MS);
 
 	// Pick the auth scheme by host: cncstats uses Authorization: Bearer
 	// with its own key (CNCSTATS_ZULU_CLIENT_KEY from gcloud secret
@@ -241,6 +285,8 @@ static void httpPostBytesSeedStr(const AsciiString& url,
 	WinInetSession s;
 	if (!openHttpRequest(url, "POST", nullptr, logTag, &s))
 		return;
+	// A file body, and radarvan parses a replay before it answers.
+	setHttpTimeouts(&s, HTTP_TIMEOUT_CONNECT_MS, HTTP_TIMEOUT_TRANSFER_MS, HTTP_TIMEOUT_TRANSFER_MS);
 
 	char headers[1024];
 	int n = sprintf(headers, "Content-Type: %s\r\nX-Game-Seed: %.63s\r\n", contentType,
@@ -1822,6 +1868,7 @@ bool DownloadMapAssetFromServer(const AsciiString& downloadUrl,
 	WinInetSession s;
 	if (!openHttpRequest(downloadUrl, "GET", fullPath, "Map download", &s))
 		return false;
+	setHttpTimeouts(&s, HTTP_TIMEOUT_CONNECT_MS, HTTP_TIMEOUT_SEND_MS, HTTP_TIMEOUT_TRANSFER_MS);
 
 	BOOL sent = HttpSendRequestA(s.hRequest, nullptr, 0, nullptr, 0);
 	if (!sent)
@@ -2767,10 +2814,9 @@ static bool intelHttpJsonStatus(const char *url, const char *method,
 	if (!openHttpRequest(urlStr, method, nullptr, "Radarvan intel", &s))
 		return false;
 
-	DWORD toConnect = 4000, toSend = 4000, toReceive = 6000;
-	InternetSetOption(s.hRequest, INTERNET_OPTION_CONNECT_TIMEOUT, &toConnect, sizeof(toConnect));
-	InternetSetOption(s.hRequest, INTERNET_OPTION_SEND_TIMEOUT, &toSend, sizeof(toSend));
-	InternetSetOption(s.hRequest, INTERNET_OPTION_RECEIVE_TIMEOUT, &toReceive, sizeof(toReceive));
+	// Tighter than the defaults: three of these run back to back while the
+	// load screen is up.
+	setHttpTimeouts(&s, 4000, 4000, 6000);
 
 	const bool hasBody = (body != nullptr && body[0] != '\0');
 	const char *headers = hasBody
@@ -3274,6 +3320,91 @@ void RadarvanIntelStart(const AsciiString& predictUrl,
 		return;
 	}
 	CloseHandle(hThread); // detached; it writes into the guarded statics
+}
+
+void RadarvanIntelStartForGame(const GameInfo *game)
+{
+	if (game == nullptr || TheGlobalData == nullptr)
+	{
+		RadarvanIntelReset();
+		return;
+	}
+
+	std::vector<MapSummaryPlayer> roster;
+	Int localRosterIdx = -1;
+	const Int localSlot = game->getLocalSlotNum();
+	Int i;
+	for (i = 0; i < MAX_SLOTS; ++i)
+	{
+		const GameSlot *slot = game->getConstSlot(i);
+		if (!slot || !slot->isOccupied())
+			continue;
+		if (slot->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
+			continue;
+		MapSummaryPlayer entry;
+		entry.name = RadarvanPlayerName(slot->getName(), slot->isAI());
+		if (entry.name.isEmpty())
+			continue;
+		entry.general = slot->getPlayerTemplate();
+		// The lobby's own team number for now (0-based, -1 = no team); it is
+		// renumbered to 1/2 below once we know there are exactly two.
+		entry.team = slot->getTeamNumber();
+		if (i == localSlot)
+			localRosterIdx = (Int)roster.size();
+		roster.push_back(entry);
+	}
+
+	// Require exactly two distinct teams, all teamed: predict only handles
+	// two-team matches, and synergy/team_stats are team concepts.
+	Int teamValues[2] = { -1, -1 };
+	Int distinct = 0;
+	Bool hasUnteamed = FALSE;
+	size_t r;
+	for (r = 0; r < roster.size(); ++r)
+	{
+		const Int t = roster[r].team;
+		if (t < 0) { hasUnteamed = TRUE; break; }
+		if (distinct > 0 && teamValues[0] == t) continue;
+		if (distinct > 1 && teamValues[1] == t) continue;
+		if (distinct < 2)
+			teamValues[distinct] = t;
+		++distinct; // may run past 2; anything but 2 is rejected below
+	}
+
+	if (roster.size() == 2 && (hasUnteamed || distinct != 2))
+	{
+		// A 2-player game with no real teams is just a 1v1: synthesize the
+		// two sides. (3+ unteamed players is a genuine free-for-all we can't
+		// forecast.)
+		roster[0].team = 1;
+		roster[1].team = 2;
+	}
+	else if (hasUnteamed || distinct != 2 || roster.size() < 2)
+	{
+		// Free-for-all or unteamed slots: the load screen shows its fallback.
+		RadarvanIntelReset();
+		return;
+	}
+	else
+	{
+		// Send the two sides as teams 1 and 2, lower lobby team first, whatever
+		// the lobby called them. radarvan labels team A/B by ascending team id
+		// and reports favored_team as that id, and everything downstream (the
+		// blurb's YOUR SQUAD / ENEMY labels, the load-screen gauge) compares
+		// against 1 and 2. Sending the raw numbers got a Team 2 vs Team 4 lobby
+		// its two sides swapped, or the observer wording.
+		const Int lowTeam = (teamValues[0] < teamValues[1]) ? teamValues[0] : teamValues[1];
+		for (r = 0; r < roster.size(); ++r)
+			roster[r].team = (roster[r].team == lowTeam) ? 1 : 2;
+	}
+
+	const Int localTeam = (localRosterIdx >= 0 && localRosterIdx < (Int)roster.size())
+		? roster[localRosterIdx].team : 0;
+
+	RadarvanIntelStart(TheGlobalData->m_predictUrl,
+	                   TheGlobalData->m_teamStatsUrl,
+	                   TheGlobalData->m_synergyUrl,
+	                   RadarvanMapKey(game->getMap()), localTeam, roster);
 }
 
 bool RadarvanIntelReady(AsciiString& outText)

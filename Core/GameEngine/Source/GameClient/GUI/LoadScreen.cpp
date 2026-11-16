@@ -1597,6 +1597,154 @@ static void drawIntelPortrait(GameWindow *win, WinInstanceData * /*inst*/)
 	else
 		drawIntelBar(x, y, w, h);
 }
+
+// Hand the local general's portrait and features panel over to the intel
+// card: a themed placeholder in the features panel while the (non-blocking)
+// worker started at countdown/launch is still out, and the meter card in place
+// of the portrait. Shared by the LAN and online load screens.
+static void intelPanelInit(GameInfo *game, GameWindow *portrait, GameWindow *features)
+{
+	// Ask the intel worker itself whether a request is actually in flight.
+	if (features != NULL && RadarvanIntelPending())
+	{
+		UnicodeString awaiting;
+		awaiting.translate(AsciiString("BATTLEFIELD INTEL\nRecon inbound, General..."));
+		GadgetStaticTextSetText( features, awaiting );
+	}
+
+	s_intelCard.state = INTEL_CARD_AWAITING;
+	s_intelCard.localTeam = 0;
+	s_intelCard.yourColor = GameMakeColor(60, 120, 220, 255);
+	s_intelCard.enemyColor = GameMakeColor(200, 60, 60, 255);
+	// gauge dial art (shipped in Zulu.big); NULL -> primitive-bar fallback
+	s_intelCard.gauge = TheMappedImageCollection
+		? TheMappedImageCollection->findImageByName("ZuluGaugeDial") : NULL;
+	const GameSlot *localSlot = game->getConstSlot(game->getLocalSlotNum());
+	if (localSlot)
+	{
+		Int myTeam = localSlot->getTeamNumber(); // 0-based, -1 = none
+		s_intelCard.localTeam = (myTeam >= 0) ? (myTeam + 1) : 0;
+		s_intelCard.yourColor = TheMultiplayerSettings->getColor(localSlot->getApparentColor())->getColor();
+		Int si;
+		for (si = 0; si < MAX_SLOTS; ++si)
+		{
+			const GameSlot *es = game->getConstSlot(si);
+			if (!es || !es->isOccupied())
+				continue;
+			if (es->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
+				continue;
+			if (es->getTeamNumber() == myTeam)
+				continue;
+			// FFA mode: keep the default chip so it can't pair a colour with a name
+			if (!game->isSlotAnonymous(si))
+				s_intelCard.enemyColor = TheMultiplayerSettings->getColor(es->getApparentColor())->getColor();
+			break;
+		}
+	}
+	if (s_intelCard.pct == NULL)
+		s_intelCard.pct = TheDisplayStringManager->newDisplayString();
+	if (s_intelCard.pct != NULL)
+	{
+		// Give the win% its own large bold font (the portrait's default font
+		// is tiny) so it anchors the top of the card. Size to the box.
+		GameFont *bigFont = NULL;
+		if (portrait != NULL)
+		{
+			Int pw = 0, ph = 0;
+			portrait->winGetSize(&pw, &ph);
+			Int ptSize = ph / 6;
+			if (ptSize < 18) ptSize = 18;
+			if (ptSize > 40) ptSize = 40;
+			bigFont = TheFontLibrary->getFont(AsciiString("Arial"), ptSize, TRUE);
+		}
+		if (bigFont != NULL)
+			s_intelCard.pct->setFont(bigFont);
+		else if (portrait != NULL)
+			s_intelCard.pct->setFont(portrait->winGetFont());
+		s_intelCard.pct->setText(UnicodeString::TheEmptyString);
+	}
+	if (portrait != NULL)
+		portrait->winSetDrawFunc(drawIntelPortrait);
+}
+
+// Poll the intel worker and drop its result (or the fallback note) into the
+// features panel and the meter card. Returns TRUE once there is nothing more
+// to wait for, after which the caller stops polling.
+static Bool intelPanelUpdate(GameWindow *features, Int &waitCalls)
+{
+	if (features == NULL)
+		return TRUE;
+
+	++waitCalls;
+	AsciiString intelText;
+	Bool ready = RadarvanIntelReady(intelText);
+	Bool pending = RadarvanIntelPending();
+	// Close the ready/pending race: the worker sets "ready" and clears
+	// "pending" together under one lock, so if we saw "not ready" but also
+	// "not pending", it just finished - re-read readiness before giving up.
+	if (!ready && !pending)
+		ready = RadarvanIntelReady(intelText);
+	if (ready)
+	{
+		UnicodeString u;
+		u.translate(intelText);
+		GadgetStaticTextSetText(features, u);
+		// Drive the portrait meter card from the same result.
+		RadarvanIntelReadyData(s_intelCard.d);
+		// Use the team the worker actually predicted against (data.localTeam
+		// == job.localTeam) for the win% math, not the raw slot team derived
+		// at setup. They differ in a 1v1 with no teams assigned: the worker
+		// synthesizes team 1 vs 2, but the slot's getTeamNumber() is -1 there,
+		// which would leave localTeam == 0 and make the needle/readout show
+		// the FAVORED team's odds instead of the local player's own.
+		s_intelCard.localTeam = s_intelCard.d.localTeam;
+		s_intelCard.state = INTEL_CARD_READY;
+		if (s_intelCard.pct != NULL)
+		{
+			Real yp;
+			if (s_intelCard.localTeam == 0)
+				yp = s_intelCard.d.favoredWinProb;
+			else
+				yp = (s_intelCard.d.favoredTeam == s_intelCard.localTeam)
+					? s_intelCard.d.favoredWinProb
+					: (1.0f - s_intelCard.d.favoredWinProb);
+			Int pctI = (Int)(yp * 100.0f + 0.5f);
+			AsciiString ps;
+			ps.format("%d%%", pctI);
+			UnicodeString pu;
+			pu.translate(ps);
+			s_intelCard.pct->setText(pu);
+		}
+		return TRUE;
+	}
+	else if (!pending || waitCalls > 3000)
+	{
+		// Worker finished without a usable result (or the long backstop
+		// tripped): show the themed fallback and give up. NOTE: we must NOT
+		// fall back merely because loading hit 100% - after local load the
+		// game spins in a wait-for-players loop calling update(101) ~10x/s,
+		// which is precisely the window a late result arrives in. We keep
+		// polling there and only give up once the worker itself is done.
+		UnicodeString u;
+		u.translate(AsciiString("BATTLEFIELD INTEL\nRecon uplink is down, General.\nNo intel on this engagement.\nTrust your instincts."));
+		GadgetStaticTextSetText(features, u);
+		s_intelCard.state = INTEL_CARD_NODATA;
+		return TRUE;
+	}
+	return FALSE;
+}
+
+// The card's cached % string is torn down with the load screen; drop it so a
+// fresh screen starts clean.
+static void intelPanelShutdown(void)
+{
+	if (s_intelCard.pct != NULL)
+	{
+		TheDisplayStringManager->freeDisplayString(s_intelCard.pct);
+		s_intelCard.pct = nullptr;
+	}
+	s_intelCard.state = INTEL_CARD_AWAITING;
+}
 #endif // RTS_ZEROHOUR
 
 MultiPlayerLoadScreen::MultiPlayerLoadScreen()
@@ -1626,14 +1774,7 @@ MultiPlayerLoadScreen::~MultiPlayerLoadScreen()
 	}
 
 #if RTS_ZEROHOUR
-	// The intel card draw func and its cached % string are torn down with the
-	// window; drop our reference so a fresh load screen starts clean.
-	if (s_intelCard.pct != NULL)
-	{
-		TheDisplayStringManager->freeDisplayString(s_intelCard.pct);
-		s_intelCard.pct = nullptr;
-	}
-	s_intelCard.state = INTEL_CARD_AWAITING;
+	intelPanelShutdown();
 #endif
 
 	TheAudio->removeAudioEvent( AHSV_StopTheMusicFade );
@@ -1714,15 +1855,6 @@ void MultiPlayerLoadScreen::init( GameInfo *game )
 	// fallback note. Reset the poll state for this game.
 	m_intelResolved = FALSE;
 	m_intelWaitCalls = 0;
-	// Zulu keys this off TheGlobalData->m_predictUrl; GlobalData.h/.cpp are
-	// hand-merged separately on this branch, so ask the intel worker itself
-	// whether a request is actually in flight.
-	if (m_featuresLocalGeneral && RadarvanIntelPending())
-	{
-		UnicodeString awaiting;
-		awaiting.translate(AsciiString("BATTLEFIELD INTEL\nRecon inbound, General..."));
-		GadgetStaticTextSetText( m_featuresLocalGeneral, awaiting );
-	}
 	m_nameLocalGeneral = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "MultiplayerLoadScreen.wnd:LocalGeneralName"));
 	// Show the faction (side) name rather than the specific general's name.
 	{
@@ -1731,62 +1863,7 @@ void MultiPlayerLoadScreen::init( GameInfo *game )
 		GadgetStaticTextSetText( m_nameLocalGeneral, TheGameText->fetch(sideKey) );
 	}
 
-	// Replace the general portrait with the battlefield-intel meter card.
-	{
-		s_intelCard.state = INTEL_CARD_AWAITING;
-		s_intelCard.localTeam = 0;
-		s_intelCard.yourColor = GameMakeColor(60, 120, 220, 255);
-		s_intelCard.enemyColor = GameMakeColor(200, 60, 60, 255);
-		// gauge dial art (shipped in Zulu.big); NULL -> primitive-bar fallback
-		s_intelCard.gauge = TheMappedImageCollection
-			? TheMappedImageCollection->findImageByName("ZuluGaugeDial") : NULL;
-		const GameSlot *localSlot = game->getConstSlot(game->getLocalSlotNum());
-		if (localSlot)
-		{
-			Int myTeam = localSlot->getTeamNumber(); // 0-based, -1 = none
-			s_intelCard.localTeam = (myTeam >= 0) ? (myTeam + 1) : 0;
-			s_intelCard.yourColor = TheMultiplayerSettings->getColor(localSlot->getApparentColor())->getColor();
-			Int si;
-			for (si = 0; si < MAX_SLOTS; ++si)
-			{
-				const GameSlot *es = game->getConstSlot(si);
-				if (!es || !es->isOccupied())
-					continue;
-				if (es->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
-					continue;
-				if (es->getTeamNumber() == myTeam)
-					continue;
-				// FFA mode: keep the default chip so it can't pair a colour with a name
-				if (!game->isSlotAnonymous(si))
-					s_intelCard.enemyColor = TheMultiplayerSettings->getColor(es->getApparentColor())->getColor();
-				break;
-			}
-		}
-		if (s_intelCard.pct == NULL)
-			s_intelCard.pct = TheDisplayStringManager->newDisplayString();
-		if (s_intelCard.pct != NULL)
-		{
-			// Give the win% its own large bold font (the portrait's default font
-			// is tiny) so it anchors the top of the card. Size to the box.
-			GameFont *bigFont = NULL;
-			if (m_portraitLocalGeneral != NULL)
-			{
-				Int pw = 0, ph = 0;
-				m_portraitLocalGeneral->winGetSize(&pw, &ph);
-				Int ptSize = ph / 6;
-				if (ptSize < 18) ptSize = 18;
-				if (ptSize > 40) ptSize = 40;
-				bigFont = TheFontLibrary->getFont(AsciiString("Arial"), ptSize, TRUE);
-			}
-			if (bigFont != NULL)
-				s_intelCard.pct->setFont(bigFont);
-			else if (m_portraitLocalGeneral != NULL)
-				s_intelCard.pct->setFont(m_portraitLocalGeneral->winGetFont());
-			s_intelCard.pct->setText(UnicodeString::TheEmptyString);
-		}
-		if (m_portraitLocalGeneral != NULL)
-			m_portraitLocalGeneral->winSetDrawFunc(drawIntelPortrait);
-	}
+	intelPanelInit(game, m_portraitLocalGeneral, m_featuresLocalGeneral);
 #endif
 
 	AsciiString musicName = pt->getLoadScreenMusic();
@@ -1954,68 +2031,10 @@ void MultiPlayerLoadScreen::update( Int percent )
 	TheMouse->setCursorTooltip(UnicodeString::TheEmptyString);
 
 #if RTS_ZEROHOUR
-	// Poll the radarvan "battlefield intel" worker (started at countdown) and
-	// drop the result into the general-features panel. Purely display; this
-	// never blocks loading. Once resolved (real intel or fallback) we stop.
-	if (!m_intelResolved && m_featuresLocalGeneral)
-	{
-		++m_intelWaitCalls;
-		AsciiString intelText;
-		Bool ready = RadarvanIntelReady(intelText);
-		Bool pending = RadarvanIntelPending();
-		// Close the ready/pending race: the worker sets "ready" and clears
-		// "pending" together under one lock, so if we saw "not ready" but also
-		// "not pending", it just finished - re-read readiness before giving up.
-		if (!ready && !pending)
-			ready = RadarvanIntelReady(intelText);
-		if (ready)
-		{
-			UnicodeString u;
-			u.translate(intelText);
-			GadgetStaticTextSetText(m_featuresLocalGeneral, u);
-			// Drive the portrait meter card from the same result.
-			RadarvanIntelReadyData(s_intelCard.d);
-			// Use the team the worker actually predicted against (data.localTeam
-			// == job.localTeam) for the win% math, not the raw slot team derived
-			// at setup. They differ in a 1v1 with no teams assigned: the worker
-			// synthesizes team 1 vs 2, but the slot's getTeamNumber() is -1 there,
-			// which would leave localTeam == 0 and make the needle/readout show
-			// the FAVORED team's odds instead of the local player's own.
-			s_intelCard.localTeam = s_intelCard.d.localTeam;
-			s_intelCard.state = INTEL_CARD_READY;
-			if (s_intelCard.pct != NULL)
-			{
-				Real yp;
-				if (s_intelCard.localTeam == 0)
-					yp = s_intelCard.d.favoredWinProb;
-				else
-					yp = (s_intelCard.d.favoredTeam == s_intelCard.localTeam)
-						? s_intelCard.d.favoredWinProb
-						: (1.0f - s_intelCard.d.favoredWinProb);
-				Int pctI = (Int)(yp * 100.0f + 0.5f);
-				AsciiString ps;
-				ps.format("%d%%", pctI);
-				UnicodeString pu;
-				pu.translate(ps);
-				s_intelCard.pct->setText(pu);
-			}
-			m_intelResolved = TRUE;
-		}
-		else if (!pending || m_intelWaitCalls > 3000)
-		{
-			// Worker finished without a usable result (or the long backstop
-			// tripped): show the themed fallback and give up. NOTE: we must NOT
-			// fall back merely because loading hit 100% - after local load the
-			// game spins in a wait-for-players loop calling update(101) ~10x/s,
-			// which is precisely the window a late result arrives in. We keep
-			// polling there and only give up once the worker itself is done.
-			UnicodeString u;
-			u.translate(AsciiString("BATTLEFIELD INTEL\nRecon uplink is down, General.\nNo intel on this engagement.\nTrust your instincts."));
-			GadgetStaticTextSetText(m_featuresLocalGeneral, u);
-			s_intelCard.state = INTEL_CARD_NODATA;
-			m_intelResolved = TRUE;
-		}
-	}
+	// Poll the radarvan "battlefield intel" worker (started at countdown).
+	// Purely display; this never blocks loading.
+	if (!m_intelResolved)
+		m_intelResolved = intelPanelUpdate(m_featuresLocalGeneral, m_intelWaitCalls);
 #endif
 
 	// Do this last!
@@ -2044,6 +2063,8 @@ GameSpyLoadScreen::GameSpyLoadScreen()
 	m_portraitLocalGeneral = nullptr;
 	m_featuresLocalGeneral = nullptr;
 	m_nameLocalGeneral = nullptr;
+	m_intelResolved = TRUE;
+	m_intelWaitCalls = 0;
 
 	for(Int i = 0; i < MAX_SLOTS; ++i)
 	{
@@ -2069,6 +2090,10 @@ GameSpyLoadScreen::~GameSpyLoadScreen()
 	{
 		m_mapPreview->winSetUserData(nullptr);
 	}
+
+#if RTS_ZEROHOUR
+	intelPanelShutdown();
+#endif
 }
 
 #if !defined(GENERALS_ONLINE)
@@ -2130,6 +2155,23 @@ GameSlot *lSlot = game->getSlot(game->getLocalSlotNum());
 	GadgetStaticTextSetText( m_featuresLocalGeneral, TheGameText->fetch( features.isEmpty() ? "GUI:PlayerObserver" : pt->getGeneralFeatures() ) );
 	m_nameLocalGeneral = TheWindowManager->winGetWindowFromId( m_loadScreen,TheNameKeyGenerator->nameToKey( "GameSpyLoadScreen.wnd:LocalGeneralName"));
 	GadgetStaticTextSetText( m_nameLocalGeneral, localName );
+
+	// Radarvan "battlefield intel", same as the LAN load screen. The worker
+	// is started in NGMPGame::launchGame. Unlike LAN, the general's portrait
+	// and features are only given up when there is intel on the way: a
+	// free-for-all or an unteamed lobby never starts a request, and keeps the
+	// stock panel.
+	m_intelWaitCalls = 0;
+	AsciiString intelProbe;
+	if (RadarvanIntelPending() || RadarvanIntelReady(intelProbe))
+	{
+		m_intelResolved = FALSE;
+		intelPanelInit(game, m_portraitLocalGeneral, m_featuresLocalGeneral);
+	}
+	else
+	{
+		m_intelResolved = TRUE;
+	}
 #endif
 
 	GameWindow *teamWin[MAX_SLOTS];
@@ -2432,6 +2474,12 @@ void GameSpyLoadScreen::update( Int percent )
 		NGMP_OnlineServicesManager::GetInstance()->Tick();
 	}
 	TheMouse->setCursorTooltip(UnicodeString::TheEmptyString);
+
+#if RTS_ZEROHOUR
+	// Poll the radarvan "battlefield intel" worker; display only.
+	if (!m_intelResolved)
+		m_intelResolved = intelPanelUpdate(m_featuresLocalGeneral, m_intelWaitCalls);
+#endif
 
 	// Do this last!
 	LoadScreen::update( percent );

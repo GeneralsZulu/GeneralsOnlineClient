@@ -310,6 +310,12 @@ private:
 	GameWindow *m_portraitLocalGeneral;
 	GameWindow *m_featuresLocalGeneral;
 	GameWindow *m_nameLocalGeneral;
+
+	// Zero Hour "battlefield intel" panel state, as on MultiPlayerLoadScreen.
+	// m_intelResolved starts TRUE and is only cleared when a request is in
+	// flight for this game, so a game without intel never polls.
+	Bool m_intelResolved;
+	Int m_intelWaitCalls;
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
