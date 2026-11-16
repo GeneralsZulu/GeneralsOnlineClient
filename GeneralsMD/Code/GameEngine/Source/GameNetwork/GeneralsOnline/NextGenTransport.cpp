@@ -287,32 +287,32 @@ Bool NextGenTransport::doRecv(void)
                 if (!msg)
                     continue;
 
-                const uint32_t numBytesWithHeader = msg->m_cbSize;
+                const uint32_t numBytesWithHeader = static_cast<uint32_t>(msg->m_cbSize);
 
-                // is it an AC packet?
-                std::vector<byte> vecDataWithHeader;
-                vecDataWithHeader.resize(numBytesWithHeader);
-                memcpy(vecDataWithHeader.data(), msg->GetData(), numBytesWithHeader);
+                // Read straight out of the GNS message: its buffer stays valid
+                // until msg->Release(), and every path below is done with it by
+                // then (the game path copies into incomingMessage first). This
+                // used to copy every packet into two heap vectors; only the
+                // rare AC packet still gets one, below.
+                const unsigned char* pDataWithHeader = static_cast<const unsigned char*>(msg->GetData());
 
                 // all packets must have at least 1 byte to indicate channel
-                if (numBytesWithHeader >= sizeof(ENetworkChannel))
+                if (pDataWithHeader != nullptr && numBytesWithHeader >= sizeof(ENetworkChannel))
                 {
-                    ENetworkChannel netChannel = (ENetworkChannel)vecDataWithHeader[0];
+                    ENetworkChannel netChannel = (ENetworkChannel)pDataWithHeader[0];
 
-                    std::vector<byte> vecPacketDataWithoutHeader;
-                    vecPacketDataWithoutHeader.resize(numBytesWithHeader - sizeof(ENetworkChannel));
-                    memcpy(vecPacketDataWithoutHeader.data(), (char*)msg->GetData() + sizeof(ENetworkChannel), numBytesWithHeader - sizeof(ENetworkChannel));
+                    const unsigned char* pPacketData = pDataWithHeader + sizeof(ENetworkChannel);
+                    const uint32_t packetSize = numBytesWithHeader - static_cast<uint32_t>(sizeof(ENetworkChannel));
 
                     if (netChannel == ENetworkChannel::NETWORK_CHANNEL_AC)
                     {
-                        NetworkLog(ELogVerbosity::LOG_RELEASE, "[AC PACKET] Received AC message of size %u from user %lld", vecPacketDataWithoutHeader.size(), static_cast<long long>(kvPair.second.m_userID));
+                        NetworkLog(ELogVerbosity::LOG_RELEASE, "[AC PACKET] Received AC message of size %u from user %lld", packetSize, static_cast<long long>(kvPair.second.m_userID));
 
-
-                        // remove header
-                        // TODO_AC: Optimize this
-
-
-                        AnticheatPlugInterface::AC_NetworkMessageArrived(kvPair.second.m_userID, vecPacketDataWithoutHeader.data(), vecPacketDataWithoutHeader.size());
+                        // The plugin takes a mutable buffer and GNS's is const,
+                        // so it gets its own copy. AC packets are rare; game
+                        // packets, below, are parsed in place.
+                        std::vector<byte> vecACPacket(pPacketData, pPacketData + packetSize);
+                        AnticheatPlugInterface::AC_NetworkMessageArrived(kvPair.second.m_userID, vecACPacket.data(), packetSize);
                         msg->Release();
                         continue;
                     }
@@ -320,14 +320,14 @@ Bool NextGenTransport::doRecv(void)
                     {
                         NetworkLog(ELogVerbosity::LOG_DEBUG,
                             "[GAME PACKET] Received message of size %u from user %lld",
-                            vecPacketDataWithoutHeader.size(), static_cast<long long>(kvPair.second.m_userID));
+                            packetSize, static_cast<long long>(kvPair.second.m_userID));
 
                         // Must at least contain the header
-                        if (vecPacketDataWithoutHeader.size() < sizeof(TransportMessageHeader))
+                        if (packetSize < sizeof(TransportMessageHeader))
                         {
                             NetworkLog(ELogVerbosity::LOG_RELEASE,
                                 "Game Packet Recv: Dropping packet smaller than header (%u < %zu)",
-                                vecPacketDataWithoutHeader.size(), sizeof(TransportMessageHeader));
+                                packetSize, sizeof(TransportMessageHeader));
                             msg->Release();
                             continue;
                         }
@@ -337,11 +337,11 @@ Bool NextGenTransport::doRecv(void)
                         const uint32_t maxWireSize =
                             static_cast<uint32_t>(sizeof(TransportMessageHeader) + MAX_MESSAGE_LEN);
 
-                        if (vecPacketDataWithoutHeader.size() > maxWireSize)
+                        if (packetSize > maxWireSize)
                         {
                             NetworkLog(ELogVerbosity::LOG_RELEASE,
                                 "Game Packet Recv: Dropping packet too large (%u > %u)",
-                                vecPacketDataWithoutHeader.size(), maxWireSize);
+                                packetSize, maxWireSize);
                             msg->Release();
                             continue;
                         }
@@ -351,12 +351,12 @@ Bool NextGenTransport::doRecv(void)
 
                         // Copy header safely
                         std::memcpy(&incomingMessage.header,
-                            vecPacketDataWithoutHeader.data(),
+                            pPacketData,
                             sizeof(TransportMessageHeader));
 
                         // Compute payload length
                         const uint32_t payloadLen =
-                            vecPacketDataWithoutHeader.size() - static_cast<uint32_t>(sizeof(TransportMessageHeader));
+                            packetSize - static_cast<uint32_t>(sizeof(TransportMessageHeader));
 
                         // Sanity check payloadLen against local buffer size
                         if (payloadLen > sizeof(incomingMessage.data))
@@ -372,7 +372,7 @@ Bool NextGenTransport::doRecv(void)
                         if (payloadLen > 0)
                         {
                             std::memcpy(incomingMessage.data,
-                                static_cast<unsigned char*>(vecPacketDataWithoutHeader.data()) + sizeof(TransportMessageHeader),
+                                pPacketData + sizeof(TransportMessageHeader),
                                 payloadLen);
                         }
 
@@ -419,12 +419,12 @@ Bool NextGenTransport::doRecv(void)
                                     static_cast<long long>(kvPair.second.m_userID), incomingMessage.length);
                             }
                             m_unknownPackets[m_statisticsSlot]++;
-                            m_unknownBytes[m_statisticsSlot] += vecPacketDataWithoutHeader.size();
+                            m_unknownBytes[m_statisticsSlot] += packetSize;
                             continue;
                         }
 
                         m_incomingPackets[m_statisticsSlot]++;
-                        m_incomingBytes[m_statisticsSlot] += vecPacketDataWithoutHeader.size();
+                        m_incomingBytes[m_statisticsSlot] += packetSize;
 
                         if (storeIncoming(incomingMessage, payloadLen, kvPair.second.m_userID))
                         {
@@ -432,11 +432,19 @@ Bool NextGenTransport::doRecv(void)
                             bRet = TRUE;
                         }
                     }
+                    else
+                    {
+                        // Neither channel this client knows: drop it, but give
+                        // the message back to GNS like every other path does.
+                        NetworkLog(ELogVerbosity::LOG_RELEASE, "[NET PACKET] Dropping packet on unknown channel %u (size %u) from user %lld", static_cast<unsigned>(netChannel), numBytesWithHeader, static_cast<long long>(kvPair.second.m_userID));
+                        msg->Release();
+                        continue;
+                    }
                 }
                 else
                 {
                     // Malformed packet - too small for header
-                    NetworkLog(ELogVerbosity::LOG_RELEASE, "[NET PACKET] Dropping malformed packet - size %u is less than header size 1 from user %lld", vecDataWithHeader.size(), static_cast<long long>(kvPair.second.m_userID));
+                    NetworkLog(ELogVerbosity::LOG_RELEASE, "[NET PACKET] Dropping malformed packet - size %u is less than header size 1 from user %lld", numBytesWithHeader, static_cast<long long>(kvPair.second.m_userID));
                     msg->Release();
                     continue;
                 }
