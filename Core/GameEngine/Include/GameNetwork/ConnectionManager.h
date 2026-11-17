@@ -146,8 +146,8 @@ public:
 	Bool isPlayerConnected( Int playerID );
 
 	void notifyOthersOfCurrentFrame(Int frame);
-	void sendFrameDataToPlayer(UnsignedInt playerID, UnsignedInt startingFrame);
-	void sendSingleFrameToPlayer(UnsignedInt playerID, UnsignedInt frame);
+	void sendFrameDataToPlayer(UnsignedInt playerID, UnsignedInt startingFrame, Bool ownFramesOnly = FALSE);
+	void sendSingleFrameToPlayer(UnsignedInt playerID, UnsignedInt frame, Bool ownFramesOnly = FALSE);
 	void notifyOthersOfNewFrame(UnsignedInt frame);
 
 	UnsignedInt getNextPacketRouterSlot(UnsignedInt playerID); ///< returns the packet router player that comes after the given player.

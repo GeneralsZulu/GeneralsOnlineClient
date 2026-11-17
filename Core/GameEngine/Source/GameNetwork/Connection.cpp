@@ -384,7 +384,11 @@ NetCommandRef * Connection::processAck(NetCommandMsg *msg) {
  */
 NetCommandRef * Connection::processAck(UnsignedShort commandID, UnsignedByte originalPlayerID) {
 	NetCommandRef *temp = m_netCommandList->getFirstMessage();
-	while ((temp != nullptr) && ((temp->getCommand()->getID() != commandID) || (temp->getCommand()->getPlayerID() != originalPlayerID))) {
+	// An unsent command cannot have been acked: a match on one is an ack for
+	// some other command that shares its 16 bit ID, and removing it here would
+	// mean it never goes out at all (the 2026-11-14 half second freezes).
+	while ((temp != nullptr) && ((temp->getCommand()->getID() != commandID) || (temp->getCommand()->getPlayerID() != originalPlayerID)
+			|| (temp->getTimeLastSent() == -1))) {
 
 		// cycle through the commands till we find the one we need to remove.
 		// Need to check for both the command ID and the player ID.
