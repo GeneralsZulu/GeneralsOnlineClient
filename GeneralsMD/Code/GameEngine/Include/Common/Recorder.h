@@ -189,6 +189,14 @@ public:
 	Bool isResumeInputBlocked() const { return isResumeCatchupMode() || isResumeFreezeActive(); }
 	Bool isResumeCRCValidationSuppressed() const;    ///< catchup, and the run-ahead window after the handoff
 	Bool updateResumeFreeze();                       ///< pumped every engine frame by Network::update; TRUE while frames must not advance
+	// Rejoin a match in progress: one client rebuilds the game alone from the replay of the
+	// match so far while everyone else holds on liveFrame, then steps into the live lockstep on
+	// that frame. It is a resume catchup with no peers taking part: no lead-in, no freeze, the
+	// frame gate is bypassed and nothing is sent until the logic frame reaches liveFrame.
+	void armRejoinForNextGame(UnsignedInt liveFrame, UnsignedInt sourceLastFrame);
+	Bool isRejoin() const { return m_rejoinLiveFrame != 0; }
+	Bool isRejoinCatchup() const;                    ///< rebuilding alone: the logic frame has not reached the frame the others hold on
+	UnsignedInt getRejoinLiveFrame() const { return m_rejoinLiveFrame; }
 	UnsignedInt scanReplayLastFrame(AsciiString filename); ///< last frame with a complete record; walks the records, for recordings whose header was never finalized (crash) or whose tail is torn
 	void initControls();															///< Show or Hide the Replay controls
 
@@ -363,6 +371,9 @@ protected:
 	Bool m_resumeLeadInAnnounced;										///< the lead-in message has been shown
 	UnsignedInt m_resumeFreezeStartMs;							///< wall-clock start of the freeze, 0 when not frozen
 	Int m_resumeFreezeLastAnnounced;								///< last countdown second shown
+	UnsignedInt m_rejoinArmedLiveFrame;							///< armRejoinForNextGame, carried across startRecording like the resume arming
+	UnsignedInt m_rejoinLiveFrame;									///< first live frame of a rejoin, 0 when this game is not one
+	UnsignedInt m_rejoinLastProgressMs;							///< last progress message
 
 	Bool startResumeCatchup();											///< open the resume source and switch to catchup; the recording is already started
 	void updateResumeCatchup();											///< inject the source's commands for this frame, hand off at the handoff frame

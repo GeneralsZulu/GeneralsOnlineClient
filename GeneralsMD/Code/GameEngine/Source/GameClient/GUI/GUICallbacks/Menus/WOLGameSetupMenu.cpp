@@ -2279,11 +2279,73 @@ static void wolUpdateResumeButton()
 // it has not fetched yet (the service bumps ResumeReplayGeneration on every arm, so a re-arm
 // with the same handoff frame is fetched again), tells the lobby whether its copy matches and
 // flags itself; everyone notes an arm or a disarm.
+// Rejoin a match in progress: we joined a lobby whose match is running and the service gave us
+// our slot back. Wait for a player in the match to upload the replay, fetch it, then start
+// the game here alone; it rebuilds the match from the replay and steps in on the held frame.
+static uint32_t s_wolRejoinGenerationAnnounced = 0;
+static uint32_t s_wolRejoinGenerationStarted = 0;
+static Bool s_wolRejoinDownloadInProgress = FALSE;
+
+static Bool wolCheckRejoin(NGMP_OnlineServices_LobbyInterface *pLobbyInterface, NGMPGame *game)
+{
+	NGMP_OnlineServices_AuthInterface* pAuth = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_AuthInterface>();
+	const LobbyEntry lobby = pLobbyInterface->GetCurrentLobby();
+	if (pAuth == nullptr || lobby.rejoin_generation == 0 || lobby.rejoin_user != pAuth->GetUserID())
+		return FALSE;
+
+	if (s_wolRejoinGenerationAnnounced != lobby.rejoin_generation)
+	{
+		s_wolRejoinGenerationAnnounced = lobby.rejoin_generation;
+		wolLocalSystemChat(UnicodeString(L"Rejoining the match in progress: waiting for a player in it to send the replay..."));
+	}
+	if (lobby.rejoin_refused_generation == lobby.rejoin_generation)
+	{
+		if (s_wolRejoinGenerationStarted != lobby.rejoin_generation)
+		{
+			s_wolRejoinGenerationStarted = lobby.rejoin_generation;
+			wolLocalSystemChat(UnicodeString(L"Rejoin refused: the other players had already dropped you from that match. Leave this lobby."));
+		}
+		return TRUE;
+	}
+	if (lobby.rejoin_frame == 0 || s_wolRejoinGenerationStarted == lobby.rejoin_generation || s_wolRejoinDownloadInProgress)
+		return TRUE;
+	s_wolRejoinGenerationStarted = lobby.rejoin_generation;
+	s_wolRejoinDownloadInProgress = TRUE;
+
+	const UnsignedInt liveFrame = lobby.rejoin_frame;
+	const int64_t routerUserID = lobby.rejoin_router_user;
+	const UnsignedInt runAhead = lobby.rejoin_run_ahead;
+	wolLocalSystemChat(UnicodeString(L"Rejoin: downloading the replay of the match so far..."));
+	pLobbyInterface->DownloadResumeReplay(ResumeFromReplay::getSourceFilePath(), [liveFrame, routerUserID, runAhead](bool bDownloaded)
+	{
+		s_wolRejoinDownloadInProgress = FALSE;
+		NGMP_OnlineServices_LobbyInterface* pLobby = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+		NGMPGame *lobbyGame = pLobby == nullptr ? nullptr : pLobby->GetCurrentGame();
+		if (pLobby == nullptr || lobbyGame == nullptr || TheNGMPGame == nullptr)
+			return;
+		if (!bDownloaded)
+		{
+			wolLocalSystemChat(UnicodeString(L"Rejoin: the replay download failed. Leave and join the match again."));
+			return;
+		}
+		ReleaseLog("REJOIN starting: live frame=%u router user=%lld", liveFrame, (long long)routerUserID);
+		lobbyGame->setRejoinLiveFrame(liveFrame);
+		pLobby->m_routerUserID = routerUserID;
+		NetSetInitialRunAhead((Int)runAhead);	// CRCs and commands only line up when every player uses the same run-ahead
+		GameSpyCloseOverlay(GSOVERLAY_BUDDY);
+		GameSpyCloseOverlay(GSOVERLAY_PLAYERINFO);
+		TheNGMPGame->startGame(0);
+	});
+	return TRUE;
+}
+
 static void wolCheckResumeArmChange()
 {
 	NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
 	NGMPGame *game = pLobbyInterface == nullptr ? nullptr : pLobbyInterface->GetCurrentGame();
 	if (game == nullptr)
+		return;
+	if (wolCheckRejoin(pLobbyInterface, game))
 		return;
 	const UnsignedInt handoff = game->getResumeHandoffFrame();
 	if (handoff != s_wolLastSeenResumeHandoff)
@@ -2333,6 +2395,9 @@ void InitWOLGameGadgets()
 	s_wolResumeArmInProgress = FALSE;
 	s_wolResumeDownloadedGeneration = 0;
 	s_wolResumeDownloadInProgress = FALSE;
+	s_wolRejoinGenerationAnnounced = 0;
+	s_wolRejoinGenerationStarted = 0;
+	s_wolRejoinDownloadInProgress = FALSE;
 
 	NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
 	NGMPGame* theGameInfo = pLobbyInterface == nullptr ? nullptr : pLobbyInterface->GetCurrentGame();

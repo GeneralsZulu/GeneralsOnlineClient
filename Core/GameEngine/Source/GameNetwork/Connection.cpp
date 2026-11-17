@@ -28,6 +28,7 @@
 #include "GameNetwork/Connection.h"
 #include "GameNetwork/networkutil.h"
 #include "GameLogic/GameLogic.h"
+#include "Common/Recorder.h"
 #include "../NGMP_include.h"
 
 #if defined(GENERALS_ONLINE)
@@ -160,6 +161,11 @@ void Connection::sendNetCommandMsg(NetCommandMsg *msg, UnsignedByte relay) {
 
 
 	if (m_isQuitting)
+		return;
+
+	// Rebuilding alone for a rejoin: the frames being simulated are long past for everyone
+	// else. Only the keepalive goes out, which holds their disconnect timer for us.
+	if (TheRecorder && TheRecorder->isRejoinCatchup() && (msg->getNetCommandType() != NETCOMMANDTYPE_DISCONNECTKEEPALIVE))
 		return;
 
 	if (m_netCommandList != nullptr) {

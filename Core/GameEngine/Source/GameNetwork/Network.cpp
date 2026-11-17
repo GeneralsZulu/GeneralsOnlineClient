@@ -143,6 +143,7 @@ public:
 
 	virtual void voteForPlayerDisconnect(Int slot) override;
 	virtual Bool isPacketRouter() override;
+	virtual Int getPacketRouterSlot() override { return m_conMgr ? (Int)m_conMgr->getPacketRouterSlot() : -1; }
 
 	// Bandwidth metrics
 	virtual Real getIncomingBytesPerSecond() override;
@@ -233,6 +234,7 @@ protected:
 	// ConnectionManager::emitNetStats.
 	UnsignedInt m_lastUpdateMs;				///< Wall clock of the previous in-game update() (0 = none); a big gap is a hitch.
 	UnsignedInt m_stallStartMs;				///< When the current wait for frame data became late (0 = not stalling).
+	Bool m_wasRejoinSolo;							///< Last update ran inside a rejoin's solo catchup (TheRecorder->isRejoinCatchup).
 	UnsignedInt m_stallMask;					///< Slots we were waiting on when the stall began.
 	UnsignedInt m_lastStatsMs;				///< Last NETSTAT emission.
 	UnsignedInt m_lastRunAheadLogMs;	///< Rate limit for the NETRA line.
@@ -302,6 +304,7 @@ Network::Network()
 	m_messageWindow = NULL;
 	m_lastUpdateMs = 0;
 	m_stallStartMs = 0;
+	m_wasRejoinSolo = FALSE;
 	m_stallMask = 0;
 	m_lastStatsMs = 0;
 	m_lastRunAheadLogMs = 0;
@@ -365,6 +368,11 @@ void Network::init()
 
 	m_lastFrame = 0;
 	m_runAhead = min(max(30, MIN_RUNAHEAD), MAX_FRAMES_AHEAD / 2); ///< @todo: don't hard-code the run-ahead.
+	const Int initialRunAhead = NetTakeInitialRunAhead();
+	if (initialRunAhead > 0) {
+		m_runAhead = min(initialRunAhead, MAX_FRAMES_AHEAD / 2);
+		ReleaseLog("REJOIN starting with run-ahead %d", m_runAhead);
+	}
 	m_frameRate = 30;
 	m_lastExecutionFrame = m_runAhead - 1; // subtract 1 since we're starting on frame 0
 	m_lastFrameCompleted = m_runAhead - 1; // subtract 1 since we're starting on frame 0
@@ -373,6 +381,7 @@ void Network::init()
 	m_didSelfSlug = FALSE;
 	m_lastUpdateMs = 0;
 	m_stallStartMs = 0;
+	m_wasRejoinSolo = FALSE;
 	m_stallMask = 0;
 	m_lastStatsMs = 0;
 	m_lastRunAheadLogMs = 0;
@@ -859,15 +868,22 @@ void Network::update()
 	// AllCommandsReady stays enforced either way.
 	const Bool resumeFrozen = TheRecorder && TheRecorder->updateResumeFreeze();
 	const Bool inCatchup = TheRecorder && TheRecorder->isResumeCatchupMode() && !TheRecorder->isResumeCatchupLeadIn();
+	// A rejoining client rebuilds the match alone: every command comes out of the replay and
+	// the other players, who are holding on a later frame, send nothing for these frames.
+	const Bool rejoinSolo = TheRecorder && TheRecorder->isRejoinCatchup();
+	if (m_wasRejoinSolo && !rejoinSolo && (m_conMgr != NULL)) {
+		m_conMgr->onRejoinLive();
+	}
+	m_wasRejoinSolo = rejoinSolo;
 
-	if (!resumeFrozen && AllCommandsReady(TheGameLogic->getFrame())) { // If all the commands are ready for the next frame...
+	if (!resumeFrozen && (rejoinSolo || AllCommandsReady(TheGameLogic->getFrame()))) { // If all the commands are ready for the next frame...
 		if ((m_stallStartMs != 0) && (m_conMgr != NULL)) {
 			m_conMgr->noteStall(TheGameLogic->getFrame(), nowMs - m_stallStartMs, m_stallMask);
 		}
 		m_stallStartMs = 0;
 		m_conMgr->handleAllCommandsReady();
 		//		DEBUG_LOG(("Network::update - frame %d is ready", TheGameLogic->getFrame()));
-		if (inCatchup || timeForNewFrame()) { // This needs to come after any other pre-frame execution checks as this changes the timing variables.
+		if (inCatchup || rejoinSolo || timeForNewFrame()) { // This needs to come after any other pre-frame execution checks as this changes the timing variables.
 			RelayCommandsToCommandList(TheGameLogic->getFrame());	// Put the commands for the next frame on TheCommandList.
 			m_frameDataReady = TRUE; // Tell the GameEngine to run the commands for the new frame.
 		}

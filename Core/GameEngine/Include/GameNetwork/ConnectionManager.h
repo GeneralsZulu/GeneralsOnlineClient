@@ -168,6 +168,7 @@ public:
 	// and a guest whose only missing slot is the router charges the stall to
 	// that slot instead. Telemetry only: the disconnect vote is untouched.
 	void broadcastRouterWait(UnsignedInt frame);
+	void onRejoinLive();	///< A rejoin's solo catchup just ended: drop the slots whose players left before we came back.
 	UnsignedInt getBlameMask(UnsignedInt notReadyMask);	///< notReadyMask, or what the router is waiting on when the router is all we miss.
 	void noteStall(UnsignedInt frame, UnsignedInt durationMs, UnsignedInt notReadyMask);
 	void noteHitch(UnsignedInt gapMs);

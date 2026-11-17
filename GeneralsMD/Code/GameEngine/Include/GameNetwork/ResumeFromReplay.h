@@ -74,6 +74,12 @@ namespace ResumeFromReplay
 	/// Every slot as recorded: occupant (human by name, AI by difficulty, or empty), faction, color, start position and team.
 	Bool slotsMatch(const ReplayGameInfo &replay, const GameInfo *lobby, UnicodeString &why);
 
+	/// Rejoin a match in progress (GameInfo::getRejoinLiveFrame): makes the slots of a freshly
+	/// joined lobby the ones the match began with, as recorded. Players who left since are open
+	/// slots in the lobby by now, and random factions, colors and positions were resolved at the
+	/// original start. Must run before the network builds its connections from the slots.
+	Bool applyRejoinSlots(GameInfo *game, UnicodeString &why);
+
 	/// Guest: after its copy of Resume.rep arrived, whether it matches the lobby, with one chat line
 	/// for everyone either way.
 	Bool guestSourceReport(const GameInfo *lobby, UnicodeString &report);

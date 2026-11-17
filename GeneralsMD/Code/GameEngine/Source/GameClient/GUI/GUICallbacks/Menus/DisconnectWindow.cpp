@@ -37,6 +37,8 @@
 #include "GameClient/GadgetListBox.h"
 #include "GameClient/GameClient.h"
 #include "GameClient/DisconnectMenu.h"
+#include "GameClient/GUICallbacks.h"
+#include "GameNetwork/NetworkDefs.h"
 #include "GameClient/GameWindowManager.h"
 #include "Common/NameKeyGenerator.h"
 
@@ -51,6 +53,10 @@ static GameWindow *textDisplayWindow = nullptr;
 
 static NameKeyType buttonQuitID = NAMEKEY_INVALID;
 static GameWindow *buttonQuitWindow = nullptr;
+
+// Optional: only the Zulu layout has it.
+static NameKeyType buttonWaitID = NAMEKEY_INVALID;
+static GameWindow *buttonWaitWindow = nullptr;
 
 static NameKeyType buttonVotePlayer1ID = NAMEKEY_INVALID;
 static NameKeyType buttonVotePlayer2ID = NAMEKEY_INVALID;
@@ -82,6 +88,9 @@ static void InitDisconnectWindow() {
 
 	buttonQuitID = TheNameKeyGenerator->nameToKey( "DisconnectScreen.wnd:ButtonQuitGame");
 	buttonQuitWindow = TheWindowManager->winGetWindowFromId(nullptr, buttonQuitID);
+
+	buttonWaitID = TheNameKeyGenerator->nameToKey( "DisconnectScreen.wnd:ButtonWait");
+	buttonWaitWindow = TheWindowManager->winGetWindowFromId(nullptr, buttonWaitID);
 
 	buttonVotePlayer1ID = TheNameKeyGenerator->nameToKey( "DisconnectScreen.wnd:ButtonKickPlayer1");
 	buttonVotePlayer2ID = TheNameKeyGenerator->nameToKey( "DisconnectScreen.wnd:ButtonKickPlayer2");
@@ -135,12 +144,20 @@ void ShowDisconnectWindow()
 	buttonVotePlayer6Window->winEnable(TRUE);
 	buttonVotePlayer7Window->winEnable(TRUE);
 	buttonQuitWindow->winEnable(TRUE);
+	EnableDisconnectWaitButton();
 	disconnectMenuLayout->bringForward();
 
 	GadgetListBoxReset(textDisplayWindow);
 	GadgetListBoxAddEntryText(textDisplayWindow, TheGameText->fetch("GUI:InternetDisconnectionMenuBody1"),
 		GameMakeColor(255,255,255,255), -1);
 
+}
+
+void EnableDisconnectWaitButton()
+{
+	if (buttonWaitWindow != nullptr) {
+		buttonWaitWindow->winEnable(TRUE);
+	}
 }
 
 //------------------------------------------------------
@@ -202,6 +219,9 @@ WindowMsgHandledType DisconnectControlSystem( GameWindow *window, UnsignedInt ms
 			if (controlID == buttonQuitID) {
 				TheDisconnectMenu->quitGame();
 				buttonQuitWindow->winEnable(FALSE);
+			} else if (buttonWaitWindow != nullptr && controlID == buttonWaitID) {
+				TheDisconnectMenu->voteForPlayer(DISCONNECT_WAIT_SLOT);
+				buttonWaitWindow->winEnable(FALSE);
 			} else if (controlID == buttonVotePlayer1ID) {
 				TheDisconnectMenu->voteForPlayer(0);
 				buttonVotePlayer1Window->winEnable(FALSE);

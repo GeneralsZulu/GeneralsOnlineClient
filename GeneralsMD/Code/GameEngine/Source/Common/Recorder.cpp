@@ -996,10 +996,12 @@ void RecorderClass::updateRecord()
 			// would desync everyone else.
 			const UnsignedInt armedHandoffFrame = m_resumeArmedHandoffFrame;
 			const UnsignedInt armedSourceLastFrame = m_resumeArmedSourceLastFrame;
+			const UnsignedInt armedRejoinLiveFrame = m_rejoinArmedLiveFrame;
 			startRecording(diff, m_originalGameMode, rankPoints, maxFPS);
 			if (armedHandoffFrame != 0)
 			{
 				armResumeForNextGame(armedHandoffFrame, armedSourceLastFrame);
+				m_rejoinLiveFrame = armedRejoinLiveFrame;
 				if (startResumeCatchup())
 					DEBUG_LOG(("RecorderClass::updateRecord() - resume catchup to frame %u", armedHandoffFrame));
 				else
@@ -2678,8 +2680,23 @@ void RecorderClass::clearResumeState()
 	m_resumeLeadInAnnounced = FALSE;
 	m_resumeFreezeStartMs = 0;
 	m_resumeFreezeLastAnnounced = -1;
+	m_rejoinArmedLiveFrame = 0;
+	m_rejoinLiveFrame = 0;
+	m_rejoinLastProgressMs = 0;
 	if (m_mode == RECORDERMODETYPE_RESUME_CATCHUP)
 		m_mode = RECORDERMODETYPE_NONE;
+}
+
+void RecorderClass::armRejoinForNextGame(UnsignedInt liveFrame, UnsignedInt sourceLastFrame)
+{
+	// The others are about to run liveFrame, so the replay is injected through the frame before it.
+	armResumeForNextGame(liveFrame - 1, sourceLastFrame);
+	m_rejoinArmedLiveFrame = liveFrame;
+}
+
+Bool RecorderClass::isRejoinCatchup() const
+{
+	return m_rejoinLiveFrame != 0 && TheGameLogic != nullptr && TheGameLogic->getFrame() < m_rejoinLiveFrame;
 }
 
 void RecorderClass::armResumeForNextGame(UnsignedInt handoffFrame, UnsignedInt sourceLastFrame)
@@ -2692,11 +2709,12 @@ void RecorderClass::disarmResume()
 {
 	m_resumeArmedHandoffFrame = 0;
 	m_resumeArmedSourceLastFrame = 0;
+	m_rejoinArmedLiveFrame = 0;
 }
 
 Bool RecorderClass::isResumeCatchupLeadIn() const
 {
-	if (!isResumeCatchupMode())
+	if (!isResumeCatchupMode() || isRejoin())	// a rejoin has people waiting on it: fast to the end
 		return FALSE;
 	const UnsignedInt leadInFrames = RESUME_LEADIN_SECONDS * LOGICFRAMES_PER_SECOND;
 	const UnsignedInt curFrame = TheGameLogic ? TheGameLogic->getFrame() : 0;
@@ -2945,6 +2963,29 @@ void RecorderClass::updateResumeCatchup()
 
 	// Inject every command recorded for this frame, including the handoff frame itself.
 	injectResumeCommands(curFrame);
+
+	if (isRejoin() && TheInGameUI && m_resumeHandoffFrame > 0)
+	{
+		const UnsignedInt nowMs = timeGetTime();
+		if (nowMs - m_rejoinLastProgressMs >= 3000)
+		{
+			m_rejoinLastProgressMs = nowMs;
+			TheInGameUI->message(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ZuluRejoinProgress",
+				L"Rejoining the match: %d%% caught up", (Int)((curFrame * 100.0f) / m_resumeHandoffFrame)));
+		}
+	}
+
+	if (curFrame >= m_resumeHandoffFrame && isRejoin())
+	{
+		// No freeze and no countdown: the players holding the match get it back the moment
+		// this frame has run, see Network::update and isRejoinCatchup.
+		endResumeCatchup();
+		RESUME_LOG("Rejoin: caught up at frame %u, live from frame %u", curFrame, m_rejoinLiveFrame);
+		ReleaseLog("REJOIN caught up at frame=%u live from frame=%u", curFrame, m_rejoinLiveFrame);
+		if (TheInGameUI)
+			TheInGameUI->message(TheGameText->FETCH_OR_SUBSTITUTE("GUI:ZuluRejoinDone", L"Caught up. You are back in the match."));
+		return;
+	}
 
 	if (curFrame >= m_resumeHandoffFrame)
 	{

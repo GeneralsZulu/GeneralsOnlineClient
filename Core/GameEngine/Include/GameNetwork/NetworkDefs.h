@@ -116,6 +116,14 @@ enum ConnectionNumbers CPP_11(: Int)
 
 static constexpr const Int MAX_SLOTS = MAX_PLAYER + 1;
 
+// The "Wait" vote on the disconnect screen travels as a disconnect vote for
+// this slot number, which no player can have. When every player still
+// answering has cast one, all timeouts on the screen gain
+// DISCONNECT_WAIT_EXTEND_MS and the votes clear, so it can be done again.
+static constexpr const Int DISCONNECT_WAIT_SLOT = MAX_SLOTS;
+static constexpr const Int DISCONNECT_WAIT_EXTEND_MS = 120000;
+static constexpr const Int DISCONNECT_RESPONSIVE_MS = 5000;	// keepalives arrive every 500 ms
+
 #pragma pack(push, 1)
 struct TransportMessageHeader
 {

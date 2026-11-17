@@ -298,6 +298,10 @@ void DisconnectMenu::voteForPlayer(Int slot) {
 	TheNetwork->voteForPlayerDisconnect(slot); // Do this next.
 }
 
+void DisconnectMenu::waitGranted() {
+	EnableDisconnectWaitButton();
+}
+
 void DisconnectMenu::updateVotes(Int slot, Int votes) {
 	NameKeyType id = TheNameKeyGenerator->nameToKey(m_playerVoteCountControlNames[slot]);
 	GameWindow *control = TheWindowManager->winGetWindowFromId(nullptr, id);

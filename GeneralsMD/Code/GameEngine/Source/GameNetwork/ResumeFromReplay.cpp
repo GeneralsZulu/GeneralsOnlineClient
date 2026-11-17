@@ -307,11 +307,65 @@ Bool guestSourceReport(const GameInfo *lobby, UnicodeString &report)
 	return TRUE;
 }
 
+Bool applyRejoinSlots(GameInfo *game, UnicodeString &why)
+{
+	SourceReplay replay;
+	UnicodeString reason;
+	if (game == nullptr || !readSource(replay, reason))
+	{
+		why = TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ZuluRejoinAborted", L"Rejoin aborted: %ls", reason.str());
+		return FALSE;
+	}
+	if (replay.mapData == nullptr)
+	{
+		why = TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ZuluRejoinAborted", L"Rejoin aborted: %ls", L"the match's map is not installed");
+		return FALSE;
+	}
+	for (Int i = 0; i < MAX_SLOTS; ++i)
+	{
+		const GameSlot *rs = replay.game.getConstSlot(i);
+		GameSlot *ls = game->getSlot(i);
+		if (rs == nullptr || ls == nullptr)
+			continue;
+		if (!rs->isOccupied())
+		{
+			if (ls->isOccupied())
+			{
+				why = TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ZuluRejoinAborted", L"Rejoin aborted: %ls", L"the lobby has a player the match did not start with");
+				return FALSE;
+			}
+			continue;
+		}
+		if (ls->getState() != rs->getState() || (rs->isHuman() && rs->getName().compare(ls->getName()) != 0))
+			ls->setState(rs->getState(), rs->getName());
+		ls->setPlayerTemplate(rs->getPlayerTemplate());
+		ls->setColor(rs->getColor());
+		ls->setStartPos(rs->getStartPos());
+		ls->setTeamNumber(rs->getTeamNumber());
+	}
+	game->setSeed(replay.game.getSeed());
+	return TRUE;
+}
+
 Bool prepareGameStart(GameInfo *game, UnicodeString &why)
 {
 	if (TheRecorder == nullptr)
 		return TRUE;
 	TheRecorder->disarmResume();
+	if (game != nullptr && game->getRejoinLiveFrame() > 1)
+	{
+		SourceReplay rejoinSource;
+		UnicodeString rejoinReason;
+		if (!readSource(rejoinSource, rejoinReason))
+		{
+			why = TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ZuluRejoinAborted", L"Rejoin aborted: %ls", rejoinReason.str());
+			return FALSE;
+		}
+		const UnsignedInt liveFrame = game->getRejoinLiveFrame();
+		TheRecorder->armRejoinForNextGame(liveFrame, min(rejoinSource.lastFrame, liveFrame - 1));
+		game->setRejoinLiveFrame(0);
+		return TRUE;
+	}
 	if (game == nullptr || game->getResumeHandoffFrame() == 0)
 		return TRUE;
 

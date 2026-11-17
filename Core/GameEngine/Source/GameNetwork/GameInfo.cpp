@@ -329,6 +329,7 @@ void GameInfo::reset()
   m_superweaponRestriction = 0;
   m_startingCash = TheGlobalData->m_defaultStartingCash;
 	m_resumeHandoffFrame = 0;
+	m_rejoinLiveFrame = 0;
 	m_enforceRandom = FALSE;
 	m_ffaMode = FALSE;
 

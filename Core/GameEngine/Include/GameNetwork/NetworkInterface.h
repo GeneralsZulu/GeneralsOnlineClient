@@ -49,6 +49,10 @@ void NetPerfNoteLogic(UnsignedInt ms);
 // The slot the online service picked to relay everyone's moves, for the next
 // parseUserList only; -1 keeps the first human slot.
 void NetSetPreferredRouterSlot(Int slot);
+/// Run-ahead the next network game starts with instead of the default, used once. A client
+/// rejoining a match in progress must start with the run-ahead the match has reached.
+void NetSetInitialRunAhead(Int runAhead);
+Int NetTakeInitialRunAhead();
 
 
 
@@ -90,6 +94,7 @@ public:
 
 	virtual void voteForPlayerDisconnect(Int slot) = 0;								///< register a vote towards this player's disconnect.
 	virtual Bool isPacketRouter() = 0;
+	virtual Int getPacketRouterSlot() = 0;		///< slot of the current packet router, -1 without a game
 
 	// Bandwidth metrics
 	virtual Real getIncomingBytesPerSecond() = 0;

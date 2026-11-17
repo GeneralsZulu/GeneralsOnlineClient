@@ -268,6 +268,11 @@ public:
 	UnsignedInt getResumeHandoffFrame() const   { return m_resumeHandoffFrame; }
 	Bool isResumeArmed() const                  { return m_resumeHandoffFrame != 0; }
 
+	// Rejoin a match in progress: this client alone rebuilds the game from the replay of
+	// the match so far and goes live on this frame (see RecorderClass::armRejoinForNextGame).
+	void setRejoinLiveFrame( UnsignedInt f ) { m_rejoinLiveFrame = f; }
+	UnsignedInt getRejoinLiveFrame() const   { return m_rejoinLiveFrame; }
+
 	Bool haveWeSurrendered() { return m_surrendered; }
 	void markAsSurrendered() { m_surrendered = TRUE; }
 
@@ -320,6 +325,7 @@ protected:
 
 	// resume-from-replay arming (appended last so existing member offsets are untouched)
 	UnsignedInt m_resumeHandoffFrame;
+	UnsignedInt m_rejoinLiveFrame;
 	Bool m_enforceRandom;
 	Bool m_ffaMode;
 };

@@ -538,3 +538,11 @@ END
 TOOLTIP:ZuluHonorHoldLine
 "Hold the Line: The most kills by base defenses per game. Last 90 days, players with 10 or more games."
 END
+
+GUI:ZuluWaitForPlayer
+"Wait 2 Min"
+END
+
+TOOLTIP:ZuluWaitForPlayer
+"Vote to wait for the missing player. When everyone still connected votes, 2 minutes are added. Can be repeated."
+END

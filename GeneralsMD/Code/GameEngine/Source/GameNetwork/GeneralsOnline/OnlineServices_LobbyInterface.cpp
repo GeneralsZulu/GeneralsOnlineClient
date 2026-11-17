@@ -6,6 +6,10 @@
 #include "Common/ReleaseLog.h"
 #include "GameClient/MapUtil.h"
 #include "GameLogic/GameLogic.h"
+#include "Common/Recorder.h"
+#include "GameClient/DisconnectMenu.h"
+#include "GameNetwork/NetworkInterface.h"
+#include "GameNetwork/GeneralsOnline/OnlineServices_Auth.h"
 
 extern void OnKickedFromLobby();
 
@@ -82,7 +86,9 @@ enum class ELobbyUpdateField
 	LOCAL_PLAYER_HAS_RESUME_REPLAY = 21,    // This member holds a usable copy of the resume source
 	LOBBY_ENFORCE_RANDOM = 22,              // Lock every slot to a random faction and team
 	HOST_ACTION_ALIGN_SLOTS = 23,           // Resume-from-replay: the whole slot table at once
-	LOBBY_FFA_MODE = 24                     // Hide who is who from the players (see GameInfo::isSlotAnonymous)
+	LOBBY_FFA_MODE = 24,                    // Hide who is who from the players (see GameInfo::isSlotAnonymous)
+	REJOIN_READY = 25,                      // Rejoin a match in progress: replay uploaded, match held at this frame
+	REJOIN_REFUSE = 26                      // Rejoin a match in progress: that player was already dropped
 };
 
 std::string Base64Encode(const std::vector<uint8_t>& data);
@@ -775,6 +781,100 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_ArmResume(uint32_t h
 
 // Whether this member holds a usable copy of the resume source;
 // the host's start is refused until every human does (the way has_map gates the map).
+void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_RejoinReady(uint32_t frame, int64_t routerUserID, uint32_t runAhead)
+{
+	std::string strURI = std::format("{}/{}", NGMP_OnlineServicesManager::GetAPIEndpoint("Lobby"), m_CurrentLobby.lobbyID);
+	std::map<std::string, std::string> mapHeaders;
+	nlohmann::json j;
+	j["field"] = ELobbyUpdateField::REJOIN_READY;
+	j["frame"] = frame;
+	j["router_user"] = routerUserID;
+	j["run_ahead"] = runAhead;
+	std::string strPostData = j.dump();
+	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendPOSTRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, strPostData.c_str(), [](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
+		{
+			NetworkLog(ELogVerbosity::LOG_RELEASE, "Rejoin: ready report success=%d, status=%d", bSuccess, statusCode);
+		});
+}
+
+void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_RejoinRefuse()
+{
+	std::string strURI = std::format("{}/{}", NGMP_OnlineServicesManager::GetAPIEndpoint("Lobby"), m_CurrentLobby.lobbyID);
+	std::map<std::string, std::string> mapHeaders;
+	nlohmann::json j;
+	j["field"] = ELobbyUpdateField::REJOIN_REFUSE;
+	std::string strPostData = j.dump();
+	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendPOSTRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, strPostData.c_str(), [](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
+		{
+			NetworkLog(ELogVerbosity::LOG_RELEASE, "Rejoin: refuse report success=%d, status=%d", bSuccess, statusCode);
+		});
+}
+
+// Runs on every lobby refresh during a match. Everyone says once that the player is
+// back; the member the service picked uploads its replay of the match so far and reports
+// the frame the match is held at.
+void NGMP_OnlineServices_LobbyInterface::HandleRejoinRequestInMatch()
+{
+	const LobbyEntry& lobby = m_CurrentLobby;
+	NGMP_OnlineServices_AuthInterface* pAuth = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_AuthInterface>();
+	const int64_t myUserID = pAuth == nullptr ? -1 : pAuth->GetUserID();
+	if (lobby.rejoin_generation == 0 || lobby.rejoin_generation == m_rejoinGenerationSeen || lobby.rejoin_user == -1
+		|| lobby.rejoin_user == myUserID || TheNGMPGame == nullptr || TheNetwork == nullptr || TheGameLogic == nullptr)
+	{
+		return;
+	}
+	m_rejoinGenerationSeen = lobby.rejoin_generation;
+
+	Int slot = -1;
+	for (Int i = 0; i < MAX_SLOTS; ++i)
+	{
+		NGMPGameSlot* pSlot = (NGMPGameSlot*)TheNGMPGame->getSlot(i);
+		if (pSlot != nullptr && pSlot->m_userID == lobby.rejoin_user)
+		{
+			slot = i;
+		}
+	}
+	// Still in our game (not voted or timed out) and the game is actually waiting on someone.
+	const bool bCanComeBack = slot != -1 && TheNetwork->isPlayerConnected(slot) && TheNetwork->isStalling();
+	ReleaseLog("REJOIN request generation=%u user=%lld slot=%d uploader=%lld canComeBack=%d frame=%u",
+		lobby.rejoin_generation, (long long)lobby.rejoin_user, slot, (long long)lobby.rejoin_uploader, (int)bCanComeBack, TheGameLogic->getFrame());
+
+	if (bCanComeBack && TheDisconnectMenu != nullptr)
+	{
+		UnicodeString text;
+		text.format(L"%ls is back and catching up. Vote to wait if the timer runs low.", TheNGMPGame->getSlot(slot)->getName().str());
+		TheDisconnectMenu->showChat(text);
+	}
+	if (lobby.rejoin_uploader != myUserID)
+	{
+		return;
+	}
+	if (!bCanComeBack)
+	{
+		UpdateCurrentLobby_RejoinRefuse();
+		return;
+	}
+
+	const uint32_t frame = TheGameLogic->getFrame();
+	const uint32_t runAhead = TheNetwork->getRunAhead();
+	const Int routerSlot = TheNetwork->getPacketRouterSlot();
+	NGMPGameSlot* pRouterSlot = (routerSlot >= 0 && routerSlot < MAX_SLOTS) ? (NGMPGameSlot*)TheNGMPGame->getSlot(routerSlot) : nullptr;
+	const int64_t routerUserID = pRouterSlot == nullptr ? -1 : pRouterSlot->m_userID;
+	AsciiString path = RecorderClass::getReplayDir();
+	path.concat(RecorderClass::getLastReplayFileName());
+	path.concat(RecorderClass::getReplayExtention());
+	UploadResumeReplay(path, [frame, routerUserID, runAhead](bool bUploaded)
+	{
+		NGMP_OnlineServices_LobbyInterface* pLobby = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+		ReleaseLog("REJOIN replay upload %s, held frame=%u", bUploaded ? "done" : "FAILED", frame);
+		// The match must still be sitting on that frame, or the replay is short of it.
+		if (pLobby != nullptr && bUploaded && TheGameLogic != nullptr && TheGameLogic->getFrame() == frame)
+		{
+			pLobby->UpdateCurrentLobby_RejoinReady(frame, routerUserID, runAhead);
+		}
+	});
+}
+
 void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_HasResumeReplay(bool bHasResumeReplay)
 {
 	std::string strURI = std::format("{}/{}", NGMP_OnlineServicesManager::GetAPIEndpoint("Lobby"), m_CurrentLobby.lobbyID);
@@ -1006,6 +1106,11 @@ void NGMP_OnlineServices_LobbyInterface::SearchForLobbies(std::function<void()> 
 				lobbyEntryIter["LobbyID"].get_to(lobbyEntry.lobbyID);
 				lobbyEntryIter["Owner"].get_to(lobbyEntry.owner);
 				lobbyEntryIter["Name"].get_to(lobbyEntry.name);
+				// The only match in progress the service lists for us is one we dropped out of.
+				if (lobbyEntryIter.contains("State") && lobbyEntryIter["State"].is_number_integer() && lobbyEntryIter["State"].get<int>() == 1)
+				{
+					lobbyEntry.name = "[REJOIN] " + lobbyEntry.name;
+				}
 				lobbyEntryIter["MapName"].get_to(lobbyEntry.map_name);
 				lobbyEntryIter["MapPath"].get_to(lobbyEntry.map_path);
 				lobbyEntry.map_path = utf8_to_local(lobbyEntry.map_path); // local file path from here on
@@ -1358,6 +1463,17 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 							lobbyEntryIter["ResumeHandoffFrame"].get_to(lobbyEntry.resume_handoff_frame);
 						if (lobbyEntryIter.contains("ResumeReplayGeneration"))
 							lobbyEntryIter["ResumeReplayGeneration"].get_to(lobbyEntry.resume_replay_generation);
+						if (lobbyEntryIter.contains("RejoinGeneration"))
+						{
+							lobbyEntryIter["RejoinGeneration"].get_to(lobbyEntry.rejoin_generation);
+							lobbyEntryIter["RejoinUser"].get_to(lobbyEntry.rejoin_user);
+							lobbyEntryIter["RejoinUploader"].get_to(lobbyEntry.rejoin_uploader);
+							lobbyEntryIter["RejoinFrame"].get_to(lobbyEntry.rejoin_frame);
+							lobbyEntryIter["RejoinRouterUser"].get_to(lobbyEntry.rejoin_router_user);
+							if (lobbyEntryIter.contains("RejoinRunAhead"))
+								lobbyEntryIter["RejoinRunAhead"].get_to(lobbyEntry.rejoin_run_ahead);
+							lobbyEntryIter["RejoinRefusedGeneration"].get_to(lobbyEntry.rejoin_refused_generation);
+						}
 						lobbyEntryIter["StartingCash"].get_to(lobbyEntry.starting_cash);
 						lobbyEntryIter["IsLimitSuperweapons"].get_to(lobbyEntry.limit_superweapons);
 						if (lobbyEntryIter.contains("IsEnforceRandom"))
@@ -1415,6 +1531,7 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 							// still store the lobby though
 							m_CurrentLobby = lobbyEntry;
 							RecordJoinOrder(lobbyEntry.members);
+							HandleRejoinRequestInMatch();
 						}
 						else
 						{

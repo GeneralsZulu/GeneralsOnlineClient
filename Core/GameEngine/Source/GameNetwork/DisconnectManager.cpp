@@ -54,6 +54,7 @@ DisconnectManager::DisconnectManager()
 	m_packetRouterTimeout = 0;
 	for( i = 0; i < MAX_SLOTS -1; ++i) {
 		m_playerTimeouts[i] = 0;
+		m_playerLastHeard[i] = 0;
 	}
 
 	for( i = 0; i < MAX_SLOTS; ++i) {
@@ -87,6 +88,7 @@ void DisconnectManager::init() {
 	for (i = 0; i < MAX_SLOTS; ++i) {
 		m_disconnectFrames[i] = 0;
 		m_disconnectFramesReceived[i] = FALSE;
+		m_waitVotes[i] = FALSE;
 	}
 
 	m_pingFrame = 0;
@@ -105,6 +107,12 @@ void DisconnectManager::update(ConnectionManager *conMgr) {
 		m_lastFrameTime = timeGetTime();
 	}
 
+	// Rejoining: tell the players holding the match that we are here and working on it.
+	if (TheRecorder && TheRecorder->isRejoinCatchup()) {
+		m_lastFrameTime = timeGetTime();
+		sendKeepAlive(conMgr);
+	}
+
 	// The game logic stalls on the frame we are currently waiting for commands on,
 	// so we have to check for the current logic frame being one higher than
 	// the last one we had the commands ready for.
@@ -121,6 +129,7 @@ void DisconnectManager::update(ConnectionManager *conMgr) {
 	}
 
 	if (m_disconnectState != DISCONNECTSTATETYPE_SCREENOFF) {
+		checkWaitVotes(conMgr);
 		updateDisconnectStatus(conMgr);
 
 		// check to see if we need to send pings
@@ -399,7 +408,66 @@ void DisconnectManager::processDisconnectVote(NetCommandMsg *msg, ConnectionMana
 		return;
 	}
 
+	if (cmdMsg->getSlot() == DISCONNECT_WAIT_SLOT) {
+		applyWaitVote(cmdMsg->getPlayerID(), conMgr);
+		return;
+	}
+	if (cmdMsg->getSlot() >= MAX_SLOTS) {
+		return;
+	}
+
 	applyDisconnectVote(cmdMsg->getSlot(), cmdMsg->getVoteFrame(), cmdMsg->getPlayerID(), conMgr);
+}
+
+void DisconnectManager::applyWaitVote(Int fromSlot, ConnectionManager *conMgr) {
+	if ((fromSlot < 0) || (fromSlot >= MAX_SLOTS) || m_waitVotes[fromSlot]) {
+		return;
+	}
+	m_waitVotes[fromSlot] = TRUE;
+	ReleaseLog("DISCONNECT wait vote from slot=%d frame=%u", fromSlot, TheGameLogic->getFrame());
+	UnicodeString text;
+	text.format(L"%ls voted to wait", conMgr->getPlayerName(fromSlot).str());
+	TheDisconnectMenu->showChat(text);
+}
+
+// Runs every update while the screen is up, not only when a vote arrives: who
+// counts as "still answering" changes as keepalives stop or resume.
+void DisconnectManager::checkWaitVotes(ConnectionManager *conMgr) {
+	const time_t now = timeGetTime();
+	const Int local = conMgr->getLocalPlayerID();
+	Int needed = 0;
+	Int cast = 0;
+	Int i;
+	for (i = 0; i < MAX_SLOTS; ++i) {
+		Bool answering = (i == local);
+		if (!answering && conMgr->isPlayerConnected(i)) {
+			const Int slot = translatedSlotPosition(i, local);
+			answering = (slot != -1) && ((now - m_playerLastHeard[slot]) < DISCONNECT_RESPONSIVE_MS);
+		}
+		if (answering) {
+			++needed;
+			if (m_waitVotes[i]) {
+				++cast;
+			}
+		}
+	}
+	if ((cast == 0) || (cast < needed)) {
+		return;
+	}
+
+	for (i = 0; i < MAX_SLOTS - 1; ++i) {
+		m_playerTimeouts[i] += DISCONNECT_WAIT_EXTEND_MS;
+	}
+	m_packetRouterTimeout += DISCONNECT_WAIT_EXTEND_MS;
+	for (i = 0; i < MAX_SLOTS; ++i) {
+		m_waitVotes[i] = FALSE;
+	}
+	ReleaseLog("DISCONNECT wait granted: %d of %d voted, timeouts +%d s frame=%u", cast, needed,
+		DISCONNECT_WAIT_EXTEND_MS / 1000, TheGameLogic->getFrame());
+	UnicodeString text;
+	text.format(L"Everyone voted to wait: %d more minutes", DISCONNECT_WAIT_EXTEND_MS / 60000);
+	TheDisconnectMenu->showChat(text);
+	TheDisconnectMenu->waitGranted();
 }
 
 void DisconnectManager::processDisconnectFrame(NetCommandMsg *msg, ConnectionManager *conMgr) {
@@ -572,13 +640,20 @@ void DisconnectManager::resetPlayerTimeouts(ConnectionManager *conMgr) {
 	for (Int i = 0; i < MAX_SLOTS; ++i) {
 		Int slot = translatedSlotPosition(i, conMgr->getLocalPlayerID());
 		if (slot != -1) {
-			resetPlayerTimeout(slot);
+			// a fresh screen starts from the plain timeout, without time left over from an earlier wait
+			m_playerTimeouts[slot] = timeGetTime();
+			m_playerLastHeard[slot] = m_playerTimeouts[slot];
 		}
 	}
 }
 
 void DisconnectManager::resetPlayerTimeout(Int slot) {
-	m_playerTimeouts[slot] = timeGetTime();
+	const time_t now = timeGetTime();
+	// A keepalive must not hand back time a wait added.
+	if (m_playerTimeouts[slot] < now) {
+		m_playerTimeouts[slot] = now;
+	}
+	m_playerLastHeard[slot] = now;
 }
 
 void DisconnectManager::resetPacketRouterTimeout() {
@@ -601,6 +676,9 @@ void DisconnectManager::turnOnScreen(ConnectionManager *conMgr) {
 	TheDisconnectMenu->hidePacketRouterTimeout();
 
 	m_haveNotifiedOtherPlayersOfCurrentFrame = FALSE;
+	for (Int w = 0; w < MAX_SLOTS; ++w) {
+		m_waitVotes[w] = FALSE;
+	}
 
 	m_timeOfDisconnectScreenOn = timeGetTime();
 	DEBUG_LOG(("DisconnectManager::turnOnScreen - turned on screen at time %d", m_timeOfDisconnectScreenOn));
@@ -688,6 +766,13 @@ void DisconnectManager::sendVoteCommand(Int slot, ConnectionManager *conMgr) {
 }
 
 void DisconnectManager::voteForPlayerDisconnect(Int slot, ConnectionManager *conMgr) {
+	if (slot == DISCONNECT_WAIT_SLOT) {
+		if (m_waitVotes[conMgr->getLocalPlayerID()] == FALSE) {
+			sendVoteCommand(DISCONNECT_WAIT_SLOT, conMgr);
+			applyWaitVote(conMgr->getLocalPlayerID(), conMgr);
+		}
+		return;
+	}
 	Int transSlot = untranslatedSlotPosition(slot, conMgr->getLocalPlayerID());
 
 	if (m_playerVotes[transSlot][conMgr->getLocalPlayerID()].vote == FALSE) {

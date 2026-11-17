@@ -286,6 +286,9 @@ ConnectionManager::ConnectionManager()
 
 static Int s_preferredRouterSlot = -1;
 void NetSetPreferredRouterSlot(Int slot) { s_preferredRouterSlot = slot; }
+static Int s_initialRunAhead = 0;
+void NetSetInitialRunAhead(Int runAhead) { s_initialRunAhead = runAhead; }
+Int NetTakeInitialRunAhead() { const Int r = s_initialRunAhead; s_initialRunAhead = 0; return r; }
 
 /**
  * Initialize the connection manager and any subsystems.
@@ -572,6 +575,13 @@ Bool ConnectionManager::processNetCommand(NetCommandRef *ref) {
 			(cmdType == NETCOMMANDTYPE_ACKBOTH)) {
 		processAck(msg);
 		return FALSE;
+	}
+
+	// Rebuilding alone for a rejoin: the others are holding on a later frame. Whatever they
+	// send belongs to that frame or to their disconnect screen, and frame data stored now
+	// would be wiped as the ring comes around. It is asked for again once we are live.
+	if (TheRecorder && TheRecorder->isRejoinCatchup()) {
+		return TRUE;
 	}
 
 	// Early validation checks
@@ -2201,6 +2211,29 @@ Real ConnectionManager::getReportedRunAheadLatency() {
 		return m_frameMetrics.getAverageLatency();
 	}
 	return m_frameMetrics.getRunAheadLatency((Real)m_frameGroupingMs / 1000.0f);
+}
+
+// The replay rebuilt the game with every player who started it. Those who have left since
+// are not coming back, and the lockstep must not wait on them.
+void ConnectionManager::onRejoinLive() {
+#if defined(GENERALS_ONLINE)
+	NGMP_OnlineServices_LobbyInterface *pLobby = NGMP_OnlineServicesManager::GetInstance() != nullptr
+		? NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>() : nullptr;
+	if ((TheNGMPGame == nullptr) || (pLobby == nullptr)) {
+		return;
+	}
+	for (Int i = 0; i < MAX_SLOTS; ++i) {
+		if ((i == (Int)m_localSlot) || (m_connections[i] == nullptr)) {
+			continue;
+		}
+		NGMPGameSlot *pSlot = (NGMPGameSlot *)TheNGMPGame->getSlot(i);
+		if ((pSlot == nullptr) || !pLobby->IsLobbyMember(pSlot->m_userID)) {
+			ReleaseLog("REJOIN slot=%d left before we came back, not waiting on it", i);
+			disconnectPlayer(i);
+		}
+	}
+	ReleaseLog("REJOIN live at frame=%u router=%d", TheGameLogic->getFrame(), m_packetRouterSlot);
+#endif
 }
 
 Bool ConnectionManager::isMeshJitterSlackActive() {

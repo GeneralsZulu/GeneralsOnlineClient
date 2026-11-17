@@ -362,6 +362,7 @@ WindowMsgHandledType IdleWorkerSystem( GameWindow *window, UnsignedInt msg, Wind
 // Disconnect Menu --------------------------------------------------------------------------------
 extern void ShowDisconnectWindow();
 extern void HideDisconnectWindow();
+extern void EnableDisconnectWaitButton();
 extern WindowMsgHandledType DisconnectControlSystem( GameWindow *window, UnsignedInt msg, WindowMsgData mData1, WindowMsgData mData2 );
 extern WindowMsgHandledType DisconnectControlInput( GameWindow *window, UnsignedInt msg, WindowMsgData mData1, WindowMsgData mData2 );
 
