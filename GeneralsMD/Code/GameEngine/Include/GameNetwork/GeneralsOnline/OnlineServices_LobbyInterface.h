@@ -96,6 +96,17 @@ struct LobbyEntry
 	uint32_t resume_handoff_frame = 0;
 	uint32_t resume_replay_generation = 0;
 
+	// Rejoin a match in progress (service Lobby.DepartedIngame). rejoin_user is the account
+	// catching up, rejoin_uploader the member asked to upload its replay of the match so far,
+	// rejoin_frame the frame the match is held at (0 until that upload is ready).
+	int64_t rejoin_user = -1;
+	int64_t rejoin_uploader = -1;
+	uint32_t rejoin_generation = 0;
+	uint32_t rejoin_frame = 0;
+	int64_t rejoin_router_user = -1;
+	uint32_t rejoin_run_ahead = 0;
+	uint32_t rejoin_refused_generation = 0;
+
 	bool passworded = false;
 	std::string password;
 
@@ -281,6 +292,10 @@ public:
 	// guests download the source when the arm reaches them and flag themselves as holding it.
 	void UpdateCurrentLobby_ArmResume(uint32_t handoffFrame, int rngSeed, std::function<void(bool bSuccess)> onComplete);
 	void UpdateCurrentLobby_HasResumeReplay(bool bHasResumeReplay);
+	void UpdateCurrentLobby_RejoinReady(uint32_t frame, int64_t routerUserID, uint32_t runAhead);	///< the replay for a rejoining player is uploaded, the match is held at frame
+	void UpdateCurrentLobby_RejoinRefuse();										///< that player was already dropped from the match
+	void HandleRejoinRequestInMatch();											///< a member in the match: answer a rejoin addressed to us
+	uint32_t m_rejoinGenerationSeen = 0;
 	void UploadResumeReplay(const AsciiString& path, std::function<void(bool bSuccess)> onComplete);
 	void DownloadResumeReplay(const AsciiString& path, std::function<void(bool bSuccess)> onComplete);
 

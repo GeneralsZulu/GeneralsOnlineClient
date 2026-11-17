@@ -59,6 +59,7 @@ public:
 	void quitGame();
 	void removePlayer(Int slot, UnicodeString playerName);
 	void voteForPlayer(Int slot);
+	void waitGranted();		///< a unanimous wait vote went through: the Wait button can be pressed again
 	void updateVotes(Int slot, Int votes);
 
 protected:

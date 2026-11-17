@@ -1095,6 +1095,7 @@ extern NGMPGame* TheNGMPGame;
 // Wall-clock cadence of the render passes during
 // resume-from-replay catchup (about 30 fps), see GameEngine::update.
 static constexpr const UnsignedInt CATCHUP_RENDER_INTERVAL_MS = 33;
+static constexpr const UnsignedInt REJOIN_RENDER_INTERVAL_MS = 500;
 
 /// -----------------------------------------------------------------------------------------------
 DECLARE_PERF_TIMER(GameEngine_update)
@@ -1140,7 +1141,9 @@ void GameEngine::update()
 		{
 			static UnsignedInt s_lastCatchupRenderMs = 0;
 			const UnsignedInt nowMs = timeGetTime();
-			if (nowMs - s_lastCatchupRenderMs >= CATCHUP_RENDER_INTERVAL_MS)
+			// A rejoin has a frozen lobby waiting on it: draw just often enough to show progress.
+			const UnsignedInt renderIntervalMs = TheRecorder->isRejoin() ? REJOIN_RENDER_INTERVAL_MS : CATCHUP_RENDER_INTERVAL_MS;
+			if (nowMs - s_lastCatchupRenderMs >= renderIntervalMs)
 			{
 				s_lastCatchupRenderMs = nowMs;
 				catchupSkipRender = FALSE;

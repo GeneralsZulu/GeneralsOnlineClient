@@ -111,6 +111,11 @@ protected:
 	time_t m_playerTimeouts[MAX_SLOTS - 1];
 	time_t m_packetRouterTimeout;
 
+	time_t m_playerLastHeard[MAX_SLOTS - 1];	///< Like m_playerTimeouts, but never pushed out by a wait.
+	Bool m_waitVotes[MAX_SLOTS];				///< Who has voted to wait since the last extension, by real slot.
+	void applyWaitVote(Int fromSlot, ConnectionManager *conMgr);
+	void checkWaitVotes(ConnectionManager *conMgr);
+
 	DisconnectVoteStruct m_playerVotes[MAX_SLOTS][MAX_SLOTS];
 //	Bool m_myVotes[MAX_SLOTS - 1];
 

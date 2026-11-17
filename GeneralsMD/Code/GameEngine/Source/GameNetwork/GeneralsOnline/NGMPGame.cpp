@@ -506,6 +506,22 @@ void NGMPGame::launchGame(void)
 
 	// TODO_NGMP: do we care? we are already connected
 	
+	// Rejoining a match in progress: the slots must be the ones the match began with before
+	// the network builds its connections from them.
+	if (getRejoinLiveFrame() != 0)
+	{
+		UnicodeString rejoinWhy;
+		if (!ResumeFromReplay::applyRejoinSlots(this, rejoinWhy))
+		{
+			setRejoinLiveFrame(0);
+			GSMessageBoxOk(TheGameText->fetch("GUI:Error"), rejoinWhy);
+
+			void PopBackToLobby(void);
+			PopBackToLobby();
+			return;
+		}
+	}
+
 	// Time to initialize TheNetwork for this game.
 	TheNetwork = NetworkInterface::createNetwork();
 	TheNetwork->init();
