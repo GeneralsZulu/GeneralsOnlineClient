@@ -778,7 +778,12 @@ void ConnectionManager::processFrameResendRequest(NetFrameResendRequestCommandMs
 	ReleaseLog("NETRESEND serving slot=%u from frame %u (we are on %u, ticked to %u)",
 		playerID, msg->getFrameToResend(), TheGameLogic->getFrame(), m_lastFrameTicked);
 
-	sendFrameDataToPlayer(playerID, msg->getFrameToResend());
+	// Only the packet router answers with everyone's frames. A guest is asked
+	// for its own data alone (requestMissingFrameData, "frame data inconsistent"),
+	// and the acks for anything else it serves go to the frame's owner instead
+	// of back here: those commands were then resent every 2 s for the rest of
+	// the match, and the stray acks deleted real commands (Connection::processAck).
+	sendFrameDataToPlayer(playerID, msg->getFrameToResend(), (Int)m_localSlot != m_packetRouterSlot);
 }
 
 /**
@@ -3035,7 +3040,7 @@ void ConnectionManager::notifyOthersOfNewFrame(UnsignedInt frame) {
 	msg->detach();
 }
 
-void ConnectionManager::sendFrameDataToPlayer(UnsignedInt playerID, UnsignedInt startingFrame) {
+void ConnectionManager::sendFrameDataToPlayer(UnsignedInt playerID, UnsignedInt startingFrame, Bool ownFramesOnly) {
 	// Serve the current frame too.
 	// The loop stopped one short of it, which is exactly the frame a resend
 	// request asks for: allCommandsReady wipes the inconsistent frame on the
@@ -3066,12 +3071,12 @@ void ConnectionManager::sendFrameDataToPlayer(UnsignedInt playerID, UnsignedInt 
 
 	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("ConnectionManager::sendFrameDataToPlayer - sending frame data to player %d for frames %d..%d", playerID, firstFrame, lastFrame));
 	for (UnsignedInt frame = firstFrame; frame <= lastFrame; ++frame) {
-		sendSingleFrameToPlayer(playerID, frame);
+		sendSingleFrameToPlayer(playerID, frame, ownFramesOnly);
 	}
 	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("ConnectionManager::sendFrameDataToPlayer - done sending commands to player %d", playerID));
 }
 
-void ConnectionManager::sendSingleFrameToPlayer(UnsignedInt playerID, UnsignedInt frame) {
+void ConnectionManager::sendSingleFrameToPlayer(UnsignedInt playerID, UnsignedInt frame, Bool ownFramesOnly) {
 	// Compare signed. getFrame() is
 	// UnsignedInt and FRAMES_TO_KEEP is 65, so for the first 65 frames of a match
 	// the subtraction wrapped to nearly 2^32 and every frame looked "too far in
@@ -3088,6 +3093,9 @@ void ConnectionManager::sendSingleFrameToPlayer(UnsignedInt playerID, UnsignedIn
 	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("ConnectionManager::sendFrameDataToPlayer - sending data for frame %d", frame));
 	for (Int i = 0; i < MAX_SLOTS; ++i) {
 		if ((m_frameData[i] != nullptr) && (i != playerID)) { // no need to send his own commands to him.
+			if (ownFramesOnly && (i != (Int)m_localSlot)) {
+				continue;
+			}
 			// A frame whose command count
 			// we have not been told yet reads back as -1 (FrameData's "unknown"), and
 			// serving that as a count would poison the requester's frame data for good.
