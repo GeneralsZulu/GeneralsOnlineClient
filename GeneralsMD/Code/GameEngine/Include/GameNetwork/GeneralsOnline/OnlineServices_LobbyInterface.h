@@ -434,7 +434,16 @@ public:
 
 	bool IsHost();
 
+	// Members the service dropped while the match runs. The member list itself
+	// is frozen for the match (see UpdateRoomDataCache), so IsLobbyMember never
+	// shows a departure.
+	bool HasLeftDuringMatch(int64_t userID) const
+	{
+		return m_setLeftDuringMatch.contains(userID);
+	}
+
 private:
+	std::set<int64_t> m_setLeftDuringMatch;
 	std::set<int64_t> m_setMembersBeforeUs;
 	bool m_bJoinOrderKnown = false;
 	void ResetJoinOrder();

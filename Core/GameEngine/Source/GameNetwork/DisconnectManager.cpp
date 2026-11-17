@@ -231,6 +231,15 @@ void DisconnectManager::updateDisconnectStatus(ConnectionManager *conMgr) {
 					}
 				}
 
+				// Nobody can come back from this, so do not wait for every player to
+				// click the vote button (2026-11-14: 60 s on this screen for a player
+				// the service had already dropped).
+				if ((m_playerVotes[i][conMgr->getLocalPlayerID()].vote == FALSE) && conMgr->hasPlayerLeftForGood(i)) {
+					ReleaseLog("DISCONNECT auto vote: slot=%d left the service and the link is closed", i);
+					voteForPlayerDisconnect(slot, conMgr);
+				}
+
+				const Bool timedOut = (newTime < 0) && (isPlayerVotedOut(slot, conMgr) == FALSE);
 				if ((newTime < 0) || (isPlayerVotedOut(slot, conMgr) == TRUE)) {
 					newTime = 0;
 					DEBUG_LOG(("DisconnectManager::updateDisconnectStatus - player %d(translated slot %d) has been voted out or timed out", i, slot));
@@ -244,7 +253,7 @@ void DisconnectManager::updateDisconnectStatus(ConnectionManager *conMgr) {
 							s_lastLoggedSlot = i;
 							s_lastLoggedFrame = TheGameLogic->getFrame();
 							ReleaseLog("DISCONNECT slot=%d %s frame=%u votes=%d allOnSameFrame=%d weAreNextRouter=%d",
-								i, (newTime < 0 && isPlayerVotedOut(slot, conMgr) == FALSE) ? "timed out" : "voted out",
+								i, timedOut ? "timed out" : "voted out",
 								TheGameLogic->getFrame(), countVotesForPlayer(i),
 								(int)allOnSameFrame(conMgr), (int)isLocalPlayerNextPacketRouter(conMgr));
 						}

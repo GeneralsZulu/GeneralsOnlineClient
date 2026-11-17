@@ -2203,6 +2203,28 @@ Real ConnectionManager::getReportedRunAheadLatency() {
 	return m_frameMetrics.getRunAheadLatency((Real)m_frameGroupingMs / 1000.0f);
 }
 
+// True once reconnecting to this player is impossible: the service has
+// destroyed their session (it waits out a reconnect grace first) AND our own
+// link to them is closed. Neither alone is enough: on 2026-11-14 a player's
+// websocket dropped mid match while his peer links stayed up and he played on.
+Bool ConnectionManager::hasPlayerLeftForGood(Int slot) {
+#if defined(GENERALS_ONLINE)
+	if ((TheNGMPGame == nullptr) || (NGMP_OnlineServicesManager::GetInstance() == nullptr)) {
+		return FALSE;
+	}
+	NGMPGameSlot *pSlot = (NGMPGameSlot *)TheNGMPGame->getSlot(slot);
+	NGMP_OnlineServices_LobbyInterface *pLobby = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+	if ((pSlot == nullptr) || (pLobby == nullptr) || !pLobby->HasLeftDuringMatch(pSlot->m_userID)) {
+		return FALSE;
+	}
+	NetworkMesh *pMesh = NGMP_OnlineServicesManager::GetNetworkMesh();
+	PlayerConnection *pConn = pMesh != nullptr ? pMesh->GetConnectionForUser(pSlot->m_userID) : nullptr;
+	return (pConn == nullptr) || (pConn->GetState() != EConnectionState::CONNECTED_DIRECT);
+#else
+	return FALSE;
+#endif
+}
+
 Bool ConnectionManager::isMeshJitterSlackActive() {
 #if defined(GENERALS_ONLINE)
 	if (TheNGMPGame == nullptr) {

@@ -1409,6 +1409,20 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 						{
 							NetworkLog(ELogVerbosity::LOG_RELEASE, "Ignoring lobby members update request during gameplay.");
 
+							std::set<int64_t> setStillHere;
+							for (const auto& memberEntryIter : lobbyEntryIter["Members"])
+							{
+								setStillHere.insert(memberEntryIter["UserID"].get<int64_t>());
+							}
+							m_setLeftDuringMatch.clear();
+							for (const LobbyMemberEntry& oldMember : m_CurrentLobby.members)
+							{
+								if (oldMember.IsHuman() && !setStillHere.contains(oldMember.user_id))
+								{
+									m_setLeftDuringMatch.insert(oldMember.user_id);
+								}
+							}
+
 							// retain the old members list
 							lobbyEntry.members = m_CurrentLobby.members;
 
@@ -1418,6 +1432,7 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 						}
 						else
 						{
+							m_setLeftDuringMatch.clear();
 							bool bFoundSelfInOld = false;
 							bool bFoundSelfInNew = false;
 							NGMP_OnlineServices_AuthInterface* pAuthInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_AuthInterface>();
