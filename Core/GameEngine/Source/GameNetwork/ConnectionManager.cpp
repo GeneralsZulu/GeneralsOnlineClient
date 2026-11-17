@@ -2215,12 +2215,48 @@ Real ConnectionManager::getReportedRunAheadLatency() {
 
 // The replay rebuilt the game with every player who started it. Those who have left since
 // are not coming back, and the lockstep must not wait on them.
-void ConnectionManager::onRejoinLive() {
+void NetRequestMismatchResync(Int goodSlot) {
 #if defined(GENERALS_ONLINE)
 	NGMP_OnlineServices_LobbyInterface *pLobby = NGMP_OnlineServicesManager::GetInstance() != nullptr
 		? NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>() : nullptr;
 	if ((TheNGMPGame == nullptr) || (pLobby == nullptr)) {
 		return;
+	}
+	NGMPGameSlot *pSlot = ((goodSlot >= 0) && (goodSlot < MAX_SLOTS)) ? (NGMPGameSlot *)TheNGMPGame->getSlot(goodSlot) : nullptr;
+	pLobby->RequestResync(pSlot != nullptr ? pSlot->m_userID : -1);
+#endif
+}
+
+static Bool s_rejoinExpectedCRCKnown = FALSE;
+static UnsignedInt s_rejoinExpectedCRC = 0;
+void NetSetRejoinExpectedCRC(Bool known, UnsignedInt crc) { s_rejoinExpectedCRCKnown = known; s_rejoinExpectedCRC = crc; }
+Bool NetTakeRejoinExpectedCRC(UnsignedInt &crc) {
+	const Bool known = s_rejoinExpectedCRCKnown;
+	crc = s_rejoinExpectedCRC;
+	s_rejoinExpectedCRCKnown = FALSE;
+	return known;
+}
+
+// The player is about to rebuild their game from a replay that ends on the frame before
+// this one. Whatever they had already sent for the frames still to run is not in that replay,
+// so nobody may run it: every player forgets it, and the rebuilt client supplies those frames
+// again (empty) through the usual resend request.
+void ConnectionManager::dropFrameDataFrom(Int slot, UnsignedInt frame) {
+	if ((slot < 0) || (slot >= MAX_SLOTS) || (slot == (Int)m_localSlot) || (m_frameData[slot] == nullptr)) {
+		return;
+	}
+	for (UnsignedInt f = frame; f <= frame + MAX_FRAMES_AHEAD; ++f) {
+		m_frameData[slot]->resetFrame(f, FALSE);
+	}
+	ReleaseLog("REJOIN dropped slot=%d frame data from frame=%u", slot, frame);
+}
+
+Bool ConnectionManager::onRejoinLive() {
+#if defined(GENERALS_ONLINE)
+	NGMP_OnlineServices_LobbyInterface *pLobby = NGMP_OnlineServicesManager::GetInstance() != nullptr
+		? NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>() : nullptr;
+	if ((TheNGMPGame == nullptr) || (pLobby == nullptr)) {
+		return TRUE;
 	}
 	for (Int i = 0; i < MAX_SLOTS; ++i) {
 		if ((i == (Int)m_localSlot) || (m_connections[i] == nullptr)) {
@@ -2233,6 +2269,20 @@ void ConnectionManager::onRejoinLive() {
 		}
 	}
 	ReleaseLog("REJOIN live at frame=%u router=%d", TheGameLogic->getFrame(), m_packetRouterSlot);
+
+	// The players holding the match sent the CRC of their game on this frame. Ours must be
+	// the same before anyone plays on.
+	UnsignedInt expectedCRC = 0;
+	Bool matches = TRUE;
+	if (NetTakeRejoinExpectedCRC(expectedCRC)) {
+		const UnsignedInt myCRC = TheGameLogic->getCRC(CRC_RECALC);
+		matches = (myCRC == expectedCRC);
+		ReleaseLog("REJOIN state check frame=%u mine=%8.8X theirs=%8.8X %s", TheGameLogic->getFrame(), myCRC, expectedCRC, matches ? "MATCH" : "MISMATCH");
+	}
+	pLobby->UpdateCurrentLobby_RejoinDone(matches);
+	return matches;
+#else
+	return TRUE;
 #endif
 }
 

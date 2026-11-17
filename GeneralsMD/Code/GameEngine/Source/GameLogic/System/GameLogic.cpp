@@ -2999,6 +2999,44 @@ void GameLogic::processCommandList(CommandList* list)
 				}
 			}
 
+			// When every CRC arrived and the majority is clear, hold the match so the players who
+			// diverged can rebuild their game from the replay instead of ending it for everyone.
+			UnsignedInt mismatchSlotMask = 0;
+			Int goodSlot = -1;
+			Bool localMismatched = FALSE;
+			const Int localPlayerIndex = ThePlayerList->getLocalPlayer() ? ThePlayerList->getLocalPlayer()->getPlayerIndex() : -1;
+			UnicodeString strWho;
+			if (m_cachedCRCs.size() >= (size_t)numPlayers)
+			{
+				for (std::map<Int, UnsignedInt>::const_iterator crcIt = m_cachedCRCs.begin(); crcIt != m_cachedCRCs.end(); ++crcIt)
+				{
+					const Int slotIndex = ThePlayerList->getSlotIndex(crcIt->first);
+					if (slotIndex < 0 || slotIndex >= MAX_SLOTS)
+						continue;
+					if (crcIt->second != biggestCRC)
+					{
+						mismatchSlotMask |= (1u << slotIndex);
+						if (crcIt->first == localPlayerIndex)
+							localMismatched = TRUE;
+						Player* badPlayer = ThePlayerList->getNthPlayer(crcIt->first);
+						if (!strWho.isEmpty())
+							strWho.concat(L", ");
+						strWho.concat(badPlayer ? badPlayer->getPlayerDisplayName() : UnicodeString(L"?"));
+					}
+					else if (goodSlot == -1)
+					{
+						goodSlot = slotIndex;
+					}
+				}
+			}
+			if (mismatchSlotMask != 0 && goodSlot != -1)
+			{
+				UnicodeString strHold;
+				strHold.format(L"Out of sync: %ls (game frame %d)\n", strWho.str(), TheGameLogic->getFrame());
+				TheNetwork->beginMismatchHold(mismatchSlotMask, goodSlot, localMismatched, strHold);
+				return;
+			}
+
 			// TODO_NGMP: Handle missing CRCs, although that doesnt seem common
 
 			TheNetwork->setSawCRCMismatch(strMismatchDetails);
@@ -4025,6 +4063,17 @@ extern __int64 Total_Load_3D_Assets;
 // ------------------------------------------------------------------------------------------------
 void GameLogic::update()
 {
+	// Test hook for the mismatch resync: ZULU_DEBUG_DIVERGE_FRAME=<frame> pulls one extra value
+	// from the logic random stream on that frame, so this client diverges from the others.
+	// Not during a rejoin catchup, or the rebuilt game would diverge again.
+	static const char *s_divergeFrameEnv = getenv("ZULU_DEBUG_DIVERGE_FRAME");
+	if (s_divergeFrameEnv != nullptr && TheNetwork != nullptr && m_frame == (UnsignedInt)atoi(s_divergeFrameEnv)
+		&& !(TheRecorder && TheRecorder->isRejoin()))
+	{
+		GameLogicRandomValue(0, 100);
+		ReleaseLog("DEBUG diverging on purpose at frame %u", m_frame);
+	}
+
 	USE_PERF_TIMER(GameLogic_update)
 	PROFILER_SECTION_COLOR(0x4CAF50);
 

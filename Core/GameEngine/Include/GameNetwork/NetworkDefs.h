@@ -124,6 +124,11 @@ static constexpr const Int DISCONNECT_WAIT_SLOT = MAX_SLOTS;
 static constexpr const Int DISCONNECT_WAIT_EXTEND_MS = 120000;
 static constexpr const Int DISCONNECT_RESPONSIVE_MS = 5000;	// keepalives arrive every 500 ms
 
+// A CRC mismatch holds the match instead of ending it, so the player who diverged can rebuild
+// their game from the replay (see Network::beginMismatchHold). Without a resync under way the
+// hold gives up after this long and the match ends the way a mismatch always ended it.
+static constexpr const Int MISMATCH_HOLD_MS = 120000;
+
 #pragma pack(push, 1)
 struct TransportMessageHeader
 {

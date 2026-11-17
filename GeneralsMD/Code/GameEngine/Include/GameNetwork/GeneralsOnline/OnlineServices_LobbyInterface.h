@@ -106,6 +106,9 @@ struct LobbyEntry
 	int64_t rejoin_router_user = -1;
 	uint32_t rejoin_run_ahead = 0;
 	uint32_t rejoin_refused_generation = 0;
+	int64_t rejoin_crc = -1;				// the uploader's game state CRC on rejoin_frame, -1 unknown
+	uint32_t rejoin_done_generation = 0;	// the returning client finished catching up...
+	bool rejoin_done_ok = false;			// ...and its state matched
 
 	bool passworded = false;
 	std::string password;
@@ -292,7 +295,13 @@ public:
 	// guests download the source when the arm reaches them and flag themselves as holding it.
 	void UpdateCurrentLobby_ArmResume(uint32_t handoffFrame, int rngSeed, std::function<void(bool bSuccess)> onComplete);
 	void UpdateCurrentLobby_HasResumeReplay(bool bHasResumeReplay);
-	void UpdateCurrentLobby_RejoinReady(uint32_t frame, int64_t routerUserID, uint32_t runAhead);	///< the replay for a rejoining player is uploaded, the match is held at frame
+	void UpdateCurrentLobby_RejoinReady(uint32_t frame, int64_t routerUserID, uint32_t runAhead, uint32_t crc);
+	void UpdateCurrentLobby_RejoinDone(bool bOk);								///< we caught up, and whether our state matched the others'
+	void RequestResync(int64_t uploaderUserID);									///< our game diverged: ask to rebuild it from that player's replay
+	void HandleOwnResyncInMatch();												///< the replay we asked for is ready: fetch it and restart the game
+	uint32_t m_resyncRequestedGeneration = 0;									///< rejoin_generation at the time we asked, 0 = not asked
+	uint32_t m_resyncStartedGeneration = 0;
+	uint32_t m_rejoinDoneGenerationSeen = 0;	///< the replay for a rejoining player is uploaded, the match is held at frame
 	void UpdateCurrentLobby_RejoinRefuse();										///< that player was already dropped from the match
 	void HandleRejoinRequestInMatch();											///< a member in the match: answer a rejoin addressed to us
 	uint32_t m_rejoinGenerationSeen = 0;

@@ -2315,8 +2315,9 @@ static Bool wolCheckRejoin(NGMP_OnlineServices_LobbyInterface *pLobbyInterface, 
 	const UnsignedInt liveFrame = lobby.rejoin_frame;
 	const int64_t routerUserID = lobby.rejoin_router_user;
 	const UnsignedInt runAhead = lobby.rejoin_run_ahead;
+	const int64_t expectedCRC = lobby.rejoin_crc;
 	wolLocalSystemChat(UnicodeString(L"Rejoin: downloading the replay of the match so far..."));
-	pLobbyInterface->DownloadResumeReplay(ResumeFromReplay::getSourceFilePath(), [liveFrame, routerUserID, runAhead](bool bDownloaded)
+	pLobbyInterface->DownloadResumeReplay(ResumeFromReplay::getSourceFilePath(), [liveFrame, routerUserID, runAhead, expectedCRC](bool bDownloaded)
 	{
 		s_wolRejoinDownloadInProgress = FALSE;
 		NGMP_OnlineServices_LobbyInterface* pLobby = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
@@ -2332,6 +2333,7 @@ static Bool wolCheckRejoin(NGMP_OnlineServices_LobbyInterface *pLobbyInterface, 
 		lobbyGame->setRejoinLiveFrame(liveFrame);
 		pLobby->m_routerUserID = routerUserID;
 		NetSetInitialRunAhead((Int)runAhead);	// CRCs and commands only line up when every player uses the same run-ahead
+		NetSetRejoinExpectedCRC(expectedCRC >= 0, (UnsignedInt)expectedCRC);
 		GameSpyCloseOverlay(GSOVERLAY_BUDDY);
 		GameSpyCloseOverlay(GSOVERLAY_PLAYERINFO);
 		TheNGMPGame->startGame(0);

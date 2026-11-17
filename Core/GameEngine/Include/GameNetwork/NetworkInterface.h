@@ -53,6 +53,10 @@ void NetSetPreferredRouterSlot(Int slot);
 /// rejoining a match in progress must start with the run-ahead the match has reached.
 void NetSetInitialRunAhead(Int runAhead);
 Int NetTakeInitialRunAhead();
+/// Game state CRC the players holding the match have on the frame a rejoining client goes live
+/// on, used once. The client compares its own after catching up.
+void NetSetRejoinExpectedCRC(Bool known, UnsignedInt crc);
+Bool NetTakeRejoinExpectedCRC(UnsignedInt &crc);
 
 
 
@@ -95,6 +99,14 @@ public:
 	virtual void voteForPlayerDisconnect(Int slot) = 0;								///< register a vote towards this player's disconnect.
 	virtual Bool isPacketRouter() = 0;
 	virtual Int getPacketRouterSlot() = 0;		///< slot of the current packet router, -1 without a game
+
+	// CRC mismatch hold. slotMask = the players whose CRC differed from the majority,
+	// goodSlot = a player in the majority (the replay to rebuild from comes from there).
+	virtual void beginMismatchHold(UnsignedInt slotMask, Int goodSlot, Bool localMismatched, UnicodeString &details) = 0;
+	virtual void endMismatchHold(Bool resynced) = 0;				///< the diverged player caught up (or failed to): play on
+	virtual Bool isMismatchHoldActive() = 0;
+	virtual Bool isLocalMismatchHeld() = 0;									///< the match is held because OUR game diverged
+	virtual void prepareForRejoin(Int slot) = 0;						///< a player is about to rebuild their game: forget what they sent for the frames not yet run
 
 	// Bandwidth metrics
 	virtual Real getIncomingBytesPerSecond() = 0;
