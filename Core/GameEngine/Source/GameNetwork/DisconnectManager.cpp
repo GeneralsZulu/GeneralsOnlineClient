@@ -107,6 +107,13 @@ void DisconnectManager::update(ConnectionManager *conMgr) {
 		m_lastFrameTime = timeGetTime();
 	}
 
+	// Our game diverged and the match is held for us. The resync question is on screen; the
+	// disconnect screen would only cover it. Keep telling the others we are here.
+	if (TheNetwork && TheNetwork->isLocalMismatchHeld()) {
+		m_lastFrameTime = timeGetTime();
+		sendKeepAlive(conMgr);
+	}
+
 	// Rejoining: tell the players holding the match that we are here and working on it.
 	if (TheRecorder && TheRecorder->isRejoinCatchup()) {
 		m_lastFrameTime = timeGetTime();

@@ -7,6 +7,7 @@
 #include "GameClient/MapUtil.h"
 #include "GameLogic/GameLogic.h"
 #include "Common/Recorder.h"
+#include "GameNetwork/ResumeFromReplay.h"
 #include "GameClient/DisconnectMenu.h"
 #include "GameNetwork/NetworkInterface.h"
 #include "GameNetwork/GeneralsOnline/OnlineServices_Auth.h"
@@ -88,7 +89,9 @@ enum class ELobbyUpdateField
 	HOST_ACTION_ALIGN_SLOTS = 23,           // Resume-from-replay: the whole slot table at once
 	LOBBY_FFA_MODE = 24,                    // Hide who is who from the players (see GameInfo::isSlotAnonymous)
 	REJOIN_READY = 25,                      // Rejoin a match in progress: replay uploaded, match held at this frame
-	REJOIN_REFUSE = 26                      // Rejoin a match in progress: that player was already dropped
+	REJOIN_REFUSE = 26,                     // Rejoin a match in progress: that player was already dropped
+	REJOIN_REQUEST = 27,                    // Mismatch resync: rebuild my game from that player's replay
+	REJOIN_DONE = 28                        // Caught up, and whether my state matched
 };
 
 std::string Base64Encode(const std::vector<uint8_t>& data);
@@ -781,7 +784,75 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_ArmResume(uint32_t h
 
 // Whether this member holds a usable copy of the resume source;
 // the host's start is refused until every human does (the way has_map gates the map).
-void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_RejoinReady(uint32_t frame, int64_t routerUserID, uint32_t runAhead)
+static void SendRejoinFieldUpdate(int64_t lobbyID, nlohmann::json j, const char* what)
+{
+	std::string strURI = std::format("{}/{}", NGMP_OnlineServicesManager::GetAPIEndpoint("Lobby"), lobbyID);
+	std::map<std::string, std::string> mapHeaders;
+	std::string strPostData = j.dump();
+	std::string strWhat = what;
+	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendPOSTRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, strPostData.c_str(), [strWhat](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
+		{
+			NetworkLog(ELogVerbosity::LOG_RELEASE, "Rejoin: %s success=%d, status=%d", strWhat.c_str(), bSuccess, statusCode);
+		});
+}
+
+void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_RejoinDone(bool bOk)
+{
+	nlohmann::json j;
+	j["field"] = ELobbyUpdateField::REJOIN_DONE;
+	j["ok"] = bOk;
+	SendRejoinFieldUpdate(m_CurrentLobby.lobbyID, j, "done report");
+}
+
+void NGMP_OnlineServices_LobbyInterface::RequestResync(int64_t uploaderUserID)
+{
+	// The service answers with the next generation; anything from that one on is ours.
+	m_resyncRequestedGeneration = m_CurrentLobby.rejoin_generation + 1;
+	ReleaseLog("MISMATCH resync requested, replay from user=%lld", (long long)uploaderUserID);
+	nlohmann::json j;
+	j["field"] = ELobbyUpdateField::REJOIN_REQUEST;
+	j["uploader"] = uploaderUserID;
+	SendRejoinFieldUpdate(m_CurrentLobby.lobbyID, j, "resync request");
+}
+
+// Our game diverged and we asked to rebuild it. Once the replay is up, fetch it and start
+// the game again in place: it is the same solo catchup a returning player runs, with the
+// lobby and the connections to the other players kept as they are.
+void NGMP_OnlineServices_LobbyInterface::HandleOwnResyncInMatch()
+{
+	const LobbyEntry& lobby = m_CurrentLobby;
+	if (m_resyncRequestedGeneration == 0 || lobby.rejoin_generation < m_resyncRequestedGeneration
+		|| lobby.rejoin_frame == 0 || m_resyncStartedGeneration == lobby.rejoin_generation)
+	{
+		return;
+	}
+	m_resyncStartedGeneration = lobby.rejoin_generation;
+	m_resyncRequestedGeneration = 0;
+
+	const uint32_t liveFrame = lobby.rejoin_frame;
+	const int64_t routerUserID = lobby.rejoin_router_user;
+	const uint32_t runAhead = lobby.rejoin_run_ahead;
+	const int64_t crc = lobby.rejoin_crc;
+	ReleaseLog("MISMATCH resync: replay ready, held frame=%u (we are on %u)", liveFrame, TheGameLogic ? TheGameLogic->getFrame() : 0);
+	DownloadResumeReplay(ResumeFromReplay::getSourceFilePath(), [liveFrame, routerUserID, runAhead, crc](bool bDownloaded)
+	{
+		NGMP_OnlineServices_LobbyInterface* pLobby = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+		NGMPGame *lobbyGame = pLobby == nullptr ? nullptr : pLobby->GetCurrentGame();
+		if (pLobby == nullptr || lobbyGame == nullptr || TheNGMPGame == nullptr || !bDownloaded)
+		{
+			ReleaseLog("MISMATCH resync: replay download failed");
+			return;
+		}
+		ReleaseLog("MISMATCH resync starting: live frame=%u router user=%lld run-ahead=%u", liveFrame, (long long)routerUserID, runAhead);
+		lobbyGame->setRejoinLiveFrame(liveFrame);
+		pLobby->m_routerUserID = routerUserID;
+		NetSetInitialRunAhead((Int)runAhead);
+		NetSetRejoinExpectedCRC(crc >= 0, (UnsignedInt)crc);
+		TheNGMPGame->startGame(0);
+	});
+}
+
+void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_RejoinReady(uint32_t frame, int64_t routerUserID, uint32_t runAhead, uint32_t crc)
 {
 	std::string strURI = std::format("{}/{}", NGMP_OnlineServicesManager::GetAPIEndpoint("Lobby"), m_CurrentLobby.lobbyID);
 	std::map<std::string, std::string> mapHeaders;
@@ -790,6 +861,7 @@ void NGMP_OnlineServices_LobbyInterface::UpdateCurrentLobby_RejoinReady(uint32_t
 	j["frame"] = frame;
 	j["router_user"] = routerUserID;
 	j["run_ahead"] = runAhead;
+	j["crc"] = crc;
 	std::string strPostData = j.dump();
 	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendPOSTRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, strPostData.c_str(), [](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
 		{
@@ -818,8 +890,24 @@ void NGMP_OnlineServices_LobbyInterface::HandleRejoinRequestInMatch()
 	const LobbyEntry& lobby = m_CurrentLobby;
 	NGMP_OnlineServices_AuthInterface* pAuth = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_AuthInterface>();
 	const int64_t myUserID = pAuth == nullptr ? -1 : pAuth->GetUserID();
+	// The returning or resyncing client finished: a match held for a mismatch plays on.
+	if (lobby.rejoin_generation != 0 && lobby.rejoin_done_generation == lobby.rejoin_generation
+		&& m_rejoinDoneGenerationSeen != lobby.rejoin_generation && TheNetwork != nullptr)
+	{
+		m_rejoinDoneGenerationSeen = lobby.rejoin_generation;
+		ReleaseLog("REJOIN done generation=%u ok=%d", lobby.rejoin_generation, (int)lobby.rejoin_done_ok);
+		if (lobby.rejoin_done_ok)
+		{
+			TheNetwork->endMismatchHold(TRUE);
+		}
+	}
+	if (lobby.rejoin_user == myUserID)
+	{
+		HandleOwnResyncInMatch();
+		return;
+	}
 	if (lobby.rejoin_generation == 0 || lobby.rejoin_generation == m_rejoinGenerationSeen || lobby.rejoin_user == -1
-		|| lobby.rejoin_user == myUserID || TheNGMPGame == nullptr || TheNetwork == nullptr || TheGameLogic == nullptr)
+		|| TheNGMPGame == nullptr || TheNetwork == nullptr || TheGameLogic == nullptr)
 	{
 		return;
 	}
@@ -839,6 +927,10 @@ void NGMP_OnlineServices_LobbyInterface::HandleRejoinRequestInMatch()
 	ReleaseLog("REJOIN request generation=%u user=%lld slot=%d uploader=%lld canComeBack=%d frame=%u",
 		lobby.rejoin_generation, (long long)lobby.rejoin_user, slot, (long long)lobby.rejoin_uploader, (int)bCanComeBack, TheGameLogic->getFrame());
 
+	if (bCanComeBack)
+	{
+		TheNetwork->prepareForRejoin(slot);
+	}
 	if (bCanComeBack && TheDisconnectMenu != nullptr)
 	{
 		UnicodeString text;
@@ -857,20 +949,21 @@ void NGMP_OnlineServices_LobbyInterface::HandleRejoinRequestInMatch()
 
 	const uint32_t frame = TheGameLogic->getFrame();
 	const uint32_t runAhead = TheNetwork->getRunAhead();
+	const uint32_t crc = TheGameLogic->getCRC(CRC_RECALC);
 	const Int routerSlot = TheNetwork->getPacketRouterSlot();
 	NGMPGameSlot* pRouterSlot = (routerSlot >= 0 && routerSlot < MAX_SLOTS) ? (NGMPGameSlot*)TheNGMPGame->getSlot(routerSlot) : nullptr;
 	const int64_t routerUserID = pRouterSlot == nullptr ? -1 : pRouterSlot->m_userID;
 	AsciiString path = RecorderClass::getReplayDir();
 	path.concat(RecorderClass::getLastReplayFileName());
 	path.concat(RecorderClass::getReplayExtention());
-	UploadResumeReplay(path, [frame, routerUserID, runAhead](bool bUploaded)
+	UploadResumeReplay(path, [frame, routerUserID, runAhead, crc](bool bUploaded)
 	{
 		NGMP_OnlineServices_LobbyInterface* pLobby = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
 		ReleaseLog("REJOIN replay upload %s, held frame=%u", bUploaded ? "done" : "FAILED", frame);
 		// The match must still be sitting on that frame, or the replay is short of it.
 		if (pLobby != nullptr && bUploaded && TheGameLogic != nullptr && TheGameLogic->getFrame() == frame)
 		{
-			pLobby->UpdateCurrentLobby_RejoinReady(frame, routerUserID, runAhead);
+			pLobby->UpdateCurrentLobby_RejoinReady(frame, routerUserID, runAhead, crc);
 		}
 	});
 }
@@ -1472,6 +1565,12 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 							lobbyEntryIter["RejoinRouterUser"].get_to(lobbyEntry.rejoin_router_user);
 							if (lobbyEntryIter.contains("RejoinRunAhead"))
 								lobbyEntryIter["RejoinRunAhead"].get_to(lobbyEntry.rejoin_run_ahead);
+							if (lobbyEntryIter.contains("RejoinCRC"))
+							{
+								lobbyEntryIter["RejoinCRC"].get_to(lobbyEntry.rejoin_crc);
+								lobbyEntryIter["RejoinDoneGeneration"].get_to(lobbyEntry.rejoin_done_generation);
+								lobbyEntryIter["RejoinDoneOk"].get_to(lobbyEntry.rejoin_done_ok);
+							}
 							lobbyEntryIter["RejoinRefusedGeneration"].get_to(lobbyEntry.rejoin_refused_generation);
 						}
 						lobbyEntryIter["StartingCash"].get_to(lobbyEntry.starting_cash);
@@ -1920,6 +2019,12 @@ void NGMP_OnlineServices_LobbyInterface::LeaveCurrentLobby()
 	ReleaseLog("GO lobby: leaving lobby %lld", (long long)m_CurrentLobby.lobbyID);
 	m_bCannotConnectToLobbyPending = false;
 	ResetJoinOrder();
+	// The service numbers rejoins per lobby, from 1. What we remember of them must not carry
+	// into the next lobby, or its first rejoin looks like one already handled.
+	m_rejoinGenerationSeen = 0;
+	m_rejoinDoneGenerationSeen = 0;
+	m_resyncRequestedGeneration = 0;
+	m_resyncStartedGeneration = 0;
 
 	// invalidate any join/create still in flight
 	++m_LobbyJoinGeneration;
@@ -1975,6 +2080,12 @@ void NGMP_OnlineServices_LobbyInterface::ResetForMatchmakingRequeue()
 {
 	m_bCannotConnectToLobbyPending = false;
 	ResetJoinOrder();
+	// The service numbers rejoins per lobby, from 1. What we remember of them must not carry
+	// into the next lobby, or its first rejoin looks like one already handled.
+	m_rejoinGenerationSeen = 0;
+	m_rejoinDoneGenerationSeen = 0;
+	m_resyncRequestedGeneration = 0;
+	m_resyncStartedGeneration = 0;
 	// The service has already removed us from the failed temporary lobby. Tear down only
 	// local state here; sending the normal DELETE would cancel the server-side requeue.
 	++m_LobbyJoinGeneration;

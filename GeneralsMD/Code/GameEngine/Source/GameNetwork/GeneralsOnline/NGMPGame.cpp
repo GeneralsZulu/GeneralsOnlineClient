@@ -506,6 +506,16 @@ void NGMPGame::launchGame(void)
 
 	// TODO_NGMP: do we care? we are already connected
 	
+	// A mismatch resync restarts the match from inside it. Tear the running game down first:
+	// clearing it later would delete the network created below (GameEngine::reset), and the
+	// score screen it normally shows leaves the lobby the match lives in.
+	if (getRejoinLiveFrame() != 0 && TheGameLogic->isInGame())
+	{
+		const UnsignedInt rejoinLiveFrame = getRejoinLiveFrame();
+		TheGameLogic->clearGameData(FALSE);
+		setRejoinLiveFrame(rejoinLiveFrame);
+	}
+
 	// Rejoining a match in progress: the slots must be the ones the match began with before
 	// the network builds its connections from them.
 	if (getRejoinLiveFrame() != 0)

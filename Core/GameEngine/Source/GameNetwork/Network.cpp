@@ -51,6 +51,7 @@
 #include "GameLogic/ScriptEngine.h"
 #include "Common/Recorder.h"
 #include "GameClient/MessageBox.h"
+#include "GameClient/InGameUI.h"
 #include "Common/ReleaseLog.h"
 #include "../NGMP_include.h"
 #if defined(GENERALS_ONLINE)
@@ -144,6 +145,12 @@ public:
 	virtual void voteForPlayerDisconnect(Int slot) override;
 	virtual Bool isPacketRouter() override;
 	virtual Int getPacketRouterSlot() override { return m_conMgr ? (Int)m_conMgr->getPacketRouterSlot() : -1; }
+	virtual void beginMismatchHold(UnsignedInt slotMask, Int goodSlot, Bool localMismatched, UnicodeString &details) override;
+	virtual void endMismatchHold(Bool resynced) override;
+	virtual Bool isMismatchHoldActive() override { return m_mismatchHoldMask != 0; }
+	virtual Bool isLocalMismatchHeld() override { return m_mismatchHoldMask != 0 && m_mismatchLocal; }
+	virtual void prepareForRejoin(Int slot) override;
+	Bool updateMismatchHold();
 
 	// Bandwidth metrics
 	virtual Real getIncomingBytesPerSecond() override;
@@ -234,6 +241,9 @@ protected:
 	// ConnectionManager::emitNetStats.
 	UnsignedInt m_lastUpdateMs;				///< Wall clock of the previous in-game update() (0 = none); a big gap is a hitch.
 	UnsignedInt m_stallStartMs;				///< When the current wait for frame data became late (0 = not stalling).
+	UnsignedInt m_mismatchHoldMask;		///< Slots that diverged; non zero while the match is held for them.
+	UnsignedInt m_mismatchHoldStartMs;	///< When the hold began, or when a resync last showed signs of life.
+	Bool m_mismatchLocal;							///< The local player is one of those who diverged.
 	Bool m_wasRejoinSolo;							///< Last update ran inside a rejoin's solo catchup (TheRecorder->isRejoinCatchup).
 	UnsignedInt m_stallMask;					///< Slots we were waiting on when the stall began.
 	UnsignedInt m_lastStatsMs;				///< Last NETSTAT emission.
@@ -305,6 +315,9 @@ Network::Network()
 	m_lastUpdateMs = 0;
 	m_stallStartMs = 0;
 	m_wasRejoinSolo = FALSE;
+	m_mismatchHoldMask = 0;
+	m_mismatchHoldStartMs = 0;
+	m_mismatchLocal = FALSE;
 	m_stallMask = 0;
 	m_lastStatsMs = 0;
 	m_lastRunAheadLogMs = 0;
@@ -382,6 +395,9 @@ void Network::init()
 	m_lastUpdateMs = 0;
 	m_stallStartMs = 0;
 	m_wasRejoinSolo = FALSE;
+	m_mismatchHoldMask = 0;
+	m_mismatchHoldStartMs = 0;
+	m_mismatchLocal = FALSE;
 	m_stallMask = 0;
 	m_lastStatsMs = 0;
 	m_lastRunAheadLogMs = 0;
@@ -423,6 +439,104 @@ void Network::SeedLatencyData(int highestLatency)
 #endif
 
 #if defined(GENERALS_ONLINE)
+static Int s_mismatchGoodSlot = -1;
+void NetRequestMismatchResync(Int goodSlot);	// ConnectionManager.cpp: asks the service, see RequestResync
+
+static void mismatchResyncYes()
+{
+	NetRequestMismatchResync(s_mismatchGoodSlot);
+}
+
+static void mismatchResyncNo()
+{
+}
+
+void Network::beginMismatchHold(UnsignedInt slotMask, Int goodSlot, Bool localMismatched, UnicodeString &details)
+{
+	m_sawCRCMismatch = TRUE;	// no more CRC comparisons until this one is settled
+	m_mismatchHoldMask = slotMask;
+	m_mismatchHoldStartMs = timeGetTime();
+	if (m_mismatchHoldStartMs == 0) {
+		m_mismatchHoldStartMs = 1;
+	}
+	s_mismatchGoodSlot = goodSlot;
+	m_mismatchLocal = localMismatched;
+	ReleaseLog("MISMATCH hold begins frame=%u slots=0x%02x goodSlot=%d local=%d", TheGameLogic->getFrame(), slotMask, goodSlot, (int)localMismatched);
+
+	TheScriptActions->closeWindows( TRUE );
+	if (m_messageWindow) {
+		TheWindowManager->winDestroy(m_messageWindow);
+		m_messageWindow = NULL;
+	}
+	if (localMismatched) {
+		details.concat(L"\nYour game is out of sync with the other players and the match is paused.\n\nResync now? Your game restarts and replays the match to this point while the others wait.");
+		m_messageWindow = MessageBoxYesNo(UnicodeString(L"Mismatch: Resync?"), details, mismatchResyncYes, mismatchResyncNo);
+	} else {
+		details.concat(L"\nThe match is paused while they resync. If they do not, vote them out on the disconnect screen to play on without them.");
+		m_messageWindow = MessageBoxOk(UnicodeString(L"Mismatch Detected"), details, nullptr);
+	}
+	TheRecorder->logCRCMismatch();
+}
+
+void Network::endMismatchHold(Bool resynced)
+{
+	if (m_mismatchHoldMask == 0) {
+		return;
+	}
+	ReleaseLog("MISMATCH hold ends frame=%u resynced=%d after %ums", TheGameLogic->getFrame(), (int)resynced, timeGetTime() - m_mismatchHoldStartMs);
+	m_mismatchHoldMask = 0;
+	m_mismatchHoldStartMs = 0;
+	if (m_messageWindow) {
+		TheWindowManager->winDestroy(m_messageWindow);
+		m_messageWindow = NULL;
+	}
+	if (resynced) {
+		m_sawCRCMismatch = FALSE;	// everyone agrees again: keep checking
+		if (TheInGameUI) {
+			TheInGameUI->message(UnicodeString(L"Resync complete. The match continues."));
+		}
+	}
+}
+
+void Network::prepareForRejoin(Int slot)
+{
+	if (m_conMgr != NULL) {
+		m_conMgr->dropFrameDataFrom(slot, TheGameLogic->getFrame());
+	}
+	if (m_mismatchHoldMask != 0) {
+		m_mismatchHoldStartMs = timeGetTime();	// a resync is under way: give it a fresh window
+	}
+}
+
+// TRUE while frames must not advance. Ends the hold when the players who diverged are gone,
+// and falls back to ending the match when nobody resyncs.
+Bool Network::updateMismatchHold()
+{
+	if (m_mismatchHoldMask == 0) {
+		return FALSE;
+	}
+	if (m_conMgr != NULL) {
+		Bool anyLeft = FALSE;
+		for (Int i = 0; i < MAX_SLOTS; ++i) {
+			if (((m_mismatchHoldMask & (1u << i)) != 0)
+					&& ((i == (Int)m_conMgr->getLocalPlayerID()) || m_conMgr->isPlayerConnected(i))) {
+				anyLeft = TRUE;
+			}
+		}
+		if (!anyLeft) {
+			endMismatchHold(TRUE);	// the players left in the match all agreed
+			return FALSE;
+		}
+	}
+	if ((timeGetTime() - m_mismatchHoldStartMs) > (UnsignedInt)MISMATCH_HOLD_MS) {
+		ReleaseLog("MISMATCH hold timed out frame=%u: nobody resynced, ending the match", TheGameLogic->getFrame());
+		m_mismatchHoldMask = 0;
+		TheScriptEngine->startEndGameTimer(true);
+		return FALSE;
+	}
+	return TRUE;
+}
+
 void Network::setSawCRCMismatch(UnicodeString& strMismatchDetails)
 #else
 void Network::setSawCRCMismatch( void )
@@ -866,13 +980,22 @@ void Network::update()
 	// frames advance as fast as lockstep allows; the lead-in (last seconds before the
 	// handoff) keeps the gate so it runs at the logic rate whatever the render rate does.
 	// AllCommandsReady stays enforced either way.
-	const Bool resumeFrozen = TheRecorder && TheRecorder->updateResumeFreeze();
+	// A CRC mismatch holds the match the same way while the diverged player rebuilds.
+	const Bool mismatchHeld = updateMismatchHold();
+	const Bool resumeFrozen = (TheRecorder && TheRecorder->updateResumeFreeze()) || mismatchHeld;
 	const Bool inCatchup = TheRecorder && TheRecorder->isResumeCatchupMode() && !TheRecorder->isResumeCatchupLeadIn();
 	// A rejoining client rebuilds the match alone: every command comes out of the replay and
 	// the other players, who are holding on a later frame, send nothing for these frames.
 	const Bool rejoinSolo = TheRecorder && TheRecorder->isRejoinCatchup();
 	if (m_wasRejoinSolo && !rejoinSolo && (m_conMgr != NULL)) {
-		m_conMgr->onRejoinLive();
+		if (!m_conMgr->onRejoinLive()) {
+			// Rebuilt, and still not the game the others have. Playing on would only show
+			// this player a match that is not happening; leave it to them.
+			TheScriptActions->closeWindows( TRUE );
+			m_messageWindow = MessageBoxOk(UnicodeString(L"Resync Failed"),
+				UnicodeString(L"Your game was rebuilt from the replay and still does not match the other players. You are leaving the match."), nullptr);
+			TheScriptEngine->startEndGameTimer(true);
+		}
 	}
 	m_wasRejoinSolo = rejoinSolo;
 
