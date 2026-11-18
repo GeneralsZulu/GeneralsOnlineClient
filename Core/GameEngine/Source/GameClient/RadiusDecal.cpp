@@ -66,8 +66,10 @@ void RadiusDecalTemplate::createRadiusDecal(const Coord3D& pos, Real radius, con
 	// it is now considered nonEmpty, regardless of the state of m_decal, etc
 	result.m_empty = false;
 
-	if (!m_onlyVisibleToOwningPlayer || owningPlayer->getPlayerIndex() == ThePlayerList->getLocalPlayer()->getPlayerIndex()
-									 || ThePlayerList->getLocalPlayer()->isPlayerObserver())
+	// TheProjectedShadowManager is absent in headless
+	if (TheProjectedShadowManager != nullptr &&
+		(!m_onlyVisibleToOwningPlayer || owningPlayer->getPlayerIndex() == ThePlayerList->getLocalPlayer()->getPlayerIndex()
+									 || ThePlayerList->getLocalPlayer()->isPlayerObserver()))
 	{
 		Shadow::ShadowTypeInfo decalInfo;
 		decalInfo.allowUpdates = FALSE;										// shadow texture will never update
