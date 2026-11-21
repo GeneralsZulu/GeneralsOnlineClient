@@ -544,6 +544,7 @@ int RadarvanReportSelfTest(void);
 struct ChooseMapResult
 {
 	bool success;
+	bool noPick;                ///< true when !success because the server answered a valid map vote object with no chosen_map (missing/null/empty); errorMessage then holds a user-ready sentence, not an error
 	AsciiString errorMessage;   ///< populated when !success
 	AsciiString chosenMap;      ///< populated when success: human-readable map name (e.g. "Hostile Dawn")
 	unsigned int mapCRC;        ///< populated when the server returns one; 0 means "not provided"

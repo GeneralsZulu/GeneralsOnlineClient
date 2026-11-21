@@ -1559,6 +1559,13 @@ static void handleMapVoteClick()
 		TheGlobalData->m_mapVoteUrl, humanNames, playerCount);
 	if (!res.success)
 	{
+		if (res.noPick)
+		{
+			UnicodeString msgU;
+			msgU.translate(res.errorMessage.str());
+			TheLAN->OnChat(L"SYSTEM", TheLAN->GetLocalIP(), msgU, LANAPIInterface::LANCHAT_SYSTEM);
+			return;
+		}
 		UnicodeString errU;
 		errU.format(TheGameText->fetch("GUI:MapVoteFailed"),
 			res.errorMessage.str());

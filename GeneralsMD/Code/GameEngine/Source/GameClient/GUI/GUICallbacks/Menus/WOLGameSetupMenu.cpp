@@ -1837,6 +1837,13 @@ static void handleOnlineMapVoteClick()
 		TheGlobalData->m_mapVoteUrl, humanNames, playerCount);
 	if (!res.success)
 	{
+		if (res.noPick)
+		{
+			UnicodeString msgU;
+			msgU.translate(res.errorMessage.str());
+			wolLocalSystemChat(msgU);
+			return;
+		}
 		UnicodeString errU;
 		errU.format(TheGameText->fetch("GUI:MapVoteFailed"), res.errorMessage.str());
 		wolLocalSystemChat(errU);

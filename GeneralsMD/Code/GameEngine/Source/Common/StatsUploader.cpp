@@ -1696,6 +1696,7 @@ ChooseMapResult ChooseMapFromServer(const AsciiString& baseUrl,
 {
 	ChooseMapResult result;
 	result.success = false;
+	result.noPick = false;
 	result.mapCRC = 0;
 	result.contentsMask = 0;
 
@@ -1783,8 +1784,20 @@ ChooseMapResult ChooseMapFromServer(const AsciiString& baseUrl,
 
 	if (!jsonGetString(resp, "chosen_map", result.chosenMap) || result.chosenMap.isEmpty())
 	{
+		// radarvan returns chosen_map: null when it has no pick for that player count.
+		const char *body = resp;
+		while (*body == ' ' || *body == '\t' || *body == '\r' || *body == '\n') ++body;
+		if (*body == '{')
+		{
+			result.noPick = true;
+			result.chosenMap.clear();
+			result.errorMessage.format("Radarvan has no map pick for %u players.", playerCount);
+		}
+		else
+		{
+			result.errorMessage = "Map vote response missing chosen_map.";
+		}
 		free(resp);
-		result.errorMessage = "Map vote response missing chosen_map.";
 		return result;
 	}
 
