@@ -722,7 +722,7 @@ static void handleColorSelection(int index)
 				pLobbyInterface->UpdateCurrentLobby_MyColor(color);
 			}
 		}
-		else if (slot->getState() == SLOT_EASY_AI || slot->getState() == SLOT_MED_AI || slot->getState() == SLOT_BRUTAL_AI)
+		else if (slot->isAI())
 		{
 			if (pLobbyInterface != nullptr)
 			{
@@ -779,7 +779,7 @@ static void handlePlayerTemplateSelection(int index, bool bInitialSetup = false)
 			{
 				pLobbyInterface->UpdateCurrentLobby_MySide(playerTemplate, updatedStartPos);
 			}
-			else if (slot->getState() == SLOT_EASY_AI || slot->getState() == SLOT_MED_AI || slot->getState() == SLOT_BRUTAL_AI)
+			else if (slot->isAI())
 			{
 				pLobbyInterface->UpdateCurrentLobby_AISide(index, playerTemplate, updatedStartPos);
 			}
@@ -867,7 +867,7 @@ static void handleTeamSelection(int index)
 		{
 			pLobbyInterface->UpdateCurrentLobby_MyTeam(team);
 		}
-		else if (slot->getState() == SLOT_EASY_AI || slot->getState() == SLOT_MED_AI || slot->getState() == SLOT_BRUTAL_AI)
+		else if (slot->isAI())
 		{
 			pLobbyInterface->UpdateCurrentLobby_AITeam(index, team);
 		}

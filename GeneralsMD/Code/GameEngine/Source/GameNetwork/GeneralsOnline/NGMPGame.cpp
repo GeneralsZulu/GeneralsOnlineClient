@@ -189,7 +189,7 @@ void NGMPGame::UpdateSlotsFromCurrentLobby()
 		// human or AI player
 		if (pLobbyMember.m_SlotState != SlotState::SLOT_OPEN && pLobbyMember.m_SlotState != SlotState::SLOT_CLOSED)
 		{
-			bool bIsAI = (pLobbyMember.m_SlotState == SlotState::SLOT_EASY_AI || pLobbyMember.m_SlotState == SlotState::SLOT_MED_AI|| pLobbyMember.m_SlotState == SlotState::SLOT_BRUTAL_AI);
+			bool bIsAI = (pLobbyMember.m_SlotState == SlotState::SLOT_EASY_AI || pLobbyMember.m_SlotState == SlotState::SLOT_MED_AI|| pLobbyMember.m_SlotState == SlotState::SLOT_BRUTAL_AI || pLobbyMember.m_SlotState == SlotState::SLOT_TACTICAL_AI);
 
 			if (pLobbyMember.m_SlotIndex >= MAX_SLOTS)
 			{
