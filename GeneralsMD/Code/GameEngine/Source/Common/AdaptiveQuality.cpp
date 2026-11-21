@@ -55,6 +55,7 @@ AdaptiveQuality::AdaptiveQuality()
 	m_freq = f.QuadPart;
 	m_ownTicks = 0;
 	m_presentTicks = 0;
+	m_logicTicks = 0;
 	m_secondStart = 0;
 	m_matchStart = 0;
 	m_networkWait = FALSE;
@@ -63,6 +64,7 @@ AdaptiveQuality::AdaptiveQuality()
 	m_pairPending = FALSE;
 	m_pairMs = 0.0;
 	m_pairDeadlineMs = 0.0;
+	m_pairLogicMs = 0.0;
 	m_cpuSumMs = m_presentSumMs = 0.0;
 	m_splitFrames = 0;
 	m_lastCpuMs = m_lastPresentMs = 0.0;
@@ -94,6 +96,7 @@ void AdaptiveQuality::frameBegin()
 {
 	m_ownTicks = 0;
 	m_presentTicks = 0;
+	m_logicTicks = 0;
 	m_networkWait = FALSE;
 }
 
@@ -151,6 +154,7 @@ void AdaptiveQuality::frameEnd()
 	const double deadlineMs = AdaptiveQualityTuning::frameDeadlineMs(fpsCap, m_refreshMs, m_presentSynced != FALSE);
 	m_lastDeadlineMs = deadlineMs;
 	const double ms = AdaptiveQualityTuning::frameCostMs(cpuMs, presentMs, deadlineMs);
+	const double logicMs = (double)m_logicTicks * 1000.0 / (double)m_freq;
 	if (!m_networkWait)
 	{
 		m_cpuSumMs += cpuMs;
@@ -170,17 +174,18 @@ void AdaptiveQuality::frameEnd()
 			m_pairPending = TRUE;
 			m_pairMs = ms;
 			m_pairDeadlineMs = deadlineMs;
+			m_pairLogicMs = logicMs;
 		}
 		else
 		{
 			m_pairPending = FALSE;
-			recordFrame((m_pairMs + ms) * 0.5, (m_pairDeadlineMs + deadlineMs) * 0.5);
+			recordFrame((m_pairMs + ms) * 0.5, (m_pairDeadlineMs + deadlineMs) * 0.5, (m_pairLogicMs + logicMs) * 0.5);
 		}
 	}
 	else
 	{
 		m_pairPending = FALSE;
-		recordFrame(ms, deadlineMs);
+		recordFrame(ms, deadlineMs, logicMs);
 	}
 
 	const long long t = now();
@@ -247,12 +252,13 @@ void AdaptiveQuality::checkPower()
 	}
 }
 
-void AdaptiveQuality::recordFrame(double ms, double deadlineMs)
+void AdaptiveQuality::recordFrame(double ms, double deadlineMs, double logicMs)
 {
 	const int bin = (int)(ms / BIN_MS);
 	++m_hist[bin < BINS ? bin : BINS - 1];
 	++m_frames;
-	if (ms > deadlineMs)
+	// a frame the game logic alone pushed past the deadline is no miss lower effects could have saved
+	if (ms > deadlineMs && logicMs <= deadlineMs)
 	{
 		++m_over;
 	}

@@ -20,6 +20,8 @@ public:
 	void notePresentMode(Bool windowed, Bool intervalSynced) { m_windowed = windowed; m_intervalSynced = intervalSynced; }
 	// this iteration waited on the other players, its cost is not this machine's
 	void noteNetworkWait() { m_networkWait = TRUE; }
+	// the game logic share of the own ticks already added
+	void noteLogic(long long ticks) { m_logicTicks += ticks; }
 	static long long now();
 
 	// W3DDisplay::draw, once per frame outside frozen time: true when this frame is not rendered
@@ -34,7 +36,7 @@ private:
 
 	void startMatch();
 	void endMatch();
-	void recordFrame(double ms, double deadlineMs);
+	void recordFrame(double ms, double deadlineMs, double logicMs);
 	void checkDisplay();
 	void closeSecond(long long t);
 	void setLevel(Int from, Int level, const AdaptiveSecond& s);
@@ -47,6 +49,7 @@ private:
 	long long m_freq;
 	long long m_ownTicks;
 	long long m_presentTicks;
+	long long m_logicTicks;
 	long long m_secondStart;
 	long long m_matchStart;
 	Bool m_networkWait;
@@ -55,6 +58,7 @@ private:
 	Bool m_pairPending;
 	double m_pairMs;
 	double m_pairDeadlineMs;
+	double m_pairLogicMs;
 	double m_cpuSumMs;
 	double m_presentSumMs;
 	unsigned m_splitFrames;

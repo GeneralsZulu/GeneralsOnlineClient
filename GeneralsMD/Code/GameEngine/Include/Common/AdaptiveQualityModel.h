@@ -12,6 +12,9 @@ namespace AdaptiveQualityTuning
 	static const int kStepDownOverSeconds = 3;			// ... for this many counted seconds in a row
 	static const double kStepDownP50Ms = 13.3;			// or when the median frame cost is above this ...
 	static const int kStepDownP50Seconds = 2;			// ... for this many counted seconds in a row
+	// Skipping renders halves the visible frame rate, so the median alone only takes that step when it misses
+	// itself; 2.2.0 put players who missed no frames (median 13.4 to 16 ms) at 30 fps.
+	static const double kRenderSkipP50Ms = kOverFrameMs;
 	static const double kCooldownSeconds = 3.0;		// wait after any step
 	static const double kStepUpOverFraction = 0.02;	// step up needs fewer than this share of frames over ...
 	static const double kStepUpP95Ms = 12.5;			// ... and p95 plus the saving of the level below this ...
@@ -70,6 +73,7 @@ public:
 		m_level = 0;
 		m_overStreak = 0;
 		m_p50Streak = 0;
+		m_p50SkipStreak = 0;
 		m_calmSeconds = 0;
 		m_cooldownUntil = -1e9;
 		m_stepUpWait = AdaptiveQualityTuning::kStepUpSeconds;
@@ -112,11 +116,13 @@ public:
 		const double over = s.frames ? (double)s.over / (double)s.frames : 0.0;
 		m_overStreak = over >= kStepDownOverFraction ? m_overStreak + 1 : 0;
 		m_p50Streak = s.p50Ms > kStepDownP50Ms ? m_p50Streak + 1 : 0;
+		m_p50SkipStreak = s.p50Ms > kRenderSkipP50Ms ? m_p50SkipStreak + 1 : 0;
 		// a step waits until the saving of the last one was measured, a median far above the budget does not wait;
 		// it goes to the next level not learned to be useless, a useless current level never blocks it
 		const bool savingKnown = m_learnLeft == 0;
 		const int target = nextUsefulLevel();
-		const bool wantDown = target > m_level && ((m_overStreak >= kStepDownOverSeconds && savingKnown) || (m_p50Streak >= kStepDownP50Seconds && (savingKnown || s.p50Ms > kBudgetMs)));
+		const int p50Streak = AdaptiveQualityLevels::rendersSkipped(target) ? m_p50SkipStreak : m_p50Streak;
+		const bool wantDown = target > m_level && ((m_overStreak >= kStepDownOverSeconds && savingKnown) || (p50Streak >= kStepDownP50Seconds && (savingKnown || s.p50Ms > kBudgetMs)));
 		// the saving of the level being restored, or a stricter limit while it was never learned
 		const bool headroom = m_deltaLearned[m_level] ? s.p95Ms + delta() < kStepUpP95Ms : s.p95Ms < kStepUpUnlearnedP95Ms;
 		const bool calm = over < kStepUpOverFraction && headroom;
@@ -186,6 +192,7 @@ private:
 		m_cooldownUntil = now + AdaptiveQualityTuning::kCooldownSeconds;
 		m_overStreak = 0;
 		m_p50Streak = 0;
+		m_p50SkipStreak = 0;
 		m_calmSeconds = 0;
 	}
 	void pushRecent(float mean)
@@ -214,6 +221,7 @@ private:
 	int m_level;
 	int m_overStreak;
 	int m_p50Streak;
+	int m_p50SkipStreak;
 	int m_calmSeconds;
 	double m_cooldownUntil;
 	double m_stepUpWait;

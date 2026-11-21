@@ -156,7 +156,14 @@ void FrameMetrics::doPerFrameMetrics(UnsignedInt frame) {
 		const Bool inCatchup = (TheRecorder != nullptr) && TheRecorder->isResumeCatchupMode();
 		if (!inCatchup) {
 			m_averageFps -= ((m_fpsList[m_fpsListIndex])) / TheGlobalData->m_networkFPSHistoryLength; // subtract out the old value from the average.
-			m_fpsList[m_fpsListIndex] = TheDisplay->getAverageFPS();
+			// The display fps counts rendered frames only, and adaptive quality may be skipping every second
+			// render while the loop turns at full rate. Reported as is (29), the router sizes the run-ahead
+			// for a 29 fps game: the window halves and everyone stalls on it (2.2.0: 20 frames to 10).
+			Real loopFps = TheDisplay->getAverageFPS();
+			if (AdaptiveQualityLevels::rendersSkipped(TheGlobalData->m_adaptiveQualityLevel)) {
+				loopFps *= 2.0f;
+			}
+			m_fpsList[m_fpsListIndex] = loopFps;
 			m_averageFps += ((Real)(m_fpsList[m_fpsListIndex])) / TheGlobalData->m_networkFPSHistoryLength; // add the new value to the average.
 			++m_fpsListIndex;
 			m_fpsListIndex %= TheGlobalData->m_networkFPSHistoryLength;

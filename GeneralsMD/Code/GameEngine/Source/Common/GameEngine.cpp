@@ -1223,6 +1223,7 @@ void GameEngine::update()
 			const UnsignedInt logicStartMs = timeGetTime();
 			const long long aqLogicStart = AdaptiveQuality::now();
 			TheGameLogic->UPDATE();
+			AdaptiveQuality::get().noteLogic(AdaptiveQuality::now() - aqLogicStart);
 			NetPerfNoteLogic(timeGetTime() - logicStartMs);
 
 			// step() advances view animations, so it is only meaningful when
