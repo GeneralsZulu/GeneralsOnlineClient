@@ -1294,6 +1294,40 @@ void NetworkMesh::Tick()
 		}
 	}
 
+	{
+		std::shared_ptr<WebSocket> pWS = NGMP_OnlineServicesManager::GetWebSocket();
+		const bool bWSConnected = pWS != nullptr && pWS->IsConnected();
+		const bool bJustReconnected = bWSConnected && !m_bWebSocketWasConnected;
+		m_bWebSocketWasConnected = bWSConnected;
+
+		if (bJustReconnected
+			&& !AnticheatPlugInterface::DoesACPluginProvideSecureGameTransport()
+			&& TheGameLogic != nullptr && TheGameLogic->isInInternetGame()
+			&& NGMP_OnlineServicesManager::GetInstance()->GetServiceConfig().retry_signalling)
+		{
+			NGMP_OnlineServices_AuthInterface* pAuthInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_AuthInterface>();
+			NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+			if (pAuthInterface != nullptr && pLobbyInterface != nullptr)
+			{
+				const int64_t myUserID = pAuthInterface->GetUserID();
+				std::lock_guard<std::recursive_mutex> lock(m_mapConnectionsMutex);
+				for (auto& kvPair : m_mapConnections)
+				{
+					const int64_t userID = kvPair.second.m_userID;
+					// same id rule as the disconnect handler so both sides never signal at once
+					if (kvPair.second.m_hSteamConnection == k_HSteamNetConnection_Invalid
+						&& myUserID > userID
+						&& pLobbyInterface->IsLobbyMember(userID))
+					{
+						NetworkLog(ELogVerbosity::LOG_RELEASE, "[STEAM NETWORKING][WS RECONNECT] Re-requesting signalling for user %lld", (long long)userID);
+						ReleaseLog("GO mesh: websocket reconnected, re-requesting signalling for user %lld", (long long)userID);
+						pWS->SendData_RequestSignalling(userID);
+					}
+				}
+			}
+		}
+	}
+
 	if (!AnticheatPlugInterface::DoesACPluginProvideSecureGameTransport() && m_pSignaling != nullptr)
 	{
 		m_pSignaling->Poll();

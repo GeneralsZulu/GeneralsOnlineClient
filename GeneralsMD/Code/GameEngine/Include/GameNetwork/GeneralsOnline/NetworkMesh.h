@@ -288,6 +288,9 @@ private:
 	// Route telemetry pacing (NetworkMesh::Tick).
 	uint32_t m_lastRouteProbeMs = 0;
 	uint32_t m_lastRouteSummaryMs = 0;
+
+	// websocket state seen last Tick; a false->true edge re-requests signalling for dead in-match links
+	bool m_bWebSocketWasConnected = true;
 	std::string m_strTurnServerList;
 
 	struct PendingSignalling
