@@ -222,7 +222,8 @@ public:
 		ZULU_AI_FEATURE_USA_DRONES  = 3, ///< TacticalAI USA vehicle drones (AISkirmishPlayer::buyObjectUpgrades)
 		ZULU_AI_FEATURE_CHINA_OVERLORD = 4, ///< TacticalAI China Overlord gattling/propaganda (AISkirmishPlayer::buyObjectUpgrades)
 		ZULU_AI_FEATURE_MD_LASER_LOCK = 5, ///< TacticalAI USA Missile Defender laser lock (AISkirmishPlayer::laserLockMissileDefenders)
-		ZULU_AI_FEATURE_CURRENT     = 5
+		ZULU_AI_FEATURE_REPATH_THROTTLE = 6, ///< TacticalAI attack-move repath rate limit (AIAttackMoveToState::update)
+		ZULU_AI_FEATURE_CURRENT     = 6
 	};
 	// True if the AI feature at the given version should run this frame.
 	// Always true during live games / recording. During playback / resume-catchup

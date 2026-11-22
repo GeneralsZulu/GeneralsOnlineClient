@@ -37,6 +37,7 @@
 #include "Common/PerfTimer.h"
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
+#include "Common/Recorder.h"
 #include "Common/RandomValue.h"
 #include "Common/Team.h"
 #include "Common/ThingTemplate.h"
@@ -1814,9 +1815,18 @@ StateReturnType AIInternalMoveToState::update()
 	}
 	Bool blocked=false;
 	if (ai->isBlockedAndStuck() || ai->getNumFramesBlocked()>2*LOGICFRAMES_PER_SECOND) {
-		forceRecompute = true;
-		blocked = true;
-		m_blockedRepathTimestamp = TheGameLogic->getFrame();
+		UnsignedInt now = TheGameLogic->getFrame();
+		// Blocked units update every ~4 frames; without this throttle each update was a full path search.
+		Player *owner = obj->getControllingPlayer();
+		Bool throttle = thePath != nullptr
+			&& owner != nullptr && owner->isTacticalAIPlayer()
+			&& (TheRecorder == nullptr || TheRecorder->isAIFeatureEnabled(RecorderClass::ZULU_AI_FEATURE_REPATH_THROTTLE))
+			&& now - m_blockedRepathTimestamp < 2*LOGICFRAMES_PER_SECOND;
+		if (!throttle) {
+			forceRecompute = true;
+			blocked = true;
+			m_blockedRepathTimestamp = now;
+		}
 		// Intense debug logging jba.
 		//DEBUG_LOG(("Info - Blocked - recomputing."));
 	}
