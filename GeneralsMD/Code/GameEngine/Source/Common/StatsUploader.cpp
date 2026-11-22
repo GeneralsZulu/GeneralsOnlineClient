@@ -143,6 +143,34 @@ static void setHttpTimeouts(WinInetSession *s, DWORD connectMs, DWORD sendMs, DW
 	}
 }
 
+static bool isDevBuild(void)
+{
+	return strcmp(ZULU_BUILD_VARIANT_KIND, "dev") == 0;
+}
+
+static bool isRadarvanHost(const char *host)
+{
+	char lower[256];
+	size_t i;
+	if (host == nullptr)
+		return false;
+	for (i = 0; i < sizeof(lower) - 1 && host[i] != '\0'; ++i)
+	{
+		char c = host[i];
+		if (c >= 'A' && c <= 'Z')
+			c = (char)(c - 'A' + 'a');
+		lower[i] = c;
+	}
+	lower[i] = '\0';
+	return strstr(lower, "radarvan") != nullptr;
+}
+
+void RadarvanLogBuildPolicy(void)
+{
+	if (isDevBuild())
+		ReleaseLog("Radarvan: disabled for dev build %s; no uploads or lookups will be sent", ZULU_BUILD_VARIANT_TAG);
+}
+
 static bool openHttpRequest(const AsciiString& url,
                             const char *method,
                             const char *pathOverride,
@@ -172,6 +200,11 @@ static bool openHttpRequest(const AsciiString& url,
 		ReleaseLog("%s: failed to parse URL \"%s\"", logTag, url.str());
 		return false;
 	}
+
+	// radarvan rejects dev builds (403), so dev builds skip it entirely and
+	// callers see the same failure as an unreachable server. No logging here.
+	if (isDevBuild() && isRadarvanHost(hostBuf))
+		return false;
 
 	INTERNET_PORT port = uc.nPort;
 	if (port == 0)

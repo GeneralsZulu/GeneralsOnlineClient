@@ -583,3 +583,6 @@ void FetchMapMatchCountsIfStale(const AsciiString& url, unsigned int maxAgeSec);
 /// before lookup. Returns 0 when no entry exists (no fetch yet, key
 /// unrecognized, or simply zero plays).
 int GetMapMatchCount(const AsciiString& mapCacheKey);
+
+/// Log once at startup that radarvan requests are disabled; does nothing in release builds.
+void RadarvanLogBuildPolicy(void);

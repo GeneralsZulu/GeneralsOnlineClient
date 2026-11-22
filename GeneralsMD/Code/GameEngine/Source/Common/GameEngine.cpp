@@ -551,6 +551,7 @@ void GameEngine::init()
 
 		// special-case: parse command-line parameters after loading global data
 		CommandLine::parseCommandLineForEngineInit();
+		RadarvanLogBuildPolicy();
 
 		// NGMP_CHANGE: Init our settings before loadMods, which reads DataPacks_UseCommunityPatch. Needs TheGlobalData for the user data path.
 		NGMP_OnlineServicesManager::Settings.Initialize();
