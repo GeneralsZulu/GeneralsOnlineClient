@@ -62,7 +62,7 @@ This is a developer-facing inventory, not a player-facing changelog.
 - [resume-from-replay.md](resume-from-replay.md) — `00000000.rep`
   fast-forward resume into a fresh lobby.
 - [headless-replay.md](headless-replay.md) — `[HEADLESS RESULT]`
-  winner line for CI / batch replay processing.
+  result lines and `-resultLog` JSON log for CI / batch replay processing.
 - [replay-data-versions.md](replay-data-versions.md) — Per-release
   `Zulu.big` archives shipped in `ReplayData\`, `ZuluLauncher
   -replaytheater` picker, `-watchReplay`, and why data (not just
