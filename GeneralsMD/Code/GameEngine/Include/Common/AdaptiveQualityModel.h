@@ -12,9 +12,9 @@ namespace AdaptiveQualityTuning
 	static const int kStepDownOverSeconds = 3;			// ... for this many counted seconds in a row
 	static const double kStepDownP50Ms = 13.3;			// or when the median frame cost is above this ...
 	static const int kStepDownP50Seconds = 2;			// ... for this many counted seconds in a row
-	// Skipping renders halves the visible frame rate, so the median alone only takes that step when it misses
-	// itself; 2.2.0 put players who missed no frames (median 13.4 to 16 ms) at 30 fps.
-	static const double kRenderSkipP50Ms = kOverFrameMs;
+	// Skipping renders halves the visible frame rate, so the median only takes that step when it is over the 60 fps budget
+	// and frames are really missed (2.2.1 put a player with a 15.6 to 16.9 ms median and 0% missed at 30 fps).
+	static const double kRenderSkipP50Ms = kBudgetMs;
 	static const double kCooldownSeconds = 3.0;		// wait after any step
 	static const double kStepUpOverFraction = 0.02;	// step up needs fewer than this share of frames over ...
 	static const double kStepUpP95Ms = 12.5;			// ... and p95 plus the saving of the level below this ...
@@ -116,7 +116,7 @@ public:
 		const double over = s.frames ? (double)s.over / (double)s.frames : 0.0;
 		m_overStreak = over >= kStepDownOverFraction ? m_overStreak + 1 : 0;
 		m_p50Streak = s.p50Ms > kStepDownP50Ms ? m_p50Streak + 1 : 0;
-		m_p50SkipStreak = s.p50Ms > kRenderSkipP50Ms ? m_p50SkipStreak + 1 : 0;
+		m_p50SkipStreak = (s.p50Ms > kRenderSkipP50Ms && over >= kStepUpOverFraction) ? m_p50SkipStreak + 1 : 0;
 		// a step waits until the saving of the last one was measured, a median far above the budget does not wait;
 		// it goes to the next level not learned to be useless, a useless current level never blocks it
 		const bool savingKnown = m_learnLeft == 0;
