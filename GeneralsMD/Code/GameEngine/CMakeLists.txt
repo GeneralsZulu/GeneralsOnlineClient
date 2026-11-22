@@ -1151,6 +1151,7 @@ set(GAMEENGINE_SRC
     Include/GameNetwork/GeneralsOnline/DiscordRichPresence.h
     Include/GameNetwork/GeneralsOnline/Vendor/DiscordRPC/discord_rpc.h
     Include/GameNetwork/GeneralsOnline/NetworkBitstream.h
+    Include/GameNetwork/GeneralsOnline/LatencyPercentile.h
     Include/GameNetwork/GeneralsOnline/NetworkMesh.h
     Include/GameNetwork/GeneralsOnline/NetworkPacket.h
     Include/GameNetwork/GeneralsOnline/NextGenMP_defines.h

@@ -6,6 +6,7 @@
 #include <mutex>
 #include <steam/steamnetworkingcustomsignaling.h>
 #include "PluginInterfaces.h"
+#include "LatencyPercentile.h"
 
 class NetRoom_ChatMessagePacket;
 
@@ -80,7 +81,12 @@ public:
 		}
 
 		return highestLatency;
+	}
+	int GetPercentileHistoricalLatency(int percent)
+	{
+		return LatencyPercentile::nearestRank(m_vecLatencyHistory, percent);
 	}
+
 
 	std::vector<int> m_vecLatencyHistory;
 	std::vector<float> m_vecQualityHistory;
@@ -219,7 +225,24 @@ public:
 		}
 
 		return Real(highestLatency);
+	}
+	Real getMaximumPercentileHistoricalLatency(int percent)
+	{
+		int highestLatency = 0;
+
+		for (auto& kvPair : m_mapConnections)
+		{
+			PlayerConnection& conn = kvPair.second;
+			int p = conn.GetPercentileHistoricalLatency(percent);
+			if (p > highestLatency)
+			{
+				highestLatency = p;
+			}
+		}
+
+		return Real(highestLatency);
 	}
+
 
 
 	int SendGamePacket(void* pBuffer, uint32_t totalDataSize, int64_t userID);
