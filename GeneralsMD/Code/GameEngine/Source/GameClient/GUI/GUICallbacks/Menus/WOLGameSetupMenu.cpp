@@ -217,6 +217,11 @@ static Int s_randomizeCount = 0;
 // callbacks as a real click, so without it the push that delivers a roll looks like a choice.
 static Bool s_localSlotChosen = FALSE;
 static Bool s_applyingLobbyUpdate = FALSE;
+// FFA mode keeps every non-observer slot at Random color. The service owns lobby state, so each
+// client resets its own color and the host resets AI colors. These flags make a repeated lobby
+// push send at most one update per slot per change.
+static Bool s_ffaMyColorSent = FALSE;
+static Bool s_ffaAIColorSent[MAX_SLOTS];
 static GameWindow *buttonEmote = NULL;
 static GameWindow *textEntryChat = NULL;
 static GameWindow *textEntryMapDisplay = NULL;
@@ -686,6 +691,8 @@ static void handleColorSelection(int index)
 	{
 		GameSlot * slot = myGame->getSlot(index);
 		if (color == slot->getColor())
+			return;
+		if (myGame->getFFAMode() && color != -1)
 			return;
 
 		if (color >= -1 && color < TheMultiplayerSettings->getNumColors())
@@ -1589,6 +1596,70 @@ static void WOLConnectionIndicatorDraw(GameWindow *window, WinInstanceData *inst
     }
 }
 
+static void wolEnforceFFAColors(NGMPGame *game)
+{
+    NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
+    if (pLobbyInterface == nullptr || game == nullptr)
+        return;
+
+    Int i;
+    if (!game->getFFAMode())
+    {
+        s_ffaMyColorSent = FALSE;
+        for (i = 0; i < MAX_SLOTS; ++i)
+            s_ffaAIColorSent[i] = FALSE;
+        return;
+    }
+
+    Int me = game->getLocalSlotNum();
+    if (me >= 0)
+    {
+        GameSlot *mySlot = game->getSlot(me);
+        if (mySlot && mySlot->getPlayerTemplate() != PLAYERTEMPLATE_OBSERVER)
+        {
+            if (mySlot->getColor() != -1)
+            {
+                if (!s_ffaMyColorSent)
+                {
+                    pLobbyInterface->UpdateCurrentLobby_MyColor(-1);
+                    s_ffaMyColorSent = TRUE;
+                }
+            }
+            else
+            {
+                s_ffaMyColorSent = FALSE;
+            }
+        }
+    }
+
+    if (pLobbyInterface->IsHost())
+    {
+        for (i = 0; i < MAX_SLOTS; ++i)
+        {
+            GameSlot *slot = game->getSlot(i);
+            if (!slot || !slot->isAI())
+            {
+                s_ffaAIColorSent[i] = FALSE;
+                continue;
+            }
+            if (slot->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
+                continue;
+            if (slot->getColor() != -1)
+            {
+                if (!s_ffaAIColorSent[i])
+                {
+                    pLobbyInterface->UpdateCurrentLobby_AIColor(i, -1);
+                    s_ffaAIColorSent[i] = TRUE;
+                }
+            }
+            else
+            {
+                s_ffaAIColorSent[i] = FALSE;
+            }
+        }
+    }
+}
+
 void WOLDisplaySlotList(void)
 {
     // TODO_NGMP
@@ -1636,6 +1707,8 @@ void WOLDisplaySlotList(void)
     }
 
     WOLRefreshConnectionIndicators();
+
+    wolEnforceFFAColors(game);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -2748,6 +2821,12 @@ void WOLGameSetupMenuInit( WindowLayout *layout, void *userData )
 	s_randomizeCount = 0;
 	RadarvanMapSummaryReset(); // no "/intel" reply from a previous lobby
 	s_localSlotChosen = FALSE;
+	s_ffaMyColorSent = FALSE;
+	{
+		Int ffaIdx;
+		for (ffaIdx = 0; ffaIdx < MAX_SLOTS; ++ffaIdx)
+			s_ffaAIColorSent[ffaIdx] = FALSE;
+	}
 	s_applyingLobbyUpdate = FALSE;
 	// A fresh lobby: forget the last one's map-download bookkeeping.
 	s_mapDownloadPending = FALSE;

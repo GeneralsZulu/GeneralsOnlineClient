@@ -96,8 +96,9 @@ static void assignRandomFactions(GameInfo *game, const std::vector<Int> &validTe
 		}
 
 		// Assign color if random (-1)
+		// FFA mode leaves color Random so it is not revealed in the lobby.
 		Int colorIdx = slot->getColor();
-		if (colorIdx < 0 || colorIdx >= TheMultiplayerSettings->getNumColors())
+		if (!game->getFFAMode() && (colorIdx < 0 || colorIdx >= TheMultiplayerSettings->getNumColors()))
 		{
 			// Pick uniformly among the colors nobody holds yet, so a full lobby
 			// never ends up with a slot left at -1 because a blind retry loop
@@ -1073,6 +1074,25 @@ Int runRandomAssignSelfTest()
 		ffaOk = ffaOk && selfTestSpotsValid(game, 4);
 	}
 	selfTestCheck(ffaOk, "ffa: four distinct spots");
+
+	// 5b. FFA mode: colors stay Random (-1) and no change reports a color.
+	{
+		Bool colorsKept = TRUE;
+		std::vector<RandomSlotAssignment> ffaChanges;
+		SkirmishGameInfo game;
+		selfTestSetupLobby(game, TEAMS_FFA, NO_SPOTS, SELFTEST_MAP);
+		game.setFFAMode(TRUE);
+		Int s;
+		for (s = 0; s < 4; ++s)
+			game.getSlot(s)->setColor(-1);
+		performRandomAssign(&game, &ffaChanges);
+		for (s = 0; s < 4; ++s)
+			colorsKept = colorsKept && game.getConstSlot(s)->getColor() == -1;
+		size_t k;
+		for (k = 0; k < ffaChanges.size(); ++k)
+			colorsKept = colorsKept && ffaChanges[k].color == -1;
+		selfTestCheck(colorsKept, "ffa mode: colors stay Random");
+	}
 
 	// 6. Unknown map: nothing to place, every spot stays -1.
 	{

@@ -461,6 +461,8 @@ static void handleColorSelection(int index)
 		LANGameSlot * slot = myGame->getLANSlot(index);
 		if (color == slot->getColor())
 			return;
+		if (myGame->getFFAMode() && color != -1)
+			return;
 
 		if (color >= -1 && color < TheMultiplayerSettings->getNumColors())
 		{
@@ -773,7 +775,22 @@ static void handleFFAModeClick()
   LANGameInfo *myGame = TheLAN->GetMyGame();
   if (myGame && myGame->amIHost() && !s_isIniting)
   {
-    myGame->setFFAMode( GadgetCheckBoxIsChecked( checkboxFFAMode ) );
+    Bool checked = GadgetCheckBoxIsChecked( checkboxFFAMode );
+    myGame->setFFAMode( checked );
+    if (checked)
+    {
+      // Nobody may hold a concrete color in FFA mode: snap every occupied,
+      // non-observer slot back to Random.
+      for (Int i = 0; i < MAX_SLOTS; i++)
+      {
+        GameSlot *slot = myGame->getSlot(i);
+        if (!slot || !slot->isOccupied())
+          continue;
+        if (slot->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER)
+          continue;
+        slot->setColor( -1 );
+      }
+    }
     myGame->resetAccepted();
     TheLAN->RequestGameOptions(GenerateGameOptionsString(), true);
     lanUpdateSlotList(); // Update the accepted button UI

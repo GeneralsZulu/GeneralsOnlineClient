@@ -255,19 +255,21 @@ void EnableAcceptControls(Bool Enabled, GameInfo *myGame, GameWindow *comboPlaye
 		return;
 
 	Bool isObserver = myGame->getConstSlot(slotNum)->getPlayerTemplate() == PLAYERTEMPLATE_OBSERVER;
+	Bool ffaMode = myGame->getFFAMode();
 
 	if( !myGame->amIHost() && (buttonStart != nullptr) )
 		buttonStart->winEnable(Enabled);
 	if(comboColor[slotNum])
 	{
-		if (isObserver)
+		if (isObserver || ffaMode)
 		{
 			GadgetComboBoxHideList(comboColor[slotNum]);
 		}
-		comboColor[slotNum]->winEnable(Enabled && !isObserver);
+		comboColor[slotNum]->winEnable(Enabled && !isObserver && !ffaMode);
 	}
 	// While the host has enforce-random set, faction and team stay locked to
-	// Random for everyone (color remains selectable).
+	// Random for everyone (color remains selectable). FFA mode, in contrast,
+	// locks color (every slot stays Random) so unit colors cannot reveal players.
 	Bool enforceRandom = myGame->getEnforceRandom();
 	if(comboPlayerTemplate[slotNum])
 	{

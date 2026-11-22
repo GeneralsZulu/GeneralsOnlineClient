@@ -489,7 +489,11 @@ void LANAPI::OnGameOptions( UnsignedInt playerIP, Int playerSlot, AsciiString op
 
 				if (key == "Color")
 				{
-					if (val >= -1 && val < TheMultiplayerSettings->getNumColors() && val != slot->getColor() && slot->getPlayerTemplate() != PLAYERTEMPLATE_OBSERVER)
+					if (m_currentGame->getFFAMode() && val != -1)
+					{
+						DEBUG_LOG(("Rejecting color %d because FFA mode is set", val));
+					}
+					else if (val >= -1 && val < TheMultiplayerSettings->getNumColors() && val != slot->getColor() && slot->getPlayerTemplate() != PLAYERTEMPLATE_OBSERVER)
 					{
 						Bool colorAvailable = TRUE;
 						if(val != -1 )
