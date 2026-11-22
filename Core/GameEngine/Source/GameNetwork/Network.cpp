@@ -124,6 +124,7 @@ public:
 	void setLocalAddress(UnsignedInt ip, UnsignedInt port);
 	UnsignedInt getRunAhead(void) { return m_runAhead; }
 	UnsignedInt getFrameRate(void) { return m_frameRate; }
+	UnsignedInt getLastRunAheadFrameRate(void) { return m_lastRunAheadFrameRate; }
 	UnsignedInt getPacketArrivalCushion(void);								///< Returns the smallest packet arrival cushion since this was last called.
 	Bool isFrameDataReady(void);
 	virtual Bool isStalling();
@@ -227,6 +228,7 @@ protected:
 
 	Int m_runAhead;																						///< The current run ahead of the game.
 	Int m_frameRate;
+	Int m_lastRunAheadFrameRate;	///< Frame rate from the last executed run-ahead command, kept separate because update() resets m_frameRate every tick.
 	Int m_lastExecutionFrame;																	///< The highest frame number that a command could have been executed on.
 	Int m_lastFrameCompleted;
 	Bool m_didSelfSlug;
@@ -321,6 +323,7 @@ Network::Network()
 	m_stallMask = 0;
 	m_lastStatsMs = 0;
 	m_lastRunAheadLogMs = 0;
+	m_lastRunAheadFrameRate = 30;
 
 #if defined(RTS_DEBUG)
 	m_networkOn = TRUE;
@@ -401,6 +404,7 @@ void Network::init()
 	m_stallMask = 0;
 	m_lastStatsMs = 0;
 	m_lastRunAheadLogMs = 0;
+	m_lastRunAheadFrameRate = 30;
 
 	m_localStatus = NETLOCALSTATUS_PREGAME;
 
@@ -864,6 +868,7 @@ void Network::processRunAheadCommand(NetRunAheadCommandMsg* msg) {
 	}
 	m_runAhead = msg->getRunAhead();
 	m_frameRate = msg->getFrameRate();
+	m_lastRunAheadFrameRate = msg->getFrameRate();
 	time_t frameGrouping = (1000 * m_runAhead) / m_frameRate; // number of miliseconds between packet sends
 	frameGrouping = frameGrouping / 2; // since we only want the latency for one way to be a factor.
 	//	DEBUG_LOG(("Network::processRunAheadCommand - trying to set frame grouping to %d.  run ahead = %d, m_frameRate = %d", frameGrouping, m_runAhead, m_frameRate));

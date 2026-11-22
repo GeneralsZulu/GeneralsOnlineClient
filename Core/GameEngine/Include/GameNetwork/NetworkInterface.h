@@ -81,6 +81,7 @@ public:
 	virtual void startGame() = 0;																	///< Sets the network game frame counter to -1
 	virtual UnsignedInt getRunAhead() = 0;												///< Get the current RunAhead value
 	virtual UnsignedInt getFrameRate() = 0;												///< Get the current allowed frame rate.
+	virtual UnsignedInt getLastRunAheadFrameRate() = 0;	///< Frame rate from the last executed run-ahead command (display only).
 	virtual UnsignedInt getPacketArrivalCushion() = 0;						///< Get the smallest packet arrival cushion since this was last called.
 
 	// Chat functions

@@ -7206,20 +7206,23 @@ void InGameUI::drawNetworkLatency(Int& x, Int& y)
 
 	//bool bIsSelfSlugged = TheNetwork->IsSlugging();
 
-	if (gentoolFrames != m_lastNetworkLatencyFrames)
+	const UnsignedInt routerFps = TheNetwork->getLastRunAheadFrameRate();
+	// key packs run-ahead and router fps so a change in either rebuilds the text
+	const UnsignedInt latencyKey = (routerFps << 16) | (TheNetwork->getRunAhead() & 0xFFFF);
+	if (latencyKey != m_lastNetworkLatencyFrames)
 	{
 		UnicodeString latencyStr;
 
 		if (actualFrames != gentoolFrames)
 		{
-			latencyStr.format(L"[%u] - [%ums - %u]", TheNetwork->getFrameRate(), actualLatencyInMS, actualFrames);
+			latencyStr.format(L"[%u] - [%ums - %u]", routerFps, actualLatencyInMS, actualFrames);
 		}
 		else
 		{
-			latencyStr.format(L"%u [%ums][L: %u]", gentoolFrames, actualLatencyInMS, TheNetwork->getFrameRate());
+			latencyStr.format(L"%u [%ums][L: %u]", gentoolFrames, actualLatencyInMS, routerFps);
 		}
 		m_networkLatencyString->setText(latencyStr);
-		m_lastNetworkLatencyFrames = gentoolFrames;
+		m_lastNetworkLatencyFrames = latencyKey;
 	}
 #else
 	const UnsignedInt networkLatencyFrames = TheNetwork->getRunAhead();
