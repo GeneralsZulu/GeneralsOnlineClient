@@ -1742,6 +1742,15 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 								TheNGMPGame->StopCountdown();
 							}
 
+							// Enforce Random only clears start positions on the off to on change within the same lobby.
+							// The Randomize roll may still assign spots while the box is ticked, so clearing on every push
+							// would undo them. Each client clears its own spot because the host has no action that can set
+							// a human's start position back to -1 (BulkSlotUpdate omits -1, AlignSlots is for replay resume).
+							const bool bEnforceRandomTurnedOn = lobbyEntry.enforce_random
+								&& !m_CurrentLobby.enforce_random
+								&& m_CurrentLobby.lobbyID != -1
+								&& m_CurrentLobby.lobbyID == lobbyEntry.lobbyID;
+
 							// store
 							m_CurrentLobby = lobbyEntry;
 							RecordJoinOrder(lobbyEntry.members);
@@ -1758,6 +1767,41 @@ void NGMP_OnlineServices_LobbyInterface::UpdateRoomDataCache(std::function<void(
 								}
 
 								InvokeRosterNeedsRefreshCallback();
+
+								if (bEnforceRandomTurnedOn && !TheNGMPGame->isGameInProgress())
+								{
+									int numOwnCleared = 0;
+									int numAICleared = 0;
+									const bool bIAmHost = IsHost();
+
+									for (const LobbyMemberEntry& member : m_CurrentLobby.members)
+									{
+										if (member.startpos < 0)
+										{
+											continue;
+										}
+
+										if (member.IsHuman())
+										{
+											if (member.user_id == myUserID && member.side != PLAYERTEMPLATE_OBSERVER)
+											{
+												UpdateCurrentLobby_MyStartPos(-1);
+												++numOwnCleared;
+											}
+										}
+										else if (bIAmHost
+											&& (member.m_SlotState == SLOT_EASY_AI
+												|| member.m_SlotState == SLOT_MED_AI
+												|| member.m_SlotState == SLOT_BRUTAL_AI
+												|| member.m_SlotState == SLOT_TACTICAL_AI))
+										{
+											UpdateCurrentLobby_AIStartPos(member.m_SlotIndex, -1);
+											++numAICleared;
+										}
+									}
+
+									NetworkLog(ELogVerbosity::LOG_RELEASE, "Enforce Random cleared start positions: own=%d, AI=%d", numOwnCleared, numAICleared);
+								}
 							}
 						}
 
