@@ -356,6 +356,7 @@ void ConnectionManager::init()
 	m_routerWaitFrame = 0;
 	m_routerWaitMs = 0;
 	resetNetStats();
+	resetMatchNetStats();
 
 	m_frameMetrics.init();
 
@@ -433,6 +434,7 @@ void ConnectionManager::reset()
 	for (i = 0; i < TheGlobalData->m_networkLatencyHistoryLength; ++i) {
 		m_latencyAverages[i] = 0.0;
 	}
+	resetMatchNetStats();
 
 	for (i = 0; i < (UnsignedInt)MAX_SLOTS; ++i) {
 		m_packetRouterFallback[i] = -1;
@@ -3381,6 +3383,69 @@ void ConnectionManager::resetNetStats() {
 	memset(&s_netPerf, 0, sizeof(s_netPerf));
 }
 
+void ConnectionManager::resetMatchNetStats() {
+	memset(m_matchStallCount, 0, sizeof(m_matchStallCount));
+	memset(m_matchStallMs, 0, sizeof(m_matchStallMs));
+	memset(m_matchRetries, 0, sizeof(m_matchRetries));
+	memset(m_matchRttSum, 0, sizeof(m_matchRttSum));
+	memset(m_matchRttCount, 0, sizeof(m_matchRttCount));
+	memset(m_matchRttMax, 0, sizeof(m_matchRttMax));
+	m_matchTotalStallCount = 0;
+	m_matchTotalStallMs = 0;
+	memset(m_matchStallRing, 0, sizeof(m_matchStallRing));
+	m_matchStallRingWrite = 0;
+	m_matchStallRingCount = 0;
+}
+
+void ConnectionManager::getMatchNetSummary(MatchNetSummary &out, UnsignedInt windowMs) {
+	memset(&out, 0, sizeof(out));
+	out.localSlot = (Int)m_localSlot;
+	out.routerSlot = (Int)m_packetRouterSlot;
+	out.runAhead = m_lastStatsRunAhead;
+	out.frameRate = m_lastStatsFrameRate;
+	out.totalStallCount = m_matchTotalStallCount;
+	out.totalStallMs = m_matchTotalStallMs;
+
+	const UnsignedInt now = timeGetTime();
+	Int i;
+	for (i = 0; i < MAX_SLOTS; ++i) {
+		MatchNetSlotSummary &s = out.slot[i];
+		s.present = (m_frameData[i] != nullptr) || (m_matchStallCount[i] != 0) || (m_matchStallMs[i] != 0)
+			|| (m_matchRetries[i] != 0) || (m_matchRttCount[i] != 0);
+		s.connected = ((Int)m_localSlot == i) ? TRUE : isPlayerConnected(i);
+		s.rttNowMs = (m_connections[i] != nullptr) ? m_connections[i]->getSmoothedRttMs() : -1;
+		if ((s.rttNowMs <= 0) || !s.connected) {
+			s.rttNowMs = -1;
+		}
+		s.rttAvgMs = (m_matchRttCount[i] != 0) ? (Int)(m_matchRttSum[i] / m_matchRttCount[i]) : -1;
+		s.rttMaxMs = (m_matchRttCount[i] != 0) ? (Int)m_matchRttMax[i] : -1;
+		s.fps = -1;
+		if ((Int)m_localSlot == i) {
+			s.fps = m_frameMetrics.getAverageFPS();
+		} else if (((Int)m_localSlot == (Int)m_packetRouterSlot) && isPlayerConnected(i)) {
+			s.fps = m_fpsAverages[i];
+		}
+		s.stallCount = m_matchStallCount[i];
+		s.stallMs = m_matchStallMs[i];
+		s.retries = m_matchRetries[i];
+	}
+
+	Int k;
+	for (k = 0; k < m_matchStallRingCount; ++k) {
+		const MatchStallEntry &e = m_matchStallRing[k];
+		if ((now - e.endMs) > windowMs) {
+			continue;
+		}
+		for (i = 0; i < MAX_SLOTS; ++i) {
+			if (e.blameMask & (1 << i)) {
+				++out.slot[i].recentStallCount;
+				out.slot[i].recentStallMs += e.durationMs;
+			}
+		}
+	}
+	out.valid = TRUE;
+}
+
 UnsignedInt ConnectionManager::getNotReadyMask(UnsignedInt frame) {
 	UnsignedInt mask = 0;
 	for (Int i = 0; i < MAX_SLOTS; ++i) {
@@ -3404,6 +3469,22 @@ void ConnectionManager::noteStall(UnsignedInt frame, UnsignedInt durationMs, Uns
 		if (blame & (1 << i)) {
 			++m_netStats.stallOn[i];
 		}
+	}
+	// Whole-match counters for the score screen.
+	++m_matchTotalStallCount;
+	m_matchTotalStallMs += durationMs;
+	for (Int j = 0; j < MAX_SLOTS; ++j) {
+		if (blame & (1 << j)) {
+			++m_matchStallCount[j];
+			m_matchStallMs[j] += durationMs;
+		}
+	}
+	m_matchStallRing[m_matchStallRingWrite].endMs = timeGetTime();
+	m_matchStallRing[m_matchStallRingWrite].durationMs = durationMs;
+	m_matchStallRing[m_matchStallRingWrite].blameMask = blame;
+	m_matchStallRingWrite = (m_matchStallRingWrite + 1) % MATCH_STALL_RING_SIZE;
+	if (m_matchStallRingCount < MATCH_STALL_RING_SIZE) {
+		++m_matchStallRingCount;
 	}
 	if (durationMs >= (UnsignedInt)NET_STALL_LOG_MS) {
 		const UnsignedInt now = timeGetTime();
@@ -3453,9 +3534,21 @@ void ConnectionManager::emitNetStats(UnsignedInt frame, Int runAhead, Int frameR
 		if (m_connections[i] == nullptr) {
 			continue;
 		}
+		const Int resendCount = m_connections[i]->takeResendCount();
+		const Int redundantCount = m_connections[i]->takeRedundantCount();
+		const Int rttMs = m_connections[i]->getSmoothedRttMs();
 		len += snprintf(links + len, sizeof(links) - len, "%s%d:%d+%d/%d",
-			len ? " " : "", i, m_connections[i]->takeResendCount(), m_connections[i]->takeRedundantCount(),
-			m_connections[i]->getSmoothedRttMs());
+			len ? " " : "", i, resendCount, redundantCount, rttMs);
+		if (resendCount > 0) {
+			m_matchRetries[i] += (UnsignedInt)resendCount;
+		}
+		if (rttMs > 0) {
+			m_matchRttSum[i] += (UnsignedInt)rttMs;
+			++m_matchRttCount[i];
+			if ((UnsignedInt)rttMs > m_matchRttMax[i]) {
+				m_matchRttMax[i] = (UnsignedInt)rttMs;
+			}
+		}
 	}
 
 	// on=[slot:stalls ...] which peers we were waiting on when a stall began.

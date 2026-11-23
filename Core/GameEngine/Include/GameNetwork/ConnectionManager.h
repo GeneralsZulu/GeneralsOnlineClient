@@ -45,6 +45,35 @@ typedef std::map<UnsignedShort, AsciiString> FileCommandMap;
 typedef std::map<UnsignedShort, UnsignedByte> FileMaskMap;
 typedef std::map<UnsignedShort, Int> FileProgressMap;
 
+// Whole-match connection summary for the score screen. Client side telemetry
+// only; nothing here feeds the simulation or goes over the wire.
+struct MatchNetSlotSummary
+{
+	Bool present;						///< slot had a frame data manager / player this match
+	Bool connected;						///< isPlayerConnected(slot) at snapshot time (local slot: TRUE)
+	Int  rttNowMs;						///< smoothed RTT now, -1 if no connection (local slot or left)
+	Int  rttAvgMs;						///< mean of the RTT samples, -1 if none
+	Int  rttMaxMs;						///< max RTT sample, -1 if none
+	Int  fps;							///< -1 = unknown
+	UnsignedInt stallCount;				///< stalls blamed on this slot, whole match
+	UnsignedInt stallMs;				///< sum of those stalls' durations, whole match
+	UnsignedInt recentStallCount;		///< same, stalls that ended within windowMs before the snapshot
+	UnsignedInt recentStallMs;
+	UnsignedInt retries;				///< sum of resend counts for this link, whole match
+};
+
+struct MatchNetSummary
+{
+	Bool valid;
+	Int  localSlot;
+	Int  routerSlot;
+	Int  runAhead;						///< m_lastStatsRunAhead
+	Int  frameRate;						///< m_lastStatsFrameRate
+	UnsignedInt totalStallCount;		///< all stalls this match, blamed or not
+	UnsignedInt totalStallMs;
+	MatchNetSlotSummary slot[MAX_SLOTS];
+};
+
 class ConnectionManager
 {
 public:
@@ -154,6 +183,7 @@ public:
 
 	Int getAverageFPS();
 	Int getSlotAverageFPS(Int slot);
+	void getMatchNetSummary(MatchNetSummary &out, UnsignedInt windowMs);	///< Read-only snapshot of the whole-match counters for the score screen.
 
 	// Lockstep health telemetry
 	// (ReleaseLog NETSTAT / NETSTALL lines).
@@ -290,6 +320,28 @@ private:
 	UnsignedInt m_routerWaitFrame;			///< ...for this frame...
 	UnsignedInt m_routerWaitMs;				///< ...received at this time (0 = never).
 	void resetNetStats();
+
+	// Whole-match counters for the score screen. Unlike m_netStats these are
+	// never reset by resetNetStats() or disconnectPlayer().
+	enum { MATCH_STALL_RING_SIZE = 64 };
+	struct MatchStallEntry
+	{
+		UnsignedInt endMs;
+		UnsignedInt durationMs;
+		UnsignedInt blameMask;
+	};
+	UnsignedInt m_matchStallCount[MAX_SLOTS];
+	UnsignedInt m_matchStallMs[MAX_SLOTS];
+	UnsignedInt m_matchRetries[MAX_SLOTS];
+	UnsignedInt m_matchRttSum[MAX_SLOTS];
+	UnsignedInt m_matchRttCount[MAX_SLOTS];
+	UnsignedInt m_matchRttMax[MAX_SLOTS];
+	UnsignedInt m_matchTotalStallCount;
+	UnsignedInt m_matchTotalStallMs;
+	MatchStallEntry m_matchStallRing[MATCH_STALL_RING_SIZE];
+	Int m_matchStallRingWrite;
+	Int m_matchStallRingCount;
+	void resetMatchNetStats();
 
 	// -----------------------------------------------------------------------------
 	FileCommandMap s_fileCommandMap;

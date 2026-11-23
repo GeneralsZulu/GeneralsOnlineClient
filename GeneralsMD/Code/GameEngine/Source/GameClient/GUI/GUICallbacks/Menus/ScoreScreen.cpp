@@ -100,6 +100,8 @@
 #include "GameNetwork/GameSpy/PeerDefs.h"
 #include "GameNetwork/GameSpy/GameResultsThread.h"
 #include "GameNetwork/NetworkDefs.h"
+#include "GameNetwork/NetworkInterface.h"
+#include "GameNetwork/ConnectionManager.h"
 #include "GameNetwork/LANAPICallbacks.h"
 #include "GameNetwork/GameSpyOverlay.h"
 #include "GameNetwork/GameSpy/BuddyThread.h"
@@ -225,6 +227,7 @@ struct RvView
 	Bool active;          ///< a report was requested for this screen
 	Bool ready;           ///< the report arrived and is laid out
 	Bool showing;         ///< toggle mode: the chart is shown instead of the table
+	Bool dropped;         ///< no report to show: the chart and toggle are gone for good
 	Bool localView;       ///< the local player played and the result is known
 	Bool localWon;
 	Bool localIsA;        ///< the local player is on radarvan's team A
@@ -249,6 +252,45 @@ struct RvView
 };
 static RvView s_rv;
 static Int s_scoreRowCount = 0; ///< rows grabMultiPlayerInfo filled
+
+// ---------------------------------------------------------------------------
+// NETWORK view: a per player connection table (ping, how often and how long
+// the match waited on each player, retries, FPS) shown instead of the stats
+// table. Client side telemetry only; the data is copied from the connection
+// manager in ScoreScreenInit because TheNetwork is deleted after that.
+// ---------------------------------------------------------------------------
+static const Int NET_COLS = 8;
+static const Int NET_WINDOW_MS = 60000;
+
+enum
+{
+	NET_LBL_TITLE = 0,
+	NET_LBL_RIGHT,
+	NET_LBL_HDR0,
+	NET_LBL_FOOT = NET_LBL_HDR0 + NET_COLS,
+	NET_LBL_MARK,
+	NET_LBL_ROW0,
+	NET_LBL_COUNT = NET_LBL_ROW0 + MAX_SLOTS * NET_COLS
+};
+
+struct NetView
+{
+	Bool built;
+	Bool showing;
+	MatchNetSummary summary;
+	WideChar slotName[MAX_SLOTS][64];
+	Color slotColor[MAX_SLOTS];
+	Int  rowSlot[MAX_SLOTS];  ///< slot shown in each table row
+	Int  rowCount;
+	Int  worstRow;            ///< row to mark, -1 = none
+	GameWindow *canvas;
+	GameWindow *toggle;
+	Int  btnRightX;           ///< toggle x (parent coords) when it takes the top-right spot
+	Int  btnY;
+	DisplayString *labels[NET_LBL_COUNT];
+	Color cellColor[NET_LBL_COUNT];
+};
+static NetView s_nv;
 
 static UnicodeString rvFromUtf8(const char *s)
 {
@@ -431,15 +473,40 @@ static void rvDrawChart(GameWindow *win, WinInstanceData *)
 	rvDrawLabel(RV_LBL_XEND, px + pw - tw, py + ph + 2, axis);
 }
 
+// Exactly one of three views shows: scores, match report, network.
+static void viewApply(Bool report, Bool network)
+{
+	s_rv.showing = report;
+	s_nv.showing = network;
+	const Bool toggleMode = s_rv.toggle != nullptr;
+	if (s_rv.canvas)
+	{
+		Bool visible;
+		if (s_rv.dropped || network)
+			visible = FALSE;
+		else
+			visible = toggleMode ? report : TRUE; // inline chart stays in the scores view
+		s_rv.canvas->winHide(!visible);
+	}
+	if (s_nv.canvas)
+		s_nv.canvas->winHide(!network);
+	if (gadgetParent)
+		gadgetParent->winHide(report || network);
+	if (s_rv.toggle)
+		GadgetButtonSetText(s_rv.toggle, report ? UnicodeString(L"SCORES") : UnicodeString(L"MATCH REPORT"));
+	if (s_nv.toggle)
+		GadgetButtonSetText(s_nv.toggle, network ? UnicodeString(L"SCORES") : UnicodeString(L"NETWORK"));
+}
+
 static void rvShowReport(Bool show)
 {
-	s_rv.showing = show;
-	if (s_rv.canvas)
-		s_rv.canvas->winHide(!show);
-	if (gadgetParent)
-		gadgetParent->winHide(show);
-	if (s_rv.toggle)
-		GadgetButtonSetText(s_rv.toggle, show ? UnicodeString(L"SCORES") : UnicodeString(L"MATCH REPORT"));
+	// Hiding the report keeps the network view if that is what is up.
+	viewApply(show, show ? FALSE : s_nv.showing);
+}
+
+static void netShow(Bool show)
+{
+	viewApply(FALSE, show);
 }
 
 static Int rvAddStoryLine(const UnicodeString &text, Color color)
@@ -781,14 +848,350 @@ static void rvUpdate(void)
 	if (state != RADARVAN_REPORT_READY || s_rv.curveCount < 2)
 	{
 		// Nothing to chart: give the rows back.
+		s_rv.dropped = TRUE;
 		if (s_rv.showing)
 			rvShowReport(FALSE);
 		if (s_rv.canvas)
 			s_rv.canvas->winHide(TRUE);
 		if (s_rv.toggle)
+		{
 			s_rv.toggle->winHide(TRUE);
+			// Its spot is free: the NETWORK button moves into it.
+			if (s_nv.toggle)
+				s_nv.toggle->winSetPosition(s_nv.btnRightX, s_nv.btnY);
+		}
 	}
 	s_rv.active = FALSE;
+}
+
+static void netShutdown(void)
+{
+	if (s_nv.canvas)
+		TheWindowManager->winDestroy(s_nv.canvas);
+	if (s_nv.toggle)
+		TheWindowManager->winDestroy(s_nv.toggle);
+	Int i;
+	for (i = 0; i < NET_LBL_COUNT; ++i)
+	{
+		if (s_nv.labels[i])
+			TheDisplayStringManager->freeDisplayString(s_nv.labels[i]);
+	}
+	memset(&s_nv, 0, sizeof(s_nv));
+}
+
+static void netSetLabel(Int idx, const UnicodeString &text, Color color, Bool big)
+{
+	if (s_nv.labels[idx] == nullptr)
+	{
+		s_nv.labels[idx] = TheDisplayStringManager->newDisplayString();
+		if (s_nv.labels[idx] == nullptr)
+			return;
+		s_nv.labels[idx]->setFont(TheFontLibrary->getFont(AsciiString("Arial"), big ? 12 : 10, big));
+	}
+	s_nv.labels[idx]->setText(text);
+	s_nv.cellColor[idx] = color;
+}
+
+static void netLabelSize(Int idx, Int *w, Int *h)
+{
+	*w = 0;
+	*h = 0;
+	if (s_nv.labels[idx] != nullptr)
+		s_nv.labels[idx]->getSize(w, h);
+}
+
+static void netDrawLabel(Int idx, Int x, Int y)
+{
+	if (s_nv.labels[idx] != nullptr)
+		s_nv.labels[idx]->draw(x, y, s_nv.cellColor[idx], GameMakeColor(0, 0, 0, 255));
+}
+
+static Color netPingColor(Int ms)
+{
+	if (ms >= 250)
+		return GameMakeColor(220, 60, 60, 255);
+	if (ms >= 150)
+		return GameMakeColor(255, 200, 60, 255);
+	return GameMakeColor(60, 200, 60, 255);
+}
+
+static UnicodeString netWaitText(UnsignedInt count, UnsignedInt ms)
+{
+	UnicodeString out;
+	if (count == 0 && ms == 0)
+	{
+		out = L"-";
+		return out;
+	}
+	UnsignedInt tenths = (ms + 50) / 100;
+	out.format(L"%ux / %u.%us", count, tenths / 10, tenths % 10);
+	return out;
+}
+
+// Column widths in percent of the panel's inner width.
+static const Int s_netColPct[NET_COLS] = { 15, 8, 11, 16, 17, 7, 5, 21 };
+
+static void netDrawTable(GameWindow *win, WinInstanceData *)
+{
+	if (win == nullptr || TheDisplay == nullptr)
+		return;
+
+	Int x, y, w, h;
+	win->winGetScreenPosition(&x, &y);
+	win->winGetSize(&w, &h);
+	TheDisplay->drawFillRect(x, y, w, h, GameMakeColor(6, 8, 12, 200));
+	TheDisplay->drawOpenRect(x, y, w, h, 1.0f, GameMakeColor(120, 140, 160, 200));
+	if (!s_nv.built)
+		return;
+
+	const Int pad = 6;
+	const Int innerX = x + pad;
+	const Int innerW = w - 2 * pad;
+	Int colX[NET_COLS];
+	Int c, cum = 0;
+	for (c = 0; c < NET_COLS; ++c)
+	{
+		colX[c] = innerX + innerW * cum / 100;
+		cum += s_netColPct[c];
+	}
+
+	Int tw, th, hw, hh, fw, fh;
+	netLabelSize(NET_LBL_TITLE, &tw, &th);
+	netDrawLabel(NET_LBL_TITLE, innerX, y + pad);
+	netLabelSize(NET_LBL_RIGHT, &tw, &th);
+	netDrawLabel(NET_LBL_RIGHT, x + w - pad - tw, y + pad);
+	netLabelSize(NET_LBL_TITLE, &tw, &th);
+
+	const Int headY = y + pad + th + 4;
+	netLabelSize(NET_LBL_HDR0, &hw, &hh);
+	for (c = 0; c < NET_COLS; ++c)
+		netDrawLabel(NET_LBL_HDR0 + c, colX[c], headY);
+
+	netLabelSize(NET_LBL_FOOT, &fw, &fh);
+	const Int footY = y + h - pad - fh;
+	netDrawLabel(NET_LBL_FOOT, innerX, footY);
+
+	if (s_nv.rowCount <= 0)
+		return;
+	const Int areaTop = headY + hh + 4;
+	const Int areaH = footY - 4 - areaTop;
+	Int rowH = areaH / s_nv.rowCount;
+	if (rowH > hh * 4)
+		rowH = hh * 4;
+	Int r;
+	for (r = 0; r < s_nv.rowCount; ++r)
+	{
+		const Int rowY = areaTop + r * rowH;
+		if (r == s_nv.worstRow)
+			TheDisplay->drawFillRect(innerX, rowY, innerW, rowH, GameMakeColor(220, 60, 60, 60));
+		Int cw, ch;
+		for (c = 0; c < NET_COLS; ++c)
+		{
+			const Int idx = NET_LBL_ROW0 + r * NET_COLS + c;
+			netLabelSize(idx, &cw, &ch);
+			netDrawLabel(idx, colX[c], rowY + (rowH - ch) / 2);
+		}
+		if (r == s_nv.worstRow)
+		{
+			netLabelSize(NET_LBL_ROW0 + r * NET_COLS + NET_COLS - 1, &cw, &ch);
+			netLabelSize(NET_LBL_MARK, &tw, &th);
+			netDrawLabel(NET_LBL_MARK, colX[NET_COLS - 1] + cw + 8, rowY + (rowH - th) / 2);
+		}
+	}
+}
+
+// Snapshot the connection summary and set up the NETWORK button and canvas.
+// Called from ScoreScreenInit while TheNetwork still exists.
+static void netBegin(void)
+{
+	netShutdown();
+	if (ReplaySimulation::getReplayCount() > 0)
+		return;
+	if (TheNetwork == nullptr || TheNetwork->GetConnectionManager() == nullptr)
+		return;
+	if (parent == nullptr || backdrop == nullptr)
+		return;
+
+	TheNetwork->GetConnectionManager()->getMatchNetSummary(s_nv.summary, NET_WINDOW_MS);
+	const MatchNetSummary &m = s_nv.summary;
+	if (!m.valid)
+		return;
+
+	Int i;
+	Bool anyRemote = FALSE;
+	for (i = 0; i < MAX_SLOTS; ++i)
+	{
+		if (m.slot[i].present && i != m.localSlot)
+			anyRemote = TRUE;
+	}
+	if (!anyRemote)
+		return;
+
+	// Names and colors, the way rvBegin snapshots them (players are gone soon).
+	Bool have[MAX_SLOTS];
+	for (i = 0; i < MAX_SLOTS; ++i)
+	{
+		have[i] = FALSE;
+		AsciiString key;
+		key.format("player%d", i);
+		Player *p = ThePlayerList->findPlayerWithNameKey(TheNameKeyGenerator->nameToKey(key));
+		if (p == nullptr || p->isPlayerObserver())
+			continue;
+		wcsncpy(s_nv.slotName[i], p->getPlayerDisplayName().str(), 63);
+		s_nv.slotName[i][63] = 0;
+		s_nv.slotColor[i] = GameMakeColorReadable(p->getPlayerColor());
+		have[i] = TRUE;
+	}
+
+	Int bx, by, bw, bh, ox, oy;
+	backdrop->winGetScreenPosition(&bx, &by);
+	backdrop->winGetSize(&bw, &bh);
+	parent->winGetScreenPosition(&ox, &oy);
+	Int top, bottom, unused;
+	if (!rvRowRect(0, &top, &unused) || !rvRowRect(MAX_SLOTS - 1, &unused, &bottom))
+		return;
+	Int inset = bw / 40;
+	WinInstanceData inst;
+	inst.init();
+	s_nv.canvas = TheWindowManager->winCreate(parent, WIN_STATUS_ENABLED | WIN_STATUS_NO_INPUT,
+		bx + inset - ox, top + 4 - oy, bw - 2 * inset, bottom - top - 6, nullptr, &inst);
+	if (s_nv.canvas == nullptr)
+		return;
+	s_nv.canvas->winSetDrawFunc(netDrawTable);
+	s_nv.canvas->winHide(TRUE);
+
+	Int btnW = bw / 5, btnH = by * 4 / 5;
+	Int gap = bw / 80;
+	s_nv.btnRightX = bx + bw - btnW - ox;
+	s_nv.btnY = (by - btnH) / 2 - oy;
+	Int btnX = s_rv.toggle ? bx + bw - 2 * btnW - gap - ox : s_nv.btnRightX;
+	WinInstanceData btn;
+	btn.init();
+	BitSet(btn.m_style, GWS_PUSH_BUTTON | GWS_MOUSE_TRACK);
+	btn.m_textLabelString = "NETWORK";
+	s_nv.toggle = TheWindowManager->gogoGadgetPushButton(parent, WIN_STATUS_ENABLED | WIN_STATUS_IMAGE,
+		btnX, s_nv.btnY, btnW, btnH, &btn, nullptr, TRUE);
+
+	// Rows: every non-observer player in slot order, those who left included.
+	s_nv.rowCount = 0;
+	for (i = 0; i < MAX_SLOTS; ++i)
+	{
+		if (have[i] && (m.slot[i].present || i == m.localSlot))
+			s_nv.rowSlot[s_nv.rowCount++] = i;
+	}
+
+	// Most waited on: last 60 s wait time, else whole match, only if above zero.
+	s_nv.worstRow = -1;
+	UnsignedInt best = 0;
+	Int r;
+	for (r = 0; r < s_nv.rowCount; ++r)
+	{
+		if (m.slot[s_nv.rowSlot[r]].recentStallMs > best)
+		{
+			best = m.slot[s_nv.rowSlot[r]].recentStallMs;
+			s_nv.worstRow = r;
+		}
+	}
+	if (s_nv.worstRow < 0)
+	{
+		for (r = 0; r < s_nv.rowCount; ++r)
+		{
+			if (m.slot[s_nv.rowSlot[r]].stallMs > best)
+			{
+				best = m.slot[s_nv.rowSlot[r]].stallMs;
+				s_nv.worstRow = r;
+			}
+		}
+	}
+
+	const Color greyBlue = GameMakeColor(150, 170, 190, 255);
+	const Color lightGrey = GameMakeColor(215, 220, 225, 255);
+	const Color grey = GameMakeColor(170, 170, 170, 255);
+	const Color text = GameMakeColor(200, 210, 220, 255);
+	const Color red = GameMakeColor(220, 60, 60, 255);
+	const Color yellow = GameMakeColor(255, 200, 60, 255);
+
+	netSetLabel(NET_LBL_TITLE, UnicodeString(L"CONNECTION QUALITY (as seen from this PC)"), lightGrey, TRUE);
+	UnicodeString right;
+	const WideChar *routerName = L"-";
+	if (m.routerSlot >= 0 && m.routerSlot < MAX_SLOTS && have[m.routerSlot])
+		routerName = s_nv.slotName[m.routerSlot];
+	right.format(L"Run-ahead %d  |  Router: %ls", m.runAhead, routerName);
+	netSetLabel(NET_LBL_RIGHT, right, greyBlue, FALSE);
+
+	static const WideChar *const headers[NET_COLS] = {
+		L"Player", L"Ping now", L"Ping avg/max", L"Waited on (match)", L"Waited on (last 60s)", L"Retries", L"FPS", L"Status" };
+	Int c;
+	for (c = 0; c < NET_COLS; ++c)
+		netSetLabel(NET_LBL_HDR0 + c, UnicodeString(headers[c]), greyBlue, FALSE);
+
+	for (r = 0; r < s_nv.rowCount; ++r)
+	{
+		const Int slot = s_nv.rowSlot[r];
+		const MatchNetSlotSummary &ss = m.slot[slot];
+		const Bool isLocal = (slot == m.localSlot);
+		const Int base = NET_LBL_ROW0 + r * NET_COLS;
+		UnicodeString t;
+
+		t = s_nv.slotName[slot];
+		if (isLocal)
+			t.concat(L" (you)");
+		netSetLabel(base + 0, t, s_nv.slotColor[slot], FALSE);
+
+		if (isLocal || ss.rttNowMs < 0)
+			netSetLabel(base + 1, UnicodeString(L"-"), text, FALSE);
+		else
+		{
+			t.format(L"%d ms", ss.rttNowMs);
+			netSetLabel(base + 1, t, netPingColor(ss.rttNowMs), FALSE);
+		}
+
+		if (isLocal || ss.rttAvgMs < 0)
+			netSetLabel(base + 2, UnicodeString(L"-"), text, FALSE);
+		else
+		{
+			t.format(L"%d/%d ms", ss.rttAvgMs, ss.rttMaxMs);
+			netSetLabel(base + 2, t, netPingColor(ss.rttAvgMs), FALSE);
+		}
+
+		netSetLabel(base + 3, netWaitText(ss.stallCount, ss.stallMs), text, FALSE);
+
+		Color waitColor = text;
+		if (ss.recentStallCount != 0 || ss.recentStallMs != 0)
+			waitColor = (ss.recentStallMs >= 2000) ? red : yellow;
+		netSetLabel(base + 4, netWaitText(ss.recentStallCount, ss.recentStallMs), waitColor, FALSE);
+
+		if (isLocal)
+			netSetLabel(base + 5, UnicodeString(L"-"), text, FALSE);
+		else
+		{
+			t.format(L"%u", ss.retries);
+			netSetLabel(base + 5, t, text, FALSE);
+		}
+
+		if (ss.fps < 0)
+			netSetLabel(base + 6, UnicodeString(L"-"), text, FALSE);
+		else
+		{
+			t.format(L"%d", ss.fps);
+			netSetLabel(base + 6, t, ss.fps < 30 ? red : text, FALSE);
+		}
+
+		if (ss.connected)
+			netSetLabel(base + 7, UnicodeString(L"Connected"), text, FALSE);
+		else
+			netSetLabel(base + 7, UnicodeString(L"Left"), red, FALSE);
+	}
+
+	netSetLabel(NET_LBL_MARK, UnicodeString(L"<< most waited on"), red, FALSE);
+
+	UnicodeString foot;
+	UnsignedInt totalTenths = (m.totalStallMs + 50) / 100;
+	foot.format(L"Total stalls this match: %u (%u.%us)", m.totalStallCount, totalTenths / 10, totalTenths % 10);
+	netSetLabel(NET_LBL_FOOT, foot, grey, FALSE);
+
+	s_nv.built = TRUE;
+	viewApply(s_rv.showing, FALSE);
 }
 
 struct ScoreGather
@@ -1223,6 +1626,8 @@ void ScoreScreenInit( WindowLayout *layout, void *userData )
 
 	if (screenType == SCORESCREEN_LAN || screenType == SCORESCREEN_INTERNET || screenType == SCORESCREEN_REPLAY)
 		rvBegin();
+	if (screenType == SCORESCREEN_LAN || screenType == SCORESCREEN_INTERNET)
+		netBegin();
 
 	// challenge maps have no replay (design and technical issues)
 	Bool isChallengeCampaign = TheCampaignManager->getCurrentCampaign() ? TheCampaignManager->getCurrentCampaign()->isChallengeCampaign() : FALSE;
@@ -1304,6 +1709,7 @@ void ScoreScreenShutdown( WindowLayout *layout, void *userData )
 #endif
 	buttonBuddies = nullptr;
 	rvShutdown();
+	netShutdown();
 
 	// hide the layout
 	layout->hide( TRUE );
@@ -1488,6 +1894,11 @@ WindowMsgHandledType ScoreScreenSystem( GameWindow *window, UnsignedInt msg,
 			if( s_rv.toggle != nullptr && control == s_rv.toggle )
 			{
 				rvShowReport(!s_rv.showing);
+				break;
+			}
+			if( s_nv.toggle != nullptr && control == s_nv.toggle )
+			{
+				netShow(!s_nv.showing);
 				break;
 			}
 			if( controlID == buttonOkID )
