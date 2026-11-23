@@ -24,7 +24,10 @@
 
 #pragma once
 
+#include "GameClient/Color.h"
 #include "GameNetwork/DisconnectManager.h"
+
+class GameWindow;
 
 enum DisconnectMenuStateType CPP_11(: Int) {
 	DISCONNECTMENUSTATETYPE_SCREENON,
@@ -50,6 +53,7 @@ public:
 	void hidePacketRouterTimeout();
 
 	void setPlayerName(Int playerNum, UnicodeString name);
+	void setPlayerNetStatus(Int playerNum, const UnicodeString &text, Color color);
 	void setPlayerTimeoutTime(Int playerNum, time_t newTime);
 	void setPacketRouterTimeoutTime(time_t newTime);
 
@@ -63,11 +67,14 @@ public:
 	void updateVotes(Int slot, Int votes);
 
 protected:
+	GameWindow *getNetStatusControl(Int slot);	///< finds the status cell, creating it on first use. May return nullptr.
+
 	DisconnectManager *m_disconnectManager;		///< For retrieving status updates from the disconnect manager.
 	DisconnectMenuStateType m_menuState;			///< The current state of the menu screen.
 
 	static const char *const m_playerNameTextControlNames[MAX_SLOTS];	///< names of the player name controls in the window.
 	static const char *const m_playerTimeoutTextControlNames[MAX_SLOTS]; ///< names of the timeout controls in the window.
+	static const char *const m_playerNetStatusControlNames[MAX_SLOTS];	///< names of the runtime created status cells.
 	static const char *const m_playerVoteButtonControlNames[MAX_SLOTS];	///< names of the vote button controls in the window.
 	static const char *const m_playerVoteCountControlNames[MAX_SLOTS];	///< names of the vote count static text controls in the window.
 	static const char *const m_packetRouterTimeoutControlName;	///< name of the packet router timeout control window.

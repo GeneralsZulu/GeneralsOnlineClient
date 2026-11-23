@@ -72,6 +72,7 @@ protected:
 	void resetPlayerTimeout(Int slot);
 	void resetPacketRouterTimeout();
 	void updateDisconnectStatus(ConnectionManager *conMgr);
+	void updateNetStatus(ConnectionManager *conMgr);	///< fills each row's status cell (display only)
 	void disconnectPlayer(Int slot, ConnectionManager *conMgr);
 	void sendDisconnectCommand(Int slot, ConnectionManager *conMgr);
 	void sendVoteCommand(Int slot, ConnectionManager *conMgr);
@@ -111,6 +112,7 @@ protected:
 	time_t m_playerTimeouts[MAX_SLOTS - 1];
 	time_t m_packetRouterTimeout;
 
+	time_t m_lastNetStatusTime;					///< throttle for updateNetStatus, 0 = refresh now.
 	time_t m_playerLastHeard[MAX_SLOTS - 1];	///< Like m_playerTimeouts, but never pushed out by a wait.
 	Bool m_waitVotes[MAX_SLOTS];				///< Who has voted to wait since the last extension, by real slot.
 	void applyWaitVote(Int fromSlot, ConnectionManager *conMgr);

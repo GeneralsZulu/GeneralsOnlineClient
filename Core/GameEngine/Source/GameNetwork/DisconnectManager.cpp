@@ -26,6 +26,7 @@
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/Recorder.h"
+#include "GameClient/Color.h"
 #include "GameClient/DisconnectMenu.h"
 #include "GameClient/InGameUI.h"
 #include "GameLogic/GameLogic.h"
@@ -46,6 +47,7 @@ DisconnectManager::DisconnectManager()
 	m_lastKeepAliveSendTime = 0;
 	m_haveNotifiedOtherPlayersOfCurrentFrame = FALSE;
 	m_timeOfDisconnectScreenOn = 0;
+	m_lastNetStatusTime = 0;
 
 	for( i = 0; i < MAX_SLOTS; ++i) {
 		m_packetRouterFallback[i] = 0;
@@ -76,6 +78,7 @@ void DisconnectManager::init() {
 	m_disconnectState = DISCONNECTSTATETYPE_SCREENOFF;
 	m_currentPacketRouterIndex = 0;
 	m_timeOfDisconnectScreenOn = 0;
+	m_lastNetStatusTime = 0;
 
 	Int i = 0;
 	for (; i < MAX_SLOTS; ++i) {
@@ -138,6 +141,7 @@ void DisconnectManager::update(ConnectionManager *conMgr) {
 	if (m_disconnectState != DISCONNECTSTATETYPE_SCREENOFF) {
 		checkWaitVotes(conMgr);
 		updateDisconnectStatus(conMgr);
+		updateNetStatus(conMgr);
 
 		// check to see if we need to send pings
 		if (m_pingFrame < TheGameLogic->getFrame())
@@ -667,6 +671,80 @@ void DisconnectManager::resetPacketRouterTimeout() {
 	m_packetRouterTimeout = timeGetTime();
 }
 
+static const Color kNetRed = GameMakeColor(220, 60, 60, 255);
+static const Color kNetYellow = GameMakeColor(255, 200, 60, 255);
+static const Color kNetGreen = GameMakeColor(60, 200, 60, 255);
+static const Color kNetGrey = GameMakeColor(170, 170, 170, 255);
+static const Int NET_STATUS_NO_REPLY_MS = 3000;
+static const Int NET_STATUS_PING_YELLOW_MS = 150;
+static const Int NET_STATUS_PING_RED_MS = 250;
+
+void DisconnectManager::updateNetStatus(ConnectionManager *conMgr) {
+	if (TheDisconnectMenu == nullptr || TheGameLogic == nullptr) {
+		return;
+	}
+	const time_t now = timeGetTime();
+	if (m_lastNetStatusTime != 0 && (now - m_lastNetStatusTime) < 250) {
+		return;
+	}
+	m_lastNetStatusTime = now;
+
+	const UnsignedInt blame = conMgr->getBlameMask(conMgr->getNotReadyMask(TheGameLogic->getFrame()));
+	MatchNetSummary sum;
+	conMgr->getMatchNetSummary(sum, 60000);
+
+	Int i;
+	for (i = 0; i < MAX_SLOTS; ++i) {
+		if (!conMgr->isPlayerConnected(i)) {
+			continue;
+		}
+		const Int s = translatedSlotPosition(i, conMgr->getLocalPlayerID());
+		if (s == -1) {
+			continue;
+		}
+		const Bool waited = (blame & (1u << i)) != 0;
+		Int silentMs = (Int)(timeGetTime() - m_playerLastHeard[s]);
+		if (silentMs < 0) {
+			silentMs = 0;
+		}
+		const Int rtt = sum.valid ? sum.slot[i].rttNowMs : -1;
+		const Int lagMs = sum.valid ? (Int)sum.slot[i].recentStallMs : 0;
+
+		UnicodeString text;
+		Color color;
+		if (waited && silentMs >= NET_STATUS_NO_REPLY_MS) {
+			text.format(L"WAITING ON  NO REPLY %ds", silentMs / 1000);
+			color = kNetRed;
+		} else if (waited && rtt > 0) {
+			text.format(L"WAITING ON  %d ms", rtt);
+			color = kNetRed;
+		} else if (waited) {
+			text = L"WAITING ON";
+			color = kNetRed;
+		} else if (rtt > 0) {
+			text.format(L"%d ms", rtt);
+			if (rtt >= NET_STATUS_PING_RED_MS) {
+				color = kNetRed;
+			} else if (rtt >= NET_STATUS_PING_YELLOW_MS) {
+				color = kNetYellow;
+			} else {
+				color = kNetGreen;
+			}
+		} else {
+			text = L"-";
+			color = kNetGrey;
+		}
+
+		if (lagMs > 0) {
+			const Int tenths = (lagMs + 50) / 100;
+			UnicodeString part;
+			part.format(L"  lag %d.%ds", tenths / 10, tenths % 10);
+			text.concat(part);
+		}
+		TheDisconnectMenu->setPlayerNetStatus(s, text, color);
+	}
+}
+
 void DisconnectManager::turnOnScreen(ConnectionManager *conMgr) {
 	TheDisconnectMenu->showScreen();
 	DEBUG_LOG(("DisconnectManager::turnOnScreen - turning on screen on frame %d", TheGameLogic->getFrame()));
@@ -679,7 +757,9 @@ void DisconnectManager::turnOnScreen(ConnectionManager *conMgr) {
 	m_disconnectState = DISCONNECTSTATETYPE_SCREENON;
 	m_lastKeepAliveSendTime = -1;
 	populateDisconnectScreen(conMgr);
+	m_lastNetStatusTime = 0;
 	resetPlayerTimeouts(conMgr);
+	updateNetStatus(conMgr);
 	TheDisconnectMenu->hidePacketRouterTimeout();
 
 	m_haveNotifiedOtherPlayersOfCurrentFrame = FALSE;

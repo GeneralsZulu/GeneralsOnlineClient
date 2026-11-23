@@ -32,6 +32,7 @@
 #include "GameClient/GadgetStaticText.h"
 #include "GameClient/GadgetListBox.h"
 #include "GameClient/GameText.h"
+#include "GameClient/Gadget.h"
 #include "GameNetwork/NetworkInterface.h"
 
 const char *const DisconnectMenu::m_playerNameTextControlNames[] = {
@@ -53,6 +54,17 @@ const char *const DisconnectMenu::m_playerTimeoutTextControlNames[] = {
 	"DisconnectScreen.wnd:StaticPlayer5Timeout",
 	"DisconnectScreen.wnd:StaticPlayer6Timeout",
 	"DisconnectScreen.wnd:StaticPlayer7Timeout",
+	nullptr
+};
+
+const char *const DisconnectMenu::m_playerNetStatusControlNames[] = {
+	"DisconnectScreen.wnd:StaticPlayer1NetStatus",
+	"DisconnectScreen.wnd:StaticPlayer2NetStatus",
+	"DisconnectScreen.wnd:StaticPlayer3NetStatus",
+	"DisconnectScreen.wnd:StaticPlayer4NetStatus",
+	"DisconnectScreen.wnd:StaticPlayer5NetStatus",
+	"DisconnectScreen.wnd:StaticPlayer6NetStatus",
+	"DisconnectScreen.wnd:StaticPlayer7NetStatus",
 	nullptr
 };
 
@@ -137,9 +149,91 @@ void DisconnectMenu::setPlayerName(Int playerNum, UnicodeString name) {
 	}
 
 	if (!name.isEmpty()) {
+		id = TheNameKeyGenerator->nameToKey(m_playerNameTextControlNames[playerNum]);
+		control = TheWindowManager->winGetWindowFromId(nullptr, id);
+		if (control != nullptr) {
+			control->winSetEnabledTextColors(GameMakeColor(254,254,254,255), GameMakeColor(0,0,0,255));
+		}
+	}
+
+	if (!name.isEmpty()) {
 		showPlayerControls(playerNum);
 	} else {
 		hidePlayerControls(playerNum);
+	}
+}
+
+GameWindow *DisconnectMenu::getNetStatusControl(Int slot) {
+	if (slot < 0 || slot >= MAX_SLOTS - 1) {
+		return nullptr;
+	}
+	NameKeyType id = TheNameKeyGenerator->nameToKey(m_playerNetStatusControlNames[slot]);
+	GameWindow *control = TheWindowManager->winGetWindowFromId(nullptr, id);
+	if (control != nullptr) {
+		return control;
+	}
+
+	GameWindow *parent = TheWindowManager->winGetWindowFromId(nullptr,
+		TheNameKeyGenerator->nameToKey("DisconnectScreen.wnd:DisconnectWindow"));
+	GameWindow *timeout = TheWindowManager->winGetWindowFromId(nullptr,
+		TheNameKeyGenerator->nameToKey(m_playerTimeoutTextControlNames[slot]));
+	if (parent == nullptr || timeout == nullptr) {
+		return nullptr;
+	}
+
+	Int px, py, tx, ty, tw, th;
+	parent->winGetScreenPosition(&px, &py);
+	timeout->winGetScreenPosition(&tx, &ty);
+	timeout->winGetSize(&tw, &th);
+
+	Int left = tx + tw + 8;
+	Int right = left + 100;
+	GameWindow *list = TheWindowManager->winGetWindowFromId(nullptr,
+		TheNameKeyGenerator->nameToKey(m_textDisplayControlName));
+	if (list != nullptr) {
+		Int lx, ly, lw, lh;
+		list->winGetScreenPosition(&lx, &ly);
+		list->winGetSize(&lw, &lh);
+		right = lx + lw;
+	}
+	if (right <= left) {
+		return nullptr;
+	}
+
+	WinInstanceData inst;
+	inst.init();
+	BitSet(inst.m_style, GWS_STATIC_TEXT);
+	TextData textData;
+	memset(&textData, 0, sizeof(textData));
+	textData.centered = FALSE;
+
+	control = TheWindowManager->gogoGadgetStaticText(parent,
+		WIN_STATUS_ENABLED | WIN_STATUS_NO_INPUT | WIN_STATUS_NO_FOCUS,
+		left - px, ty - py, right - left, th,
+		&inst, &textData, timeout->winGetFont(), FALSE);
+	if (control == nullptr) {
+		return nullptr;
+	}
+	control->winSetEnabledColor(0, GameMakeColor(2,0,0,128));
+	control->winSetEnabledBorderColor(0, GameMakeColor(2,1,1,255));
+	control->winSetEnabledTextColors(GameMakeColor(170,170,170,255), GameMakeColor(0,0,0,255));
+	control->winSetWindowId(id);
+	control->winHide(TRUE);
+	return control;
+}
+
+void DisconnectMenu::setPlayerNetStatus(Int playerNum, const UnicodeString &text, Color color) {
+	GameWindow *control = getNetStatusControl(playerNum);
+	if (control == nullptr) {
+		return;
+	}
+	GadgetStaticTextSetText(control, text);
+	control->winSetEnabledTextColors(color, GameMakeColor(0,0,0,255));
+
+	NameKeyType id = TheNameKeyGenerator->nameToKey(m_playerNameTextControlNames[playerNum]);
+	GameWindow *name = TheWindowManager->winGetWindowFromId(nullptr, id);
+	if (name != nullptr) {
+		name->winSetEnabledTextColors(color, GameMakeColor(0,0,0,255));
 	}
 }
 
@@ -171,6 +265,12 @@ void DisconnectMenu::showPlayerControls(Int slot) {
 		control->winHide(FALSE);
 	}
 
+	control = getNetStatusControl(slot);
+	if (control != nullptr) {
+		GadgetStaticTextSetText(control, L"");
+		control->winHide(FALSE);
+	}
+
 	id = TheNameKeyGenerator->nameToKey(m_playerVoteButtonControlNames[slot]);
 	control = TheWindowManager->winGetWindowFromId(nullptr, id);
 	if (control != nullptr) {
@@ -194,6 +294,11 @@ void DisconnectMenu::hidePlayerControls(Int slot) {
 
 	id = TheNameKeyGenerator->nameToKey(m_playerTimeoutTextControlNames[slot]);
 	control = TheWindowManager->winGetWindowFromId(nullptr, id);
+	if (control != nullptr) {
+		control->winHide(TRUE);
+	}
+
+	control = getNetStatusControl(slot);
 	if (control != nullptr) {
 		control->winHide(TRUE);
 	}
