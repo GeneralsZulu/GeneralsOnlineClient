@@ -716,6 +716,7 @@ protected:
 		Bool hunted;					///< player can no longer rebuild (viewer-only, see updateHuntedPlayers)
 		Int huntedSeconds;		///< how long they have been hunted
 		UnsignedInt apm;			///< commands issued over the last minute
+		UnsignedInt unitValue;	///< total build cost of living infantry, vehicles and aircraft
 	};
 
 	struct MoveHintStruct
@@ -1079,9 +1080,9 @@ protected:
 	///< to skip some client sounds/fx during shutdown
 
 	// Obs overlay
-    static const Int numCols = 9;
+    static const Int numCols = 10;
     const wchar_t* headers[numCols] = {
-        L"(T) Player", L"Army", L"Cash", L"Cash/m", L"(R) XP", L"SP", L"K/D", L"Power", L"APM"
+        L"(T) Player", L"Army", L"Cash", L"Cash/m", L"Unit Value", L"(R) XP", L"SP", L"K/D", L"Power", L"APM"
     };
 
 	struct ObsOverlayPlayerData

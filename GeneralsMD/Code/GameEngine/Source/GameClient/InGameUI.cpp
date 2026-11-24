@@ -6659,6 +6659,27 @@ UnicodeString InGameUI::formatHuntedSuffix(Int playerIndex) const
 	return suffix;
 }
 
+struct ObsUnitValueAcc
+{
+	const Player* player;
+	UnsignedInt total;
+};
+
+static void obsAddUnitValue(Object* obj, void* userData)
+{
+	ObsUnitValueAcc* acc = (ObsUnitValueAcc*)userData;
+	if (!obj || obj->isEffectivelyDead())
+		return;
+	const ThingTemplate* tmpl = obj->getTemplate();
+	if (!tmpl || tmpl->isKindOf(KINDOF_STRUCTURE))
+		return;
+	if (!(tmpl->isKindOf(KINDOF_INFANTRY) || tmpl->isKindOf(KINDOF_VEHICLE) || tmpl->isKindOf(KINDOF_AIRCRAFT)))
+		return;
+	Int cost = tmpl->calcCostToBuild(acc->player);
+	if (cost > 0)
+		acc->total += (UnsignedInt)cost;
+}
+
 void InGameUI::drawObserverStats(Int & x, Int & y)
 {
 	// do we need to re-create our fonts?
@@ -6803,6 +6824,11 @@ void InGameUI::drawObserverStats(Int & x, Int & y)
 			else if (side == "AmericaLaserGeneral") faction = L"Laser";
 			else faction.translate(side);
 
+			ObsUnitValueAcc unitValueAcc;
+			unitValueAcc.player = p;
+			unitValueAcc.total = 0;
+			p->iterateObjects(obsAddUnitValue, &unitValueAcc);
+
 			Bool hasPower = energy && (energy->getProduction() > 0 || energy->getConsumption() > 0);
 			Int powerDelta = energy ? (energy->getProduction() - energy->getConsumption()) : 0;
 
@@ -6820,7 +6846,8 @@ void InGameUI::drawObserverStats(Int & x, Int & y)
 					(Bool)(p->getPlayerIndex() >= 0 && p->getPlayerIndex() < MAX_PLAYER_COUNT && m_playerHunted[p->getPlayerIndex()]),
 					(p->getPlayerIndex() >= 0 && p->getPlayerIndex() < MAX_PLAYER_COUNT && m_playerHunted[p->getPlayerIndex()])
 						? (Int)((TheGameLogic->getFrame() - m_playerHuntedSinceFrame[p->getPlayerIndex()]) / LOGICFRAMES_PER_SECOND) : 0,
-					p->getActionsPerMinute()
+					p->getActionsPerMinute(),
+					unitValueAcc.total
 			};
 
 			setTeams.insert(team);
@@ -6860,16 +6887,17 @@ void InGameUI::drawObserverStats(Int & x, Int & y)
                         if (pd.hunted)
                             cells[2].concat(formatHuntedSuffixForSeconds(pd.huntedSeconds));
                         cells[3].format(L"+%ls", formatNum(pd.cpm).str());
-                        cells[4].format(L"(%d) %d", pd.rank, pd.xp);
-                        cells[5].format(L"%d", pd.sp);
-                        cells[6].format(L"%.1f", pd.kd);
+                        cells[4] = formatNum(pd.unitValue);
+                        cells[5].format(L"(%d) %d", pd.rank, pd.xp);
+                        cells[6].format(L"%d", pd.sp);
+                        cells[7].format(L"%.1f", pd.kd);
                         if (pd.showPower) {
-                            cells[7].format(pd.lowPower ? L"OFF (%d)" : L"ON (%d)", pd.powerValue);
+                            cells[8].format(pd.lowPower ? L"OFF (%d)" : L"ON (%d)", pd.powerValue);
                         }
                         else {
-                            cells[7] = L"-";
+                            cells[8] = L"-";
                         }
-                        cells[8].format(L"%u", pd.apm);
+                        cells[9].format(L"%u", pd.apm);
 
                         for (Int i = 0; i < numCols; ++i)
                         {
