@@ -667,6 +667,33 @@ Section "${APPNAME}" SecMain
     SetOutPath "$INSTDIR\${SUBDIR}"
     SetOverwrite on
     File "${PAYLOAD_DIR}\${EXENAME}"
+
+    ; The running launcher (see the launcher note below) holds every DLL it
+    ; loaded from this folder, vcruntime140.dll at least. A silent File over a
+    ; locked DLL fails without a word and leaves the old one, which is how a
+    ; 14.51 vcruntime140.dll outlived an update to a client built for 14.52
+    ; and tripped the runtime check on every start. Clear the old DLLs first,
+    ; renaming aside the ones that are in use, so every File below lands on a
+    ; free name. The .old leftovers go at the top of the next update.
+    Push $R1
+    Push $R2
+    Delete "$INSTDIR\${SUBDIR}\*.dll.old"
+    FindFirst $R1 $R2 "$INSTDIR\${SUBDIR}\*.dll"
+    dll_loop:
+        StrCmp $R2 "" dll_done
+        ClearErrors
+        Delete "$INSTDIR\${SUBDIR}\$R2"
+        IfErrors 0 dll_next
+            DetailPrint "$R2 is in use, moving it aside"
+            Rename "$INSTDIR\${SUBDIR}\$R2" "$INSTDIR\${SUBDIR}\$R2.old"
+    dll_next:
+        FindNext $R1 $R2
+        Goto dll_loop
+    dll_done:
+    FindClose $R1
+    Pop $R2
+    Pop $R1
+
     File "${PAYLOAD_DIR}\*.dll"
     File "${PAYLOAD_DIR}\${BIGNAME}"
     File "${PAYLOAD_DIR}\cacert.pem"
